@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="OpenCall">
+<title>OpenCall</title>
+<link rel="manifest" href="manifest.json">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#0a0a0a;--s1:#111;--s2:#181818;--s3:#1f1f1f;
+  --b1:rgba(255,255,255,0.06);--b2:rgba(255,255,255,0.12);--b3:rgba(255,255,255,0.2);
+  --tx:#f0ede8;--muted:rgba(240,237,232,0.42);--hint:rgba(240,237,232,0.2);
+  --accent:#c8f55a;--accent-d:rgba(200,245,90,0.1);--accent-g:rgba(200,245,90,0.22);
+  --red:#ff4d4d;--red-d:rgba(255,77,77,0.12);
+  --green:#4dff91;--green-d:rgba(77,255,145,0.1);
+  --orange:#ff9f43;
+  --disp:'Syne',sans-serif;--mono:'DM Mono',monospace;
+  --r:14px;--r-lg:22px;--r-pill:100px;
+}
+html,body{height:100%;background:var(--bg);color:var(--tx);font-family:var(--mono);overflow:hidden;-webkit-font-smoothing:antialiased}
+#app{height:100dvh;display:flex;flex-direction:column;position:relative;overflow:hidden}
+#app::before{content:'';position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,0.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.018) 1px,transparent 1px);background-size:44px 44px;pointer-events:none;z-index:0}
+
+/* ── screens ── */
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;z-index:1;transition:opacity .28s ease,transform .28s ease}
+.screen.hidden{opacity:0;pointer-events:none;transform:translateY(14px)}
+
+/* ── connection badge ── */
+#conn-badge{position:fixed;top:env(safe-area-inset-top,16px);right:16px;margin-top:16px;z-index:50;display:flex;align-items:center;gap:6px;background:var(--s1);border:1px solid var(--b2);border-radius:var(--r-pill);padding:6px 14px;font-size:11px;color:var(--muted);letter-spacing:.06em}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--muted);transition:background .3s,box-shadow .3s}
+.dot.on{background:var(--accent);box-shadow:0 0 8px var(--accent-g)}
+.dot.err{background:var(--red)}
+
+/* ── register screen ── */
+#scr-register{gap:36px}
+.logo{text-align:center}
+.logo-icon{width:68px;height:68px;border-radius:22px;background:var(--accent);display:flex;align-items:center;justify-content:center;margin:0 auto 18px}
+.logo-icon svg{width:34px;height:34px;color:#0a0a0a}
+.logo h1{font-family:var(--disp);font-size:34px;font-weight:800;letter-spacing:-1px}
+.logo p{font-size:12px;color:var(--muted);margin-top:6px;letter-spacing:.08em;text-transform:uppercase}
+.form{width:100%;max-width:360px;display:flex;flex-direction:column;gap:14px}
+.field-label{font-size:11px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px}
+input[type=text],input[type=tel]{width:100%;background:var(--s1);border:1px solid var(--b2);border-radius:var(--r);color:var(--tx);font-family:var(--mono);font-size:16px;padding:16px 20px;outline:none;transition:border-color .2s,box-shadow .2s;letter-spacing:.03em}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-d)}
+input::placeholder{color:var(--hint)}
+.btn{width:100%;padding:18px;border-radius:var(--r);border:none;font-family:var(--disp);font-size:15px;font-weight:700;letter-spacing:.04em;cursor:pointer;transition:all .15s ease;text-transform:uppercase}
+.btn:active{transform:scale(.97)}
+.btn-primary{background:var(--accent);color:#0a0a0a}
+.btn-primary:hover{background:#d4f96a}
+.btn-primary:disabled{opacity:.35;cursor:not-allowed;transform:none}
+.note{font-size:11px;color:var(--hint);text-align:center;line-height:1.7}
+.note a{color:var(--accent);text-decoration:none}
+
+/* ── dialer screen ── */
+#scr-dialer{justify-content:space-between;padding-top:max(env(safe-area-inset-top,0px),48px);padding-bottom:max(env(safe-area-inset-bottom,0px),36px);max-width:400px;margin:0 auto;width:100%}
+.dialer-top{width:100%;display:flex;align-items:center;justify-content:space-between}
+.my-num{display:flex;align-items:center;gap:8px;background:var(--s1);border:1px solid var(--b2);border-radius:var(--r-pill);padding:8px 16px;font-size:12px;color:var(--muted)}
+.my-num strong{color:var(--tx)}
+.btn-sm{background:var(--s1);color:var(--muted);border:1px solid var(--b2);border-radius:var(--r-pill);padding:9px 16px;font-family:var(--disp);font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.04em;text-transform:uppercase;transition:all .15s}
+.btn-sm:hover{color:var(--tx);background:var(--s2)}
+.dialer-mid{width:100%;display:flex;flex-direction:column;align-items:center;gap:28px}
+.num-display input{background:transparent;border:none;border-bottom:2px solid var(--b2);border-radius:0;font-family:var(--disp);font-size:34px;font-weight:700;text-align:center;letter-spacing:5px;padding:12px 20px;width:100%;transition:border-color .2s}
+.num-display input:focus{border-bottom-color:var(--accent);box-shadow:none}
+.keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:100%;max-width:272px}
+.key{aspect-ratio:1;border-radius:50%;background:var(--s1);border:1px solid var(--b1);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:all .12s;user-select:none;gap:1px}
+.key:hover{background:var(--s2);border-color:var(--b2)}
+.key:active{transform:scale(.91);background:var(--accent-d)}
+.kd{font-family:var(--disp);font-size:22px;font-weight:600;line-height:1}
+.kl{font-size:9px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase}
+.dialer-btm{display:flex;align-items:center;justify-content:center;gap:24px}
+.call-btn{width:72px;height:72px;border-radius:50%;border:none;background:var(--accent);color:#0a0a0a;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;box-shadow:0 0 0 0 var(--accent-g)}
+.call-btn:hover{transform:scale(1.06);box-shadow:0 0 0 12px var(--accent-d)}
+.call-btn:active{transform:scale(.94)}
+.call-btn svg{width:28px;height:28px}
+.icon-btn{width:50px;height:50px;border-radius:50%;border:1px solid var(--b2);background:var(--s1);color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s}
+.icon-btn:hover{color:var(--tx);background:var(--s2)}
+.icon-btn svg{width:18px;height:18px}
+
+/* ── incoming screen ── */
+#scr-incoming{background:var(--bg);z-index:10}
+.pulse-wrap{position:relative;width:120px;height:120px;margin-bottom:30px}
+.pulse-wrap::before,.pulse-wrap::after{content:'';position:absolute;inset:-22px;border-radius:50%;background:var(--accent-d);animation:pulse-ring 1.8s ease-out infinite}
+.pulse-wrap::after{inset:-44px;animation-delay:.6s}
+@keyframes pulse-ring{0%{opacity:1;transform:scale(.82)}100%{opacity:0;transform:scale(1.18)}}
+.avatar{width:120px;height:120px;border-radius:50%;background:var(--s2);border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--disp);font-size:42px;font-weight:800;color:var(--accent);position:relative;z-index:1}
+.inc-label{font-size:11px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:8px}
+.inc-name{font-family:var(--disp);font-size:28px;font-weight:700;text-align:center}
+.inc-num{font-size:14px;color:var(--muted);margin-top:4px;letter-spacing:.08em}
+.inc-actions{display:flex;gap:44px;margin-top:44px}
+.act{display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;background:none;border:none}
+.act-circle{width:68px;height:68px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all .15s;border:none;cursor:pointer}
+.act-circle:active{transform:scale(.91)}
+.act-circle.ans{background:var(--green-d);border:1px solid rgba(77,255,145,.28)}
+.act-circle.ans:hover{background:rgba(77,255,145,.18)}
+.act-circle.dec{background:var(--red-d);border:1px solid rgba(255,77,77,.28)}
+.act-circle.dec:hover{background:rgba(255,77,77,.2)}
+.act-circle svg{width:28px;height:28px}
+.act-circle.ans svg{color:var(--green)}
+.act-circle.dec svg{color:var(--red)}
+.act-label{font-size:11px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+
+/* ── active call screen ── */
+#scr-call{background:var(--bg);z-index:10}
+.call-status-lbl{font-size:11px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:8px}
+.call-timer{font-family:var(--disp);font-size:52px;font-weight:300;letter-spacing:4px;color:var(--accent);font-variant-numeric:tabular-nums}
+.call-with{font-size:13px;color:var(--muted);margin-top:6px;letter-spacing:.1em}
+.call-mode{font-size:10px;color:var(--hint);margin-top:4px;letter-spacing:.1em;text-transform:uppercase}
+.call-ctrls{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;width:100%;max-width:300px;margin:40px 0}
+.ctrl{display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;background:none;border:none;color:var(--tx);padding:0}
+.ctrl-ico{width:56px;height:56px;border-radius:50%;background:var(--s1);border:1px solid var(--b2);display:flex;align-items:center;justify-content:center;transition:all .15s}
+.ctrl:active .ctrl-ico{transform:scale(.91)}
+.ctrl.active .ctrl-ico{background:var(--accent-d);border-color:var(--accent)}
+.ctrl-ico svg{width:22px;height:22px;color:var(--muted)}
+.ctrl.active .ctrl-ico svg{color:var(--accent)}
+.ctrl-lbl{font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+.end-btn{width:72px;height:72px;border-radius:50%;border:none;background:var(--red);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;box-shadow:0 0 0 0 rgba(255,77,77,.3)}
+.end-btn:hover{box-shadow:0 0 0 12px rgba(255,77,77,.12)}
+.end-btn:active{transform:scale(.94)}
+.end-btn svg{width:28px;height:28px}
+
+/* ── ringing state on dialer ── */
+@keyframes ring-shake{0%,100%{transform:rotate(0)}20%{transform:rotate(-9deg)}40%{transform:rotate(9deg)}60%{transform:rotate(-6deg)}80%{transform:rotate(6deg)}}
+.ringing .logo-icon{animation:ring-shake .6s ease-in-out infinite}
+
+/* ── toast ── */
+#toast{position:fixed;bottom:max(env(safe-area-inset-bottom,24px),24px);left:50%;transform:translateX(-50%) translateY(18px);background:var(--s2);border:1px solid var(--b2);border-radius:var(--r-pill);padding:12px 24px;font-size:12px;color:var(--tx);letter-spacing:.06em;white-space:nowrap;z-index:200;opacity:0;transition:all .28s ease;pointer-events:none}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ── relay badge ── */
+.relay-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(255,159,67,.12);border:1px solid rgba(255,159,67,.3);border-radius:var(--r-pill);padding:4px 12px;font-size:10px;color:var(--orange);letter-spacing:.08em;text-transform:uppercase;margin-top:8px}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- connection badge -->
+  <div id="conn-badge">
+    <span class="dot" id="conn-dot"></span>
+    <span id="conn-lbl">Offline</span>
+  </div>
+
+  <!-- ══════════════ REGISTER ══════════════ -->
+  <div class="screen" id="scr-register">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81a19.79 19.79 0 01-3.07-8.67A2 2 0 012 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
+        </svg>
+      </div>
+      <h1>OpenCall</h1>
+      <p>Internet calls · No carrier · No cost</p>
+    </div>
+
+    <div class="form">
+      <div>
+        <div class="field-label">Your name</div>
+        <input type="text" id="inp-name" placeholder="e.g. Alex" maxlength="30" autocomplete="name"/>
+      </div>
+      <div>
+        <div class="field-label">Your number (US / Canada)</div>
+        <input type="tel" id="inp-number" placeholder="+1 416 555 0100" autocomplete="tel"/>
+      </div>
+      <div>
+        <div class="field-label">Signal server</div>
+        <input type="text" id="inp-server" placeholder="ws://localhost:8080" value="ws://localhost:8080"/>
+      </div>
+      <button class="btn btn-primary" id="btn-register" onclick="doRegister()">
+        Claim my number →
+      </button>
+      <p class="note">
+        Run the server locally or deploy free to <a href="https://railway.app" target="_blank">Railway</a>.<br>
+        Your number. Your server. Zero cost.
+      </p>
+    </div>
+  </div>
+
+  <!-- ══════════════ DIALER ══════════════ -->
+  <div class="screen hidden" id="scr-dialer">
+    <div class="dialer-top">
+      <div class="my-num">
+        <span class="dot on"></span>
+        <strong id="lbl-mynum">+1...</strong>
+      </div>
+      <button class="btn-sm" onclick="doLogout()">Leave</button>
+    </div>
+
+    <div class="dialer-mid">
+      <div class="num-display" style="width:100%">
+        <input type="tel" id="inp-dial" placeholder="+1 ··· ··· ····" readonly/>
+      </div>
+      <div class="keypad" id="keypad"></div>
+    </div>
+
+    <div class="dialer-btm">
+      <div style="width:50px"></div>
+      <button class="call-btn" id="btn-call" onclick="doCall()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81a19.79 19.79 0 01-3.07-8.67A2 2 0 012 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
+        </svg>
+      </button>
+      <button class="icon-btn" onclick="doDelete()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 4H8l-7 8 7 8h13a2 2 0 002-2V6a2 2 0 00-2-2z"/>
+          <line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ══════════════ INCOMING ══════════════ -->
+  <div class="screen hidden" id="scr-incoming">
+    <div class="pulse-wrap">
+      <div class="avatar" id="inc-avatar">?</div>
+    </div>
+    <div class="inc-label">Incoming call</div>
+    <div class="inc-name" id="inc-name">Unknown</div>
+    <div class="inc-num"  id="inc-num">+1...</div>
+
+    <div class="inc-actions">
+      <div>
+        <button class="act-circle dec" onclick="doDecline()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.68 13.31a16 16 0 003.41 2.6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.42 19.42 0 01-3.33-2.67m-2.67-3.34a19.79 19.79 0 01-3.07-8.63A2 2 0 014 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91"/>
+            <line x1="23" y1="1" x2="1" y2="23"/>
+          </svg>
+        </button>
+        <div class="act-label" style="margin-top:10px;text-align:center">Decline</div>
+      </div>
+      <div>
+        <button class="act-circle ans" onclick="doAnswer()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81a19.79 19.79 0 01-3.07-8.67A2 2 0 012 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
+          </svg>
+        </button>
+        <div class="act-label" style="margin-top:10px;text-align:center">Answer</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ ACTIVE CALL ══════════════ -->
+  <div class="screen hidden" id="scr-call">
+    <div class="call-status-lbl" id="call-status-lbl">Connecting...</div>
+    <div class="call-timer" id="call-timer">00:00</div>
+    <div class="call-with"  id="call-with">+1...</div>
+    <div class="call-mode"  id="call-mode"></div>
+
+    <div class="call-ctrls">
+      <button class="ctrl" id="ctrl-mute" onclick="toggleMute()">
+        <div class="ctrl-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+            <path d="M19 10v2a7 7 0 01-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </div>
+        <span class="ctrl-lbl">Mute</span>
+      </button>
+
+      <button class="ctrl" id="ctrl-spk" onclick="toggleSpeaker()">
+        <div class="ctrl-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
+          </svg>
+        </div>
+        <span class="ctrl-lbl">Speaker</span>
+      </button>
+
+      <button class="ctrl" id="ctrl-kp" onclick="toggleKeypad()">
+        <div class="ctrl-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="4" height="4" rx="1"/><rect x="10" y="3" width="4" height="4" rx="1"/><rect x="17" y="3" width="4" height="4" rx="1"/>
+            <rect x="3" y="10" width="4" height="4" rx="1"/><rect x="10" y="10" width="4" height="4" rx="1"/><rect x="17" y="10" width="4" height="4" rx="1"/>
+            <rect x="3" y="17" width="4" height="4" rx="1"/><rect x="10" y="17" width="4" height="4" rx="1"/><rect x="17" y="17" width="4" height="4" rx="1"/>
+          </svg>
+        </div>
+        <span class="ctrl-lbl">Keypad</span>
+      </button>
+    </div>
+
+    <button class="end-btn" onclick="doHangup()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.68 13.31a16 16 0 003.41 2.6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.42 19.42 0 01-3.33-2.67m-2.67-3.34a19.79 19.79 0 01-3.07-8.63A2 2 0 014 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91"/>
+        <line x1="23" y1="1" x2="1" y2="23"/>
+      </svg>
+    </button>
+  </div>
+
+</div>
+<div id="toast"></div>
+<audio id="remote-audio" autoplay playsinline></audio>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  OpenCall Client v1.0
+//  WebSocket signaling + WebRTC audio
+//  Zero external dependencies
+// ══════════════════════════════════════════════════════════════
+
+// ── state ──────────────────────────────────────────────────
+let ws            = null;
+let pc            = null;       // RTCPeerConnection
+let localStream   = null;
+let myNumber      = null;
+let myName        = null;
+let callId        = null;
+let callWith      = null;
+let callMode      = null;       // "direct" | "relay"
+let pendingCall   = null;
+let isMuted       = false;
+let timerInterval = null;
+let timerSecs     = 0;
+let audioCtx      = null;
+let ringInterval  = null;
+let ringbackCtx   = null;
+let ringbackInt   = null;
+
+// ── WebRTC config — Google free STUN ──────────────────────
+const RTC_CFG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302'  },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+  ]
+};
+
+// ── keypad ─────────────────────────────────────────────────
+const KEYS = [
+  ['1',''],['2','ABC'],['3','DEF'],
+  ['4','GHI'],['5','JKL'],['6','MNO'],
+  ['7','PQRS'],['8','TUV'],['9','WXYZ'],
+  ['*',''],['0','+'],['#','']
+];
+const kp = document.getElementById('keypad');
+KEYS.forEach(([d,l]) => {
+  const b = document.createElement('button');
+  b.className = 'key';
+  b.innerHTML = `<span class="kd">${d}</span>${l?`<span class="kl">${l}</span>`:''}`;
+  b.onclick = () => pressKey(d);
+  kp.appendChild(b);
+});
+
+// ── screen router ──────────────────────────────────────────
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+  document.getElementById('scr-'+id).classList.remove('hidden');
+}
+
+// ── toast ──────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, dur=3200) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), dur);
+}
+
+// ── connection status ──────────────────────────────────────
+function setConn(state) {
+  const dot = document.getElementById('conn-dot');
+  const lbl = document.getElementById('conn-lbl');
+  dot.className = 'dot ' + (state === 'on' ? 'on' : state === 'err' ? 'err' : '');
+  lbl.textContent = state === 'on' ? 'Connected' : state === 'err' ? 'Error' : 'Offline';
+}
+
+// ── register ───────────────────────────────────────────────
+function doRegister() {
+  const name   = document.getElementById('inp-name').value.trim();
+  const number = document.getElementById('inp-number').value.trim();
+  const server = document.getElementById('inp-server').value.trim();
+  if (!name)   return toast('Enter your name');
+  if (!number) return toast('Enter your number');
+  if (!server) return toast('Enter server URL');
+
+  myName   = name;
+  myNumber = number;
+
+  const btn = document.getElementById('btn-register');
+  btn.disabled = true;
+  btn.textContent = 'Connecting...';
+
+  try {
+    ws = new WebSocket(server);
+  } catch(e) {
+    toast('Invalid server URL');
+    resetBtn(); return;
+  }
+
+  ws.onopen = () => {
+    setConn('on');
+    wsSend({ type:'register', number, name });
+  };
+  ws.onmessage = e => {
+    try { onMessage(JSON.parse(e.data)); } catch {}
+  };
+  ws.onclose = () => {
+    setConn('off');
+    toast('Disconnected');
+    if (callId) endCall();
+    resetBtn();
+    show('register');
+  };
+  ws.onerror = () => {
+    toast('Cannot reach server — is it running?');
+    resetBtn();
+  };
+}
+
+function resetBtn() {
+  const btn = document.getElementById('btn-register');
+  btn.disabled = false;
+  btn.textContent = 'Claim my number →';
+}
+
+function doLogout() {
+  if (ws) ws.close();
+  show('register');
+}
+
+// ── message handler ────────────────────────────────────────
+async function onMessage(msg) {
+  console.log('[←]', msg.type, msg);
+  switch(msg.type) {
+
+    case 'registered':
+      document.getElementById('lbl-mynum').textContent = msg.number;
+      show('dialer');
+      toast('Registered as ' + msg.number);
+      break;
+
+    case 'ringing':
+      callId   = msg.callId;
+      callWith = msg.to;
+      callMode = msg.mode;
+      document.getElementById('call-status-lbl').textContent = 'Ringing...';
+      document.getElementById('call-timer').textContent = '00:00';
+      document.getElementById('call-with').textContent  = msg.to;
+      document.getElementById('call-mode').textContent  = msg.mode === 'relay' ? 'via relay' : 'direct';
+      show('call');
+      startRingback();
+      break;
+
+    case 'answered':
+      stopRingback();
+      document.getElementById('call-status-lbl').textContent = 'Connected';
+      startTimer();
+      await initWebRTC(true);
+      break;
+
+    case 'call_connected':
+      document.getElementById('call-status-lbl').textContent = 'Connected';
+      document.getElementById('call-with').textContent  = callWith;
+      document.getElementById('call-mode').textContent  = callMode === 'relay' ? 'via relay' : 'direct';
+      show('call');
+      startTimer();
+      break;
+
+    case 'incoming_call':
+      pendingCall = msg;
+      callWith    = msg.from;
+      callMode    = 'direct';
+      document.getElementById('inc-name').textContent   = msg.fromName || 'Unknown';
+      document.getElementById('inc-num').textContent    = msg.from;
+      document.getElementById('inc-avatar').textContent = (msg.fromName || '?')[0].toUpperCase();
+      show('incoming');
+      startRingtone();
+      break;
+
+    case 'rejected':
+      stopRingback();
+      toast('Call declined');
+      endCall();
+      break;
+
+    case 'hangup':
+      toast('Call ended');
+      endCall();
+      break;
+
+    case 'unavailable':
+      toast(msg.number + ' is not on OpenCall yet');
+      endCall();
+      break;
+
+    case 'no_relay':
+      toast('No relay available for this number');
+      endCall();
+      break;
+
+    case 'sdp_offer':
+      await handleOffer(msg.sdp, msg.from);
+      break;
+
+    case 'sdp_answer':
+      if (pc) await pc.setRemoteDescription({ type:'answer', sdp:msg.sdp });
+      break;
+
+    case 'ice':
+      if (pc && msg.candidate) {
+        try { await pc.addIceCandidate(msg.candidate); } catch {}
+      }
+      break;
+
+    case 'error':
+      toast('Error: ' + msg.reason);
+      break;
+  }
+}
+
+// ── dialer actions ─────────────────────────────────────────
+function pressKey(d) {
+  const inp = document.getElementById('inp-dial');
+  if (inp.value.length < 15) inp.value += d;
+}
+function doDelete() {
+  const inp = document.getElementById('inp-dial');
+  inp.value = inp.value.slice(0,-1);
+}
+function doCall() {
+  const to = document.getElementById('inp-dial').value.trim();
+  if (!to || to.length < 7) return toast('Enter a valid number');
+  if (!ws || ws.readyState !== 1) return toast('Not connected to server');
+  wsSend({ type:'call', to });
+}
+
+// ── answer / decline ───────────────────────────────────────
+function doAnswer() {
+  stopRingtone();
+  callId   = pendingCall.callId;
+  callWith = pendingCall.from;
+  callMode = 'direct';
+  wsSend({ type:'answer', callId:pendingCall.callId, from:pendingCall.from });
+  initWebRTC(false);
+}
+function doDecline() {
+  stopRingtone();
+  wsSend({ type:'reject', callId:pendingCall.callId, from:pendingCall.from });
+  pendingCall = null;
+  show('dialer');
+}
+
+// ── hangup ─────────────────────────────────────────────────
+function doHangup() {
+  wsSend({ type:'hangup', callId, with:callWith });
+  endCall();
+}
+function endCall() {
+  stopTimer();
+  stopRingtone();
+  stopRingback();
+  if (pc) { pc.close(); pc = null; }
+  if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
+  callId = callWith = callMode = pendingCall = null;
+  document.getElementById('inp-dial').value = '';
+  show('dialer');
+}
+
+// ── WebRTC ─────────────────────────────────────────────────
+async function initWebRTC(isCaller) {
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+  } catch {
+    toast('Microphone access denied');
+    doHangup(); return;
+  }
+
+  pc = new RTCPeerConnection(RTC_CFG);
+  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+  pc.ontrack = e => {
+    const audio = document.getElementById('remote-audio');
+    audio.srcObject = e.streams[0];
+    audio.play().catch(()=>{});
+  };
+
+  pc.onicecandidate = e => {
+    if (e.candidate) wsSend({ type:'ice', to:callWith, candidate:e.candidate });
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
+      toast('Connection lost');
+      endCall();
+    }
+  };
+
+  if (isCaller) {
+    const offer = await pc.createOffer({ offerToReceiveAudio:true });
+    await pc.setLocalDescription(offer);
+    wsSend({ type:'sdp_offer', to:callWith, sdp:offer.sdp });
+  }
+}
+
+async function handleOffer(sdp, from) {
+  if (!pc) await initWebRTC(false);
+  await pc.setRemoteDescription({ type:'offer', sdp });
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  wsSend({ type:'sdp_answer', to:from, sdp:answer.sdp });
+}
+
+// ── call timer ─────────────────────────────────────────────
+function startTimer() {
+  timerSecs = 0;
+  timerInterval = setInterval(() => {
+    timerSecs++;
+    const m = String(Math.floor(timerSecs/60)).padStart(2,'0');
+    const s = String(timerSecs%60).padStart(2,'0');
+    document.getElementById('call-timer').textContent = `${m}:${s}`;
+  }, 1000);
+}
+function stopTimer() { clearInterval(timerInterval); timerInterval=null; timerSecs=0; }
+
+// ── ringtone — Web Audio, no files needed ──────────────────
+function startRingtone() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  let i=0;
+  function ring() {
+    if (!audioCtx) return;
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.frequency.value = i%2===0?480:440;
+    g.gain.setValueAtTime(.3, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime+.4);
+    o.start(audioCtx.currentTime); o.stop(audioCtx.currentTime+.4);
+    i++;
+  }
+  ring();
+  ringInterval = setInterval(ring, 820);
+}
+function stopRingtone() {
+  clearInterval(ringInterval);
+  if (audioCtx) { audioCtx.close(); audioCtx=null; }
+}
+
+function startRingback() {
+  if (ringbackCtx) return;
+  ringbackCtx = new (window.AudioContext||window.webkitAudioContext)();
+  function beep() {
+    if (!ringbackCtx) return;
+    const o=ringbackCtx.createOscillator(), g=ringbackCtx.createGain();
+    o.connect(g); g.connect(ringbackCtx.destination);
+    o.frequency.value=440;
+    g.gain.setValueAtTime(.12, ringbackCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, ringbackCtx.currentTime+1);
+    o.start(ringbackCtx.currentTime); o.stop(ringbackCtx.currentTime+1);
+  }
+  beep();
+  ringbackInt = setInterval(beep, 3200);
+}
+function stopRingback() {
+  clearInterval(ringbackInt);
+  if (ringbackCtx) { ringbackCtx.close(); ringbackCtx=null; }
+}
+
+// ── call controls ──────────────────────────────────────────
+function toggleMute() {
+  isMuted = !isMuted;
+  if (localStream) localStream.getAudioTracks().forEach(t=>t.enabled=!isMuted);
+  document.getElementById('ctrl-mute').classList.toggle('active',isMuted);
+  toast(isMuted?'Muted':'Unmuted');
+}
+function toggleSpeaker() {
+  document.getElementById('ctrl-spk').classList.toggle('active');
+  toast('Speaker toggled');
+}
+function toggleKeypad() {
+  document.getElementById('ctrl-kp').classList.toggle('active');
+}
+
+// ── WS helper ──────────────────────────────────────────────
+function wsSend(obj) {
+  if (ws && ws.readyState===1) {
+    ws.send(JSON.stringify(obj));
+    console.log('[→]', obj.type, obj);
+  }
+}
+
+// ── keyboard ───────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  const active = document.querySelector('.screen:not(.hidden)');
+  if (!active || active.id !== 'scr-dialer') return;
+  if ('0123456789*#'.includes(e.key)) pressKey(e.key);
+  if (e.key==='Backspace') doDelete();
+  if (e.key==='Enter') doCall();
+});
+
+// ── service worker ─────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+</script>
+</body>
+</html>
