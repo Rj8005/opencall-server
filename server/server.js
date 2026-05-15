@@ -120,6 +120,16 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     const meta = metadata.get(ws);
     if (meta?.number) {
+      // notify and clean up any active call involving this number
+      for (const [callId, call] of callLog) {
+        if (call.from === meta.number || call.to === meta.number) {
+          const otherNumber = call.from === meta.number ? call.to : call.from;
+          const otherWs = registry.get(otherNumber);
+          if (otherWs) send(otherWs, { type: "hangup", callId, reason: "disconnected" });
+          if (call.relayWs) send(call.relayWs, { type: "relay_hangup", callId });
+          callLog.delete(callId);
+        }
+      }
       registry.delete(meta.number);
       log("←", "unregistered", meta.number);
     }
@@ -265,6 +275,7 @@ function handle(ws, msg) {
     case "reject": {
       const callerWs = registry.get(msg.from);
       if (callerWs) send(callerWs, { type: "rejected", callId: msg.callId });
+      callLog.delete(msg.callId);
       log("✗", "rejected:", msg.callId);
       break;
     }
