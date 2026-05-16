@@ -311,8 +311,19 @@ input::placeholder{color:var(--hint)}
 let sodiumReady = false;
 async function initSodium() {
   try {
-    await _sodium.ready;
-    window.sodium = _sodium;
+    await new Promise((resolve, reject) => {
+      const check = setInterval(() => {
+        if (typeof window.sodium !== 'undefined') {
+          clearInterval(check);
+          resolve();
+        }
+      }, 50);
+      setTimeout(() => {
+        clearInterval(check);
+        reject(new Error('libsodium timeout'));
+      }, 10000);
+    });
+    await window.sodium.ready;
     sodiumReady = true;
     console.log('[OCP] libsodium ready ✓');
     const identity = await getOrCreateIdentity();
