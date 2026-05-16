@@ -11,7 +11,16 @@
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
-<script src="libsodium-wrappers.js"></script>
+<script>
+window.sodium = {};
+window.sodium.ready = new Promise(function(resolve) {
+  window._sodiumResolve = resolve;
+});
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/libsodium-wrappers/0.7.11/libsodium-wrappers.js"
+  onload="if(typeof _sodium!=='undefined'){window.sodium=_sodium;window._sodiumResolve&&window._sodiumResolve();}"
+  onerror="console.error('libsodium CDN failed')">
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
@@ -311,18 +320,6 @@ input::placeholder{color:var(--hint)}
 let sodiumReady = false;
 async function initSodium() {
   try {
-    await new Promise((resolve, reject) => {
-      const check = setInterval(() => {
-        if (typeof window.sodium !== 'undefined') {
-          clearInterval(check);
-          resolve();
-        }
-      }, 50);
-      setTimeout(() => {
-        clearInterval(check);
-        reject(new Error('libsodium timeout'));
-      }, 10000);
-    });
     await window.sodium.ready;
     sodiumReady = true;
     console.log('[OCP] libsodium ready ✓');
