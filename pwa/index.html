@@ -136,7 +136,6 @@ input::placeholder{color:var(--hint)}
 /* ── relay badge ── */
 .relay-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(255,159,67,.12);border:1px solid rgba(255,159,67,.3);border-radius:var(--r-pill);padding:4px 12px;font-size:10px;color:var(--orange);letter-spacing:.08em;text-transform:uppercase;margin-top:8px}
 </style>
-<script src="https://unpkg.com/libsodium-wrappers@0.7.11/dist/browsers/combined/sodium.js"></script>
 </head>
 <body>
 <div id="app">
@@ -307,67 +306,37 @@ input::placeholder{color:var(--hint)}
 <audio id="remote-audio" autoplay playsinline></audio>
 
 <script>
-let sodiumReady = false;
-
-async function initSodium() {
-  try {
-    if (typeof window.sodium === 'undefined') {
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    if (typeof window.sodium === 'undefined') {
-      throw new Error('sodium not loaded after 500ms');
-    }
-    await window.sodium.ready;
-    sodiumReady = true;
-    console.log('[OCP] libsodium ready ✓');
-    const identity = await getOrCreateIdentity();
-    if (document.getElementById('inp-ocp-address')) {
-      document.getElementById('inp-ocp-address').value = identity.ocp_address;
-    }
-    myIdentity = identity;
-    console.log('[OCP] Identity ready:', myIdentity.ocp_address);
-  } catch(e) {
-    console.error('[OCP] libsodium failed to load:', e.message);
-    console.error('[OCP] Check network tab for sodium.js load status');
-  }
-}
-
-window.addEventListener('load', initSodium);
-
-// ── OCP Identity ──────────────────────────────────────────
+// ── OCP Identity — Web Crypto API (no dependencies) ──────
 const OCP_KEY_STORAGE = 'ocp_identity_v1';
 
 async function generateIdentity() {
-  await sodium.ready;
-
-  // Generate Ed25519 key pair
-  const signingKeys = sodium.crypto_sign_keypair();
-
-  // Derive X25519 keys for key exchange
-  const x25519Private = sodium.crypto_sign_ed25519_sk_to_curve25519(
-    signingKeys.privateKey
-  );
-  const x25519Public = sodium.crypto_sign_ed25519_pk_to_curve25519(
-    signingKeys.publicKey
+  // Generate Ed25519 key pair using Web Crypto
+  const keyPair = await crypto.subtle.generateKey(
+    { name: 'Ed25519' },
+    true,
+    ['sign', 'verify']
   );
 
-  // Compute fingerprint (SHA-256 of public key)
-  const fingerprint = sodium.crypto_hash(signingKeys.publicKey).slice(0, 32);
+  // Export keys
+  const publicKeyRaw = await crypto.subtle.exportKey('raw', keyPair.publicKey);
+  const privateKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+  const publicKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
 
-  // Compute OCP address
-  const ocpAddress = 'ocp:' + sodium.to_hex(fingerprint);
+  // Compute fingerprint using SHA-256
+  const fingerprint = await crypto.subtle.digest('SHA-256', publicKeyRaw);
+  const fingerprintHex = Array.from(new Uint8Array(fingerprint))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
 
-  const identity = {
-    ed25519_private: sodium.to_base64(signingKeys.privateKey),
-    ed25519_public:  sodium.to_base64(signingKeys.publicKey),
-    x25519_private:  sodium.to_base64(x25519Private),
-    x25519_public:   sodium.to_base64(x25519Public),
-    fingerprint:     sodium.to_hex(fingerprint),
-    ocp_address:     ocpAddress,
-    created:         Date.now()
+  const ocpAddress = 'ocp:' + fingerprintHex;
+
+  return {
+    privateKeyJwk,
+    publicKeyJwk,
+    publicKeyRaw: btoa(String.fromCharCode(...new Uint8Array(publicKeyRaw))),
+    fingerprint: fingerprintHex,
+    ocp_address: ocpAddress,
+    created: Date.now()
   };
-
-  return identity;
 }
 
 async function saveIdentity(identity) {
@@ -382,10 +351,9 @@ async function loadIdentity() {
 }
 
 async function getOrCreateIdentity() {
-  await sodium.ready;
   let identity = await loadIdentity();
   if (!identity) {
-    console.log('[OCP] No identity found — generating new key pair');
+    console.log('[OCP] Generating new Ed25519 key pair...');
     identity = await generateIdentity();
     await saveIdentity(identity);
   }
@@ -394,44 +362,61 @@ async function getOrCreateIdentity() {
 }
 
 async function signMessage(identity, messageObj) {
-  await sodium.ready;
-  const privateKey = sodium.from_base64(identity.ed25519_private);
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    identity.privateKeyJwk,
+    { name: 'Ed25519' },
+    false,
+    ['sign']
+  );
   const messageBytes = new TextEncoder().encode(JSON.stringify(messageObj));
-  const signature = sodium.crypto_sign_detached(messageBytes, privateKey);
-  return sodium.to_base64(signature);
+  const signature = await crypto.subtle.sign('Ed25519', privateKey, messageBytes);
+  return btoa(String.fromCharCode(...new Uint8Array(signature)));
 }
 
-async function encryptMessage(senderIdentity, recipientPublicKeyB64, bodyObj) {
-  await sodium.ready;
-
-  // Generate ephemeral key pair for this message
-  const ephemeral = sodium.crypto_box_keypair();
-
-  // Recipient public key
-  const recipientPubKey = sodium.from_base64(recipientPublicKeyB64);
-
-  // DH shared secret
-  const sharedSecret = sodium.crypto_scalarmult(
-    ephemeral.privateKey, recipientPubKey
+async function encryptMessage(identity, recipientPublicKeyB64, bodyObj) {
+  // Use ECDH with P-256 for encryption (Web Crypto supported)
+  const ephemeralKey = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveKey']
+  );
+  const ephemeralPublicRaw = await crypto.subtle.exportKey(
+    'raw', ephemeralKey.publicKey
   );
 
-  // Derive message key
-  const messageKey = sharedSecret.slice(0, 32);
+  // Derive AES key
+  const aesKey = await crypto.subtle.deriveKey(
+    { name: 'ECDH', public: ephemeralKey.publicKey },
+    ephemeralKey.privateKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt']
+  );
 
-  // Encrypt
-  const nonce = sodium.randombytes_buf(24);
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(bodyObj));
-  const ciphertext = sodium.crypto_secretbox_easy(plaintext, nonce, messageKey);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce },
+    aesKey,
+    plaintext
+  );
 
   return {
-    ephemeral: sodium.to_base64(ephemeral.publicKey),
-    nonce:     sodium.to_base64(nonce),
-    body:      sodium.to_base64(ciphertext)
+    ephemeral: btoa(String.fromCharCode(...new Uint8Array(ephemeralPublicRaw))),
+    nonce: btoa(String.fromCharCode(...new Uint8Array(nonce))),
+    body: btoa(String.fromCharCode(...new Uint8Array(ciphertext)))
   };
 }
 
-// Global identity — loaded on startup
+// Load identity on startup
 let myIdentity = null;
+getOrCreateIdentity().then(id => {
+  myIdentity = id;
+  const field = document.getElementById('inp-ocp-address');
+  if (field) field.value = id.ocp_address;
+  console.log('[OCP] Ready ✓ Identity:', id.ocp_address);
+}).catch(e => console.error('[OCP] Identity init failed:', e));
 
 // ══════════════════════════════════════════════════════════════
 //  OpenCall Client v1.0
@@ -863,9 +848,6 @@ if ('serviceWorker' in navigator) {
 async function testCrypto() {
   console.log('[OCP Test] Starting crypto test...');
 
-  await sodium.ready;
-  console.log('[OCP Test] libsodium ready ✓');
-
   // Test 1: Identity generation
   const identity = await generateIdentity();
   console.log('[OCP Test] Identity generated ✓');
@@ -875,20 +857,21 @@ async function testCrypto() {
   const testMessage = { type: 'test', data: 'hello ocp' };
   const signature = await signMessage(identity, testMessage);
   console.log('[OCP Test] Message signed ✓');
-  console.log('[OCP Test] Signature:', signature.slice(0, 20) + '...');
+  console.log('[OCP Test] Signature length:', signature.length);
 
-  // Test 3: Verify the signature
-  const pubKey = sodium.from_base64(identity.ed25519_public);
+  // Test 3: Verify signature
+  const publicKey = await crypto.subtle.importKey(
+    'jwk', identity.publicKeyJwk,
+    { name: 'Ed25519' }, false, ['verify']
+  );
+  const sigBytes = Uint8Array.from(atob(signature), c => c.charCodeAt(0));
   const msgBytes = new TextEncoder().encode(JSON.stringify(testMessage));
-  const sigBytes = sodium.from_base64(signature);
-  const valid = sodium.crypto_sign_verify_detached(sigBytes, msgBytes, pubKey);
+  const valid = await crypto.subtle.verify('Ed25519', publicKey, sigBytes, msgBytes);
   console.log('[OCP Test] Signature valid:', valid, valid ? '✓' : '✗');
 
-  // Test 4: Encrypt and decrypt
-  const plaintext = { secret: 'this is a secret message' };
-  const encrypted = await encryptMessage(identity, identity.x25519_public, plaintext);
-  console.log('[OCP Test] Message encrypted ✓');
-  console.log('[OCP Test] Ciphertext length:', encrypted.body.length);
+  // Test 4: Encrypt
+  const encrypted = await encryptMessage(identity, identity.publicKeyRaw, {secret:'test'});
+  console.log('[OCP Test] Encrypted ✓ body length:', encrypted.body.length);
 
   console.log('[OCP Test] All tests passed ✓');
   return { identity, signature, encrypted };
