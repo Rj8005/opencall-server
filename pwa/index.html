@@ -11,16 +11,6 @@
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
-<script>
-window.sodium = {};
-window.sodium.ready = new Promise(function(resolve) {
-  window._sodiumResolve = resolve;
-});
-</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/libsodium-wrappers/0.7.11/libsodium-wrappers.js"
-  onload="if(typeof _sodium!=='undefined'){window.sodium=_sodium;window._sodiumResolve&&window._sodiumResolve();}"
-  onerror="console.error('libsodium CDN failed')">
-</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
@@ -146,6 +136,7 @@ input::placeholder{color:var(--hint)}
 /* ── relay badge ── */
 .relay-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(255,159,67,.12);border:1px solid rgba(255,159,67,.3);border-radius:var(--r-pill);padding:4px 12px;font-size:10px;color:var(--orange);letter-spacing:.08em;text-transform:uppercase;margin-top:8px}
 </style>
+<script src="https://unpkg.com/libsodium-wrappers@0.7.11/dist/browsers/combined/sodium.js"></script>
 </head>
 <body>
 <div id="app">
@@ -316,10 +307,16 @@ input::placeholder{color:var(--hint)}
 <audio id="remote-audio" autoplay playsinline></audio>
 
 <script>
-// Wait for libsodium to be ready before anything else
 let sodiumReady = false;
+
 async function initSodium() {
   try {
+    if (typeof window.sodium === 'undefined') {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    if (typeof window.sodium === 'undefined') {
+      throw new Error('sodium not loaded after 500ms');
+    }
     await window.sodium.ready;
     sodiumReady = true;
     console.log('[OCP] libsodium ready ✓');
@@ -328,15 +325,14 @@ async function initSodium() {
       document.getElementById('inp-ocp-address').value = identity.ocp_address;
     }
     myIdentity = identity;
+    console.log('[OCP] Identity ready:', myIdentity.ocp_address);
   } catch(e) {
-    console.error('[OCP] libsodium failed:', e);
+    console.error('[OCP] libsodium failed to load:', e.message);
+    console.error('[OCP] Check network tab for sodium.js load status');
   }
 }
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initSodium);
-} else {
-  initSodium();
-}
+
+window.addEventListener('load', initSodium);
 
 // ── OCP Identity ──────────────────────────────────────────
 const OCP_KEY_STORAGE = 'ocp_identity_v1';
