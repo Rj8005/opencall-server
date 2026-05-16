@@ -11,6 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/libsodium-wrappers/0.7.11/libsodium.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/libsodium-wrappers/0.7.11/libsodium-wrappers.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -310,11 +311,28 @@ input::placeholder{color:var(--hint)}
 // Wait for libsodium to be ready before anything else
 let sodiumReady = false;
 async function initSodium() {
-  await sodium.ready;
-  sodiumReady = true;
-  console.log('[OCP] libsodium ready');
+  try {
+    if (typeof sodium === 'undefined') {
+      throw new Error('libsodium not loaded');
+    }
+    await sodium.ready;
+    sodiumReady = true;
+    console.log('[OCP] libsodium ready ✓');
+    // Pre-load identity so OCP address shows before user clicks register
+    const identity = await getOrCreateIdentity();
+    const field = document.getElementById('inp-ocp-address');
+    if (field) field.value = identity.ocp_address;
+    myIdentity = identity;
+  } catch(e) {
+    console.error('[OCP] libsodium failed to load:', e.message);
+  }
 }
-initSodium();
+// Run after DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initSodium);
+} else {
+  initSodium();
+}
 
 // ── OCP Identity ──────────────────────────────────────────
 const OCP_KEY_STORAGE = 'ocp_identity_v1';
