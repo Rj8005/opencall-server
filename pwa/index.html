@@ -11,6 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/libsodium-wrappers/0.7.11/libsodium-wrappers.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
@@ -171,6 +172,10 @@ input::placeholder{color:var(--hint)}
         <div class="field-label">Signal server</div>
         <input type="text" id="inp-server" placeholder="wss://opencall-server-production.up.railway.app" value="wss://opencall-server.onrender.com"/>
       </div>
+      <div>
+        <div class="field-label">Your OCP address</div>
+        <input type="text" id="inp-ocp-address" readonly placeholder="generating..." style="background:var(--s2);color:var(--muted);cursor:default;font-size:13px;letter-spacing:.02em"/>
+      </div>
       <button class="btn btn-primary" id="btn-register" onclick="doRegister()">
         Claim my number →
       </button>
@@ -186,7 +191,10 @@ input::placeholder{color:var(--hint)}
     <div class="dialer-top">
       <div class="my-num">
         <span class="dot on"></span>
-        <strong id="lbl-mynum">+1...</strong>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <strong id="lbl-mynum">+1...</strong>
+          <span id="lbl-ocpaddr" style="font-size:10px;color:var(--hint);letter-spacing:.04em"></span>
+        </div>
       </div>
       <button class="btn-sm" onclick="doLogout()">Leave</button>
     </div>
@@ -299,6 +307,114 @@ input::placeholder{color:var(--hint)}
 <audio id="remote-audio" autoplay playsinline></audio>
 
 <script>
+// Wait for libsodium to be ready before anything else
+let sodiumReady = false;
+async function initSodium() {
+  await sodium.ready;
+  sodiumReady = true;
+  console.log('[OCP] libsodium ready');
+}
+initSodium();
+
+// ── OCP Identity ──────────────────────────────────────────
+const OCP_KEY_STORAGE = 'ocp_identity_v1';
+
+async function generateIdentity() {
+  await sodium.ready;
+
+  // Generate Ed25519 key pair
+  const signingKeys = sodium.crypto_sign_keypair();
+
+  // Derive X25519 keys for key exchange
+  const x25519Private = sodium.crypto_sign_ed25519_sk_to_curve25519(
+    signingKeys.privateKey
+  );
+  const x25519Public = sodium.crypto_sign_ed25519_pk_to_curve25519(
+    signingKeys.publicKey
+  );
+
+  // Compute fingerprint (SHA-256 of public key)
+  const fingerprint = sodium.crypto_hash(signingKeys.publicKey).slice(0, 32);
+
+  // Compute OCP address
+  const ocpAddress = 'ocp:' + sodium.to_hex(fingerprint);
+
+  const identity = {
+    ed25519_private: sodium.to_base64(signingKeys.privateKey),
+    ed25519_public:  sodium.to_base64(signingKeys.publicKey),
+    x25519_private:  sodium.to_base64(x25519Private),
+    x25519_public:   sodium.to_base64(x25519Public),
+    fingerprint:     sodium.to_hex(fingerprint),
+    ocp_address:     ocpAddress,
+    created:         Date.now()
+  };
+
+  return identity;
+}
+
+async function saveIdentity(identity) {
+  localStorage.setItem(OCP_KEY_STORAGE, JSON.stringify(identity));
+  console.log('[OCP] Identity saved:', identity.ocp_address);
+}
+
+async function loadIdentity() {
+  const stored = localStorage.getItem(OCP_KEY_STORAGE);
+  if (!stored) return null;
+  return JSON.parse(stored);
+}
+
+async function getOrCreateIdentity() {
+  await sodium.ready;
+  let identity = await loadIdentity();
+  if (!identity) {
+    console.log('[OCP] No identity found — generating new key pair');
+    identity = await generateIdentity();
+    await saveIdentity(identity);
+  }
+  console.log('[OCP] Identity loaded:', identity.ocp_address);
+  return identity;
+}
+
+async function signMessage(identity, messageObj) {
+  await sodium.ready;
+  const privateKey = sodium.from_base64(identity.ed25519_private);
+  const messageBytes = new TextEncoder().encode(JSON.stringify(messageObj));
+  const signature = sodium.crypto_sign_detached(messageBytes, privateKey);
+  return sodium.to_base64(signature);
+}
+
+async function encryptMessage(senderIdentity, recipientPublicKeyB64, bodyObj) {
+  await sodium.ready;
+
+  // Generate ephemeral key pair for this message
+  const ephemeral = sodium.crypto_box_keypair();
+
+  // Recipient public key
+  const recipientPubKey = sodium.from_base64(recipientPublicKeyB64);
+
+  // DH shared secret
+  const sharedSecret = sodium.crypto_scalarmult(
+    ephemeral.privateKey, recipientPubKey
+  );
+
+  // Derive message key
+  const messageKey = sharedSecret.slice(0, 32);
+
+  // Encrypt
+  const nonce = sodium.randombytes_buf(24);
+  const plaintext = new TextEncoder().encode(JSON.stringify(bodyObj));
+  const ciphertext = sodium.crypto_secretbox_easy(plaintext, nonce, messageKey);
+
+  return {
+    ephemeral: sodium.to_base64(ephemeral.publicKey),
+    nonce:     sodium.to_base64(nonce),
+    body:      sodium.to_base64(ciphertext)
+  };
+}
+
+// Global identity — loaded on startup
+let myIdentity = null;
+
 // ══════════════════════════════════════════════════════════════
 //  OpenCall Client v1.0
 //  WebSocket signaling + WebRTC audio
@@ -373,7 +489,14 @@ function setConn(state) {
 }
 
 // ── register ───────────────────────────────────────────────
-function doRegister() {
+async function doRegister() {
+  // Load or generate OCP cryptographic identity
+  if (!myIdentity) {
+    myIdentity = await getOrCreateIdentity();
+    console.log('[OCP] Using identity:', myIdentity.ocp_address);
+  }
+  document.getElementById('inp-ocp-address').value = myIdentity.ocp_address;
+
   const name   = document.getElementById('inp-name').value.trim();
   const number = document.getElementById('inp-number').value.trim();
   const server = document.getElementById('inp-server').value.trim();
@@ -395,9 +518,9 @@ function doRegister() {
     resetBtn(); return;
   }
 
-  ws.onopen = () => {
+  ws.onopen = async () => {
     setConn('on');
-    wsSend({ type:'register', number, name });
+    await wsSend({ type:'register', number, name });
   };
   ws.onmessage = e => {
     try { onMessage(JSON.parse(e.data)); } catch {}
@@ -433,6 +556,9 @@ async function onMessage(msg) {
 
     case 'registered':
       document.getElementById('lbl-mynum').textContent = msg.number;
+      if (myIdentity) {
+        document.getElementById('lbl-ocpaddr').textContent = myIdentity.ocp_address.slice(0, 16) + '…';
+      }
       show('dialer');
       toast('Registered as ' + msg.number);
       break;
@@ -525,32 +651,32 @@ function doDelete() {
   const inp = document.getElementById('inp-dial');
   inp.value = inp.value.slice(0,-1);
 }
-function doCall() {
+async function doCall() {
   const to = document.getElementById('inp-dial').value.trim();
   if (!to || to.length < 7) return toast('Enter a valid number');
   if (!ws || ws.readyState !== 1) return toast('Not connected to server');
-  wsSend({ type:'call', to });
+  await wsSend({ type:'call', to });
 }
 
 // ── answer / decline ───────────────────────────────────────
-function doAnswer() {
+async function doAnswer() {
   stopRingtone();
   callId   = pendingCall.callId;
   callWith = pendingCall.from;
   callMode = 'direct';
-  wsSend({ type:'answer', callId:pendingCall.callId, from:pendingCall.from });
+  await wsSend({ type:'answer', callId:pendingCall.callId, from:pendingCall.from });
   initWebRTC(false);
 }
-function doDecline() {
+async function doDecline() {
   stopRingtone();
-  wsSend({ type:'reject', callId:pendingCall.callId, from:pendingCall.from });
+  await wsSend({ type:'reject', callId:pendingCall.callId, from:pendingCall.from });
   pendingCall = null;
   show('dialer');
 }
 
 // ── hangup ─────────────────────────────────────────────────
-function doHangup() {
-  wsSend({ type:'hangup', callId, with:callWith });
+async function doHangup() {
+  await wsSend({ type:'hangup', callId, with:callWith });
   endCall();
 }
 function endCall() {
@@ -582,8 +708,8 @@ async function initWebRTC(isCaller) {
     audio.play().catch(()=>{});
   };
 
-  pc.onicecandidate = e => {
-    if (e.candidate) wsSend({ type:'ice', to:callWith, candidate:e.candidate });
+  pc.onicecandidate = async e => {
+    if (e.candidate) await wsSend({ type:'ice', to:callWith, candidate:e.candidate });
   };
 
   pc.oniceconnectionstatechange = () => {
@@ -596,7 +722,7 @@ async function initWebRTC(isCaller) {
   if (isCaller) {
     const offer = await pc.createOffer({ offerToReceiveAudio:true });
     await pc.setLocalDescription(offer);
-    wsSend({ type:'sdp_offer', to:callWith, sdp:offer.sdp });
+    await wsSend({ type:'sdp_offer', to:callWith, sdp:offer.sdp });
   }
 }
 
@@ -605,7 +731,7 @@ async function handleOffer(sdp, from) {
   await pc.setRemoteDescription({ type:'offer', sdp });
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
-  wsSend({ type:'sdp_answer', to:from, sdp:answer.sdp });
+  await wsSend({ type:'sdp_answer', to:from, sdp:answer.sdp });
 }
 
 // ── call timer ─────────────────────────────────────────────
@@ -679,11 +805,26 @@ function toggleKeypad() {
 }
 
 // ── WS helper ──────────────────────────────────────────────
-function wsSend(obj) {
-  if (ws && ws.readyState===1) {
-    ws.send(JSON.stringify(obj));
-    console.log('[→]', obj.type, obj);
+async function wsSend(obj) {
+  if (!ws || ws.readyState !== 1) return;
+
+  // Add OCP metadata to every message
+  const message = {
+    ...obj,
+    ocp:       '1.0',
+    id:        crypto.randomUUID(),
+    timestamp: Math.floor(Date.now() / 1000),
+    from:      myIdentity ? myIdentity.ocp_address : null
+  };
+
+  // Sign the message if we have an identity
+  if (myIdentity) {
+    message.signature = await signMessage(myIdentity, message);
   }
+
+  const payload = JSON.stringify(message);
+  ws.send(payload);
+  console.log('[→]', obj.type, message);
 }
 
 // ── keyboard ───────────────────────────────────────────────
@@ -698,6 +839,41 @@ document.addEventListener('keydown', e => {
 // ── service worker ─────────────────────────────────────────
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+
+// ── crypto test — call testCrypto() from browser console ───
+async function testCrypto() {
+  console.log('[OCP Test] Starting crypto test...');
+
+  await sodium.ready;
+  console.log('[OCP Test] libsodium ready ✓');
+
+  // Test 1: Identity generation
+  const identity = await generateIdentity();
+  console.log('[OCP Test] Identity generated ✓');
+  console.log('[OCP Test] OCP address:', identity.ocp_address);
+
+  // Test 2: Sign a message
+  const testMessage = { type: 'test', data: 'hello ocp' };
+  const signature = await signMessage(identity, testMessage);
+  console.log('[OCP Test] Message signed ✓');
+  console.log('[OCP Test] Signature:', signature.slice(0, 20) + '...');
+
+  // Test 3: Verify the signature
+  const pubKey = sodium.from_base64(identity.ed25519_public);
+  const msgBytes = new TextEncoder().encode(JSON.stringify(testMessage));
+  const sigBytes = sodium.from_base64(signature);
+  const valid = sodium.crypto_sign_verify_detached(sigBytes, msgBytes, pubKey);
+  console.log('[OCP Test] Signature valid:', valid, valid ? '✓' : '✗');
+
+  // Test 4: Encrypt and decrypt
+  const plaintext = { secret: 'this is a secret message' };
+  const encrypted = await encryptMessage(identity, identity.x25519_public, plaintext);
+  console.log('[OCP Test] Message encrypted ✓');
+  console.log('[OCP Test] Ciphertext length:', encrypted.body.length);
+
+  console.log('[OCP Test] All tests passed ✓');
+  return { identity, signature, encrypted };
 }
 </script>
 </body>
