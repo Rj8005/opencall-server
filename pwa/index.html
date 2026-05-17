@@ -542,6 +542,12 @@ async function encryptMessage(identity, recipientPublicKeyB64, bodyObj) {
 // ── Double Ratchet Session Management ─────────────────────
 const ratchetSessions = new Map(); // callWith → session state
 
+const DHT_BOOTSTRAP = [
+  'wss://ocp-bootstrap-1.onrender.com/ws',
+  'wss://ocp-bootstrap-2.onrender.com/ws',
+  'wss://ocp-bootstrap-3.onrender.com/ws'
+];
+
 async function initRatchetSession(withNumber) {
   const rootKeyMaterial = crypto.getRandomValues(new Uint8Array(32));
   const rootKey = await crypto.subtle.importKey(
