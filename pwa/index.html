@@ -813,11 +813,11 @@ async function wsSend(obj) {
 
   // Add OCP metadata to every message
   const message = {
-    ...obj,
     ocp:       '1.0',
     id:        crypto.randomUUID(),
     timestamp: Math.floor(Date.now() / 1000),
-    from:      myIdentity ? myIdentity.ocp_address : null
+    from:      myIdentity ? myIdentity.ocp_address : null,
+    ...obj
   };
 
   // Sign the message if we have an identity
