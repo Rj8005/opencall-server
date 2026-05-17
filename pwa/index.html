@@ -523,7 +523,12 @@ async function doRegister() {
 
   ws.onopen = async () => {
     setConn('on');
-    await wsSend({ type:'register', number, name });
+    await wsSend({
+      type:       'register',
+      number,
+      name,
+      public_key: myIdentity ? JSON.stringify(myIdentity.publicKeyJwk) : null
+    });
   };
   ws.onmessage = e => {
     try { onMessage(JSON.parse(e.data)); } catch {}

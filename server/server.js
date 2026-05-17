@@ -51,6 +51,32 @@ function makeCallId() {
   return `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+async function verifySignature(msg) {
+  if (!msg.signature || !msg.from || msg.type === 'register') {
+    return true;
+  }
+  try {
+    const senderMeta = [...metadata.values()].find(
+      m => m.ocpAddress === msg.from
+    );
+    if (!senderMeta?.publicKeyJwk) return true;
+    const publicKey = await crypto.subtle.importKey(
+      'jwk',
+      JSON.parse(senderMeta.publicKeyJwk),
+      { name: 'Ed25519' },
+      false,
+      ['verify']
+    );
+    const msgCopy = { ...msg };
+    delete msgCopy.signature;
+    const msgBytes = new TextEncoder().encode(JSON.stringify(msgCopy));
+    const sigBytes = Buffer.from(msg.signature, 'base64');
+    return await crypto.subtle.verify('Ed25519', publicKey, sigBytes, msgBytes);
+  } catch(e) {
+    return true;
+  }
+}
+
 function findRelay(targetNumber) {
   if (relays.size === 0) return null;
   // try to find relay with matching area code prefix
@@ -146,8 +172,14 @@ wss.on("connection", (ws, req) => {
 // ─────────────────────────────────────────────────────────────
 //  Message handler — every message type
 // ─────────────────────────────────────────────────────────────
-function handle(ws, msg) {
+async function handle(ws, msg) {
   log("↓", msg.type, JSON.stringify(msg).slice(0, 120));
+
+  const sigValid = await verifySignature(msg);
+  if (!sigValid) {
+    log('!', 'invalid signature from', msg.from);
+    return;
+  }
 
   switch (msg.type) {
 
@@ -171,7 +203,13 @@ function handle(ws, msg) {
       }
 
       registry.set(number, ws);
-      metadata.set(ws, { number, name, registeredAt: Date.now() });
+      metadata.set(ws, {
+        number,
+        name,
+        registeredAt:  Date.now(),
+        ocpAddress:    msg.from || null,
+        publicKeyJwk:  msg.public_key || null
+      });
 
       send(ws, { type: "registered", number, name });
       log("✓", "registered", number, `(${name})`);
