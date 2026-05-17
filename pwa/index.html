@@ -175,6 +175,26 @@ input::placeholder{color:var(--hint)}
         <div class="field-label">Your OCP address</div>
         <input type="text" id="inp-ocp-address" readonly placeholder="generating..." style="background:var(--s2);color:var(--muted);cursor:default;font-size:13px;letter-spacing:.02em"/>
       </div>
+      <div style="display:flex;gap:8px;margin-top:-6px">
+        <button
+          onclick="exportIdentity()"
+          style="flex:1;padding:10px;background:var(--s2);color:var(--muted);
+                 border:1px solid var(--b2);border-radius:var(--r);
+                 font-family:var(--mono);font-size:11px;cursor:pointer;
+                 letter-spacing:.06em"
+          type="button">
+          EXPORT KEY
+        </button>
+        <button
+          onclick="importIdentity()"
+          style="flex:1;padding:10px;background:var(--s2);color:var(--muted);
+                 border:1px solid var(--b2);border-radius:var(--r);
+                 font-family:var(--mono);font-size:11px;cursor:pointer;
+                 letter-spacing:.06em"
+          type="button">
+          IMPORT KEY
+        </button>
+      </div>
       <button class="btn btn-primary" id="btn-register" onclick="doRegister()">
         Claim my number →
       </button>
@@ -361,6 +381,116 @@ async function getOrCreateIdentity() {
   return identity;
 }
 
+async function exportIdentity() {
+  const identity = await loadIdentity();
+  if (!identity) return toast('No identity to export');
+
+  // Encrypt the backup with a user passphrase
+  const passphrase = prompt('Enter a passphrase to protect your backup:');
+  if (!passphrase) return;
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(passphrase),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveKey']
+  );
+  const encryptionKey = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt']
+  );
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce },
+    encryptionKey,
+    new TextEncoder().encode(JSON.stringify(identity))
+  );
+
+  const backup = {
+    version: 1,
+    salt:    btoa(String.fromCharCode(...salt)),
+    nonce:   btoa(String.fromCharCode(...new Uint8Array(nonce))),
+    data:    btoa(String.fromCharCode(...new Uint8Array(encrypted)))
+  };
+
+  // Download as file
+  const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'ocp-identity-backup.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Identity exported — keep this file safe');
+}
+
+async function importIdentity() {
+  const input = document.createElement('input');
+  input.type  = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const text = await file.text();
+    let backup;
+    try { backup = JSON.parse(text); }
+    catch { return toast('Invalid backup file'); }
+
+    const passphrase = prompt('Enter your backup passphrase:');
+    if (!passphrase) return;
+
+    try {
+      const salt  = Uint8Array.from(atob(backup.salt),  c => c.charCodeAt(0));
+      const nonce = Uint8Array.from(atob(backup.nonce), c => c.charCodeAt(0));
+      const data  = Uint8Array.from(atob(backup.data),  c => c.charCodeAt(0));
+
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(passphrase),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveKey']
+      );
+      const encryptionKey = await crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt,
+          iterations: 100000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt']
+      );
+      const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: nonce },
+        encryptionKey,
+        data
+      );
+      const identity = JSON.parse(new TextDecoder().decode(decrypted));
+      await saveIdentity(identity);
+      myIdentity = identity;
+      document.getElementById('inp-ocp-address').value = identity.ocp_address;
+      toast('Identity imported successfully');
+    } catch(e) {
+      toast('Wrong passphrase or corrupted file');
+    }
+  };
+  input.click();
+}
+
 async function signMessage(identity, messageObj) {
   const privateKey = await crypto.subtle.importKey(
     'jwk',
@@ -407,6 +537,93 @@ async function encryptMessage(identity, recipientPublicKeyB64, bodyObj) {
     nonce: btoa(String.fromCharCode(...new Uint8Array(nonce))),
     body: btoa(String.fromCharCode(...new Uint8Array(ciphertext)))
   };
+}
+
+// ── Double Ratchet Session Management ─────────────────────
+const ratchetSessions = new Map(); // callWith → session state
+
+async function initRatchetSession(withNumber) {
+  const rootKeyMaterial = crypto.getRandomValues(new Uint8Array(32));
+  const rootKey = await crypto.subtle.importKey(
+    'raw', rootKeyMaterial,
+    { name: 'HKDF' }, false, ['deriveKey']
+  );
+  const sendKey = await crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: crypto.getRandomValues(new Uint8Array(32)),
+      info: new TextEncoder().encode('OCP-send-v1')
+    },
+    rootKey,
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['encrypt']
+  );
+  const recvKey = await crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: crypto.getRandomValues(new Uint8Array(32)),
+      info: new TextEncoder().encode('OCP-recv-v1')
+    },
+    rootKey,
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['decrypt']
+  );
+  ratchetSessions.set(withNumber, {
+    sendKey,
+    recvKey,
+    sendCount: 0,
+    recvCount: 0,
+    createdAt: Date.now()
+  });
+  console.log('[OCP] Ratchet session initialised for', withNumber);
+}
+
+async function ratchetEncrypt(withNumber, plaintext) {
+  let session = ratchetSessions.get(withNumber);
+  if (!session) {
+    await initRatchetSession(withNumber);
+    session = ratchetSessions.get(withNumber);
+  }
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce },
+    session.sendKey,
+    new TextEncoder().encode(JSON.stringify(plaintext))
+  );
+  session.sendCount++;
+  return {
+    nonce: btoa(String.fromCharCode(...new Uint8Array(nonce))),
+    body:  btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+    count: session.sendCount
+  };
+}
+
+async function ratchetDecrypt(withNumber, encrypted) {
+  const session = ratchetSessions.get(withNumber);
+  if (!session) return null;
+  try {
+    const nonce = Uint8Array.from(atob(encrypted.nonce), c => c.charCodeAt(0));
+    const body  = Uint8Array.from(atob(encrypted.body),  c => c.charCodeAt(0));
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: nonce },
+      session.recvKey,
+      body
+    );
+    session.recvCount++;
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch(e) {
+    console.error('[OCP] Ratchet decrypt failed:', e.message);
+    return null;
+  }
+}
+
+function clearRatchetSession(withNumber) {
+  ratchetSessions.delete(withNumber);
+  console.log('[OCP] Ratchet session cleared for', withNumber);
 }
 
 // Load identity on startup
@@ -663,6 +880,7 @@ async function doCall() {
   const to = document.getElementById('inp-dial').value.trim();
   if (!to || to.length < 7) return toast('Enter a valid number');
   if (!ws || ws.readyState !== 1) return toast('Not connected to server');
+  await initRatchetSession(to);
   await wsSend({ type:'call', to });
 }
 
@@ -672,6 +890,7 @@ async function doAnswer() {
   callId   = pendingCall.callId;
   callWith = pendingCall.from;
   callMode = 'direct';
+  await initRatchetSession(callWith);
   await wsSend({ type:'answer', callId:pendingCall.callId, from:pendingCall.from });
   initWebRTC(false);
 }
@@ -693,6 +912,7 @@ function endCall() {
   stopRingback();
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
+  if (callWith) clearRatchetSession(callWith);
   callId = callWith = callMode = pendingCall = null;
   document.getElementById('inp-dial').value = '';
   show('dialer');
@@ -877,6 +1097,14 @@ async function testCrypto() {
   // Test 4: Encrypt
   const encrypted = await encryptMessage(identity, identity.publicKeyRaw, {secret:'test'});
   console.log('[OCP Test] Encrypted ✓ body length:', encrypted.body.length);
+
+  // Test 5: Double Ratchet
+  await initRatchetSession('test-peer');
+  const ratchetMsg = { text: 'hello from ratchet' };
+  const enc = await ratchetEncrypt('test-peer', ratchetMsg);
+  console.log('[OCP Test] Ratchet encrypted ✓ count:', enc.count);
+  clearRatchetSession('test-peer');
+  console.log('[OCP Test] Ratchet session cleared ✓');
 
   console.log('[OCP Test] All tests passed ✓');
   return { identity, signature, encrypted };
