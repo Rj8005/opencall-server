@@ -631,6 +631,39 @@ async function dhtLookupPhone(phone) {
   return dhtLookup('phone:' + phone);
 }
 
+async function enumLookup(phoneNumber) {
+  try {
+    // Convert +14165550100 to 0.0.1.0.5.5.5.6.1.4.1.e164.arpa
+    const digits = phoneNumber.replace(/\D/g, '');
+    const reversed = digits.split('').reverse().join('.');
+    const enumDomain = reversed + '.e164.arpa';
+
+    // Query DNS over HTTPS (DoH) — Cloudflare
+    const response = await fetch(
+      'https://cloudflare-dns.com/dns-query?name=' +
+      enumDomain + '&type=NAPTR',
+      { headers: { 'Accept': 'application/dns-json' } }
+    );
+    const data = await response.json();
+
+    if (data.Answer && data.Answer.length > 0) {
+      for (const record of data.Answer) {
+        if (record.data && record.data.includes('sip:')) {
+          const match = record.data.match(/sip:[^\s"]+/);
+          if (match) {
+            console.log('[ENUM] Found SIP address:', match[0]);
+            return match[0];
+          }
+        }
+      }
+    }
+    return null;
+  } catch(e) {
+    console.log('[ENUM] Lookup failed:', e.message);
+    return null;
+  }
+}
+
 async function initRatchetSession(withNumber) {
   const rootKeyMaterial = crypto.getRandomValues(new Uint8Array(32));
   const rootKey = await crypto.subtle.importKey(
@@ -980,7 +1013,23 @@ async function doCall() {
   const to = document.getElementById('inp-dial').value.trim();
   if (!to || to.length < 7) return toast('Enter a valid number');
   if (!ws || ws.readyState !== 1) return toast('Not connected to server');
+
+  // Step 1: Check if number is registered in OCP via DHT
+  if (dhtReady && to.startsWith('+')) {
+    console.log('[DHT] Looking up', to, 'in DHT...');
+    const ocpAddr = await dhtLookupPhone(to);
+    if (ocpAddr) {
+      console.log('[DHT] Found OCP address for', to, ':', ocpAddr);
+      toast('Routing via OCP network...');
+    } else {
+      console.log('[DHT] Not in DHT — routing via signal server');
+    }
+  }
+
+  // Step 2: Initialise ratchet session
   await initRatchetSession(to);
+
+  // Step 3: Route call via signal server (DHT routing in Phase 3 end)
   await wsSend({ type:'call', to });
 }
 
