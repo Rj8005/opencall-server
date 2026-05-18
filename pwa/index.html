@@ -542,11 +542,94 @@ async function encryptMessage(identity, recipientPublicKeyB64, bodyObj) {
 // ── Double Ratchet Session Management ─────────────────────
 const ratchetSessions = new Map(); // callWith → session state
 
+// ── OCP DHT Client ────────────────────────────────────────
 const DHT_BOOTSTRAP = [
   'wss://ocp-bootstrap-1.onrender.com/ws',
   'wss://ocp-bootstrap-2.onrender.com/ws',
   'wss://ocp-bootstrap-3.onrender.com/ws'
 ];
+const dhtPeers = new Map();
+let dhtReady = false;
+const dhtCallbacks = new Map();
+
+async function initDHT() {
+  console.log('[DHT] Connecting to bootstrap nodes...');
+  let connected = 0;
+  for (const url of DHT_BOOTSTRAP) {
+    try {
+      await new Promise((resolve) => {
+        const peer = new WebSocket(url);
+        const timeout = setTimeout(() => { peer.close(); resolve(); }, 5000);
+        peer.onopen = () => {
+          clearTimeout(timeout);
+          dhtPeers.set(url, peer);
+          connected++;
+          console.log('[DHT] Connected to', url);
+          resolve();
+        };
+        peer.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'FOUND_VALUE') {
+              const cb = dhtCallbacks.get(msg.key);
+              if (cb) { cb(msg.value); dhtCallbacks.delete(msg.key); }
+            }
+          } catch {}
+        };
+        peer.onerror = () => { clearTimeout(timeout); resolve(); };
+        peer.onclose = () => { dhtPeers.delete(url); };
+      });
+    } catch(e) {}
+  }
+  dhtReady = connected > 0;
+  console.log('[DHT]', connected, 'of 3 bootstrap nodes connected');
+  if (dhtReady) {
+    setInterval(async () => {
+      if (myIdentity) await dhtAnnounce(myIdentity.ocp_address, 'online');
+      if (myNumber) await dhtAnnouncePhone(myNumber, myIdentity?.ocp_address);
+    }, 25 * 60 * 1000);
+  }
+}
+
+async function dhtSend(msg) {
+  const payload = JSON.stringify(msg);
+  let sent = 0;
+  for (const peer of dhtPeers.values()) {
+    if (peer.readyState === 1) { peer.send(payload); sent++; }
+  }
+  return sent > 0;
+}
+
+async function dhtAnnounce(key, value) {
+  if (!dhtReady) return false;
+  const ok = await dhtSend({ type:'STORE', key, value, ttl:3600 });
+  if (ok) console.log('[DHT] Stored:', key.slice(0,20) + '...');
+  return ok;
+}
+
+async function dhtLookup(key) {
+  if (!dhtReady) return null;
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      dhtCallbacks.delete(key);
+      resolve(null);
+    }, 4000);
+    dhtCallbacks.set(key, (value) => {
+      clearTimeout(timeout);
+      resolve(value);
+    });
+    dhtSend({ type:'FIND_VALUE', key });
+  });
+}
+
+async function dhtAnnouncePhone(phone, ocpAddress) {
+  if (!phone || !ocpAddress) return;
+  return dhtAnnounce('phone:' + phone, ocpAddress);
+}
+
+async function dhtLookupPhone(phone) {
+  return dhtLookup('phone:' + phone);
+}
 
 async function initRatchetSession(withNumber) {
   const rootKeyMaterial = crypto.getRandomValues(new Uint8Array(32));
@@ -634,11 +717,17 @@ function clearRatchetSession(withNumber) {
 
 // Load identity on startup
 let myIdentity = null;
-getOrCreateIdentity().then(id => {
+getOrCreateIdentity().then(async id => {
   myIdentity = id;
   const field = document.getElementById('inp-ocp-address');
   if (field) field.value = id.ocp_address;
   console.log('[OCP] Ready ✓ Identity:', id.ocp_address);
+  initDHT().then(() => {
+    if (dhtReady && myIdentity) {
+      dhtAnnounce(myIdentity.ocp_address, 'online');
+      console.log('[DHT] Identity announced');
+    }
+  });
 }).catch(e => console.error('[OCP] Identity init failed:', e));
 
 // ══════════════════════════════════════════════════════════════
@@ -792,6 +881,11 @@ async function onMessage(msg) {
       }
       show('dialer');
       toast('Registered as ' + msg.number);
+      if (myIdentity && dhtReady) {
+        dhtAnnounce(myIdentity.ocp_address, 'online');
+        if (myNumber) dhtAnnouncePhone(myNumber, myIdentity.ocp_address);
+        console.log('[DHT] Announced identity and phone');
+      }
       break;
 
     case 'ringing':
