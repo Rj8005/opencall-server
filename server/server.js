@@ -21,7 +21,9 @@ const PORT = process.env.PORT || 8080;
 const registry  = new Map(); // "+14161234567" → WebSocket
 const metadata  = new Map(); // WebSocket       → { number, name, registeredAt }
 const relays    = new Map(); // relayId         → { ws, areaCode, country }
-const callLog   = new Map(); // callId          → { from, to, startedAt }
+const callLog          = new Map(); // callId          → { from, to, startedAt }
+const pushSubscriptions = new Map(); // number           → push subscription
+const webPush           = null;      // using native fetch for push
 
 // ─────────────────────────────────────────────────────────────
 //  Utilities
@@ -29,6 +31,26 @@ const callLog   = new Map(); // callId          → { from, to, startedAt }
 function send(ws, obj) {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify(obj));
+  }
+}
+
+async function sendPushNotification(number, data) {
+  const sub = pushSubscriptions.get(number);
+  if (!sub) return;
+  try {
+    const payload = JSON.stringify(data);
+    const response = await fetch(sub.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type':    'application/octet-stream',
+        'Content-Encoding': 'aes128gcm',
+        'TTL':             '86400'
+      },
+      body: payload
+    });
+    log('✓', 'push sent to', number, 'status:', response.status);
+  } catch(e) {
+    log('!', 'push failed for', number, e.message);
   }
 }
 
@@ -231,6 +253,16 @@ async function handle(ws, msg) {
       break;
     }
 
+    // ── PUSH_SUBSCRIBE ────────────────────────────────────────
+    case "push_subscribe": {
+      const meta = metadata.get(ws);
+      if (meta?.number && msg.subscription) {
+        pushSubscriptions.set(meta.number, JSON.parse(msg.subscription));
+        log("✓", "push subscription registered for", meta.number);
+      }
+      break;
+    }
+
     // ── CALL ──────────────────────────────────────────────────
     // Caller initiates a call to a number
     case "call": {
@@ -254,6 +286,13 @@ async function handle(ws, msg) {
         // notify callee
         send(calleeWs, {
           type:     "incoming_call",
+          callId,
+          from:     callerMeta.number,
+          fromName: callerMeta.name
+        });
+
+        // wake callee if app is backgrounded
+        sendPushNotification(to, {
           callId,
           from:     callerMeta.number,
           fromName: callerMeta.name

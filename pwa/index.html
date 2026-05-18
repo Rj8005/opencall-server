@@ -761,7 +761,36 @@ getOrCreateIdentity().then(async id => {
       console.log('[DHT] Identity announced');
     }
   });
+  subscribePush();
 }).catch(e => console.error('[OCP] Identity init failed:', e));
+
+async function subscribePush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    console.log('[Push] Not supported in this browser');
+    return;
+  }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      console.log('[Push] Already subscribed');
+      return;
+    }
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: 'BEreF9OQq-m2h5nL2rJ0qxjEeBK1hFIbyKOVNBEg8NoRCEYzdC1pSX6qS275ytj0ylllWfAXFLv0BUrAjm8cwsQ'
+    });
+    console.log('[Push] Subscribed successfully');
+    if (ws && ws.readyState === 1) {
+      await wsSend({
+        type: 'push_subscribe',
+        subscription: JSON.stringify(sub)
+      });
+    }
+  } catch(e) {
+    console.log('[Push] Subscription failed:', e.message);
+  }
+}
 
 // ══════════════════════════════════════════════════════════════
 //  OpenCall Client v1.0
@@ -1230,6 +1259,18 @@ document.addEventListener('keydown', e => {
 // ── service worker ─────────────────────────────────────────
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+  navigator.serviceWorker.addEventListener('message', async (event) => {
+    const { type, action, callData } = event.data;
+    if (type !== 'notification_action') return;
+    if (action === 'answer' && callData?.callId) {
+      pendingCall = { callId: callData.callId, from: callData.from };
+      doAnswer();
+    } else if (action === 'decline' && callData?.callId) {
+      pendingCall = { callId: callData.callId, from: callData.from };
+      doDecline();
+    }
+  });
 }
 
 // ── crypto test — call testCrypto() from browser console ───
