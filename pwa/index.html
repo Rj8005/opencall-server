@@ -165,7 +165,7 @@ input::placeholder{color:var(--hint)}
       </div>
       <div>
         <div class="field-label">Your number (US / Canada)</div>
-        <input type="tel" id="inp-number" placeholder="+1 416 555 0100" autocomplete="tel"/>
+        <input type="tel" id="inp-number" placeholder="+1 ··· ··· ····" autocomplete="tel"/>
       </div>
       <div>
         <div class="field-label">Signal server</div>
@@ -1025,14 +1025,13 @@ async function onMessage(msg) {
 
     case 'answer_link_ready': {
       stopRingback();
-      document.getElementById('call-status-lbl').textContent =
-        'Share link to connect';
+      document.getElementById('call-status-lbl').textContent = 'Share link to connect';
       document.getElementById('call-with').textContent = msg.to;
       document.getElementById('call-mode').textContent =
         msg.autoNotified?.length
           ? 'Auto-notified via ' + msg.autoNotified.join(', ')
           : 'Share the link below';
-      showShareCard(msg.link, msg.callId, msg.shareOptions, msg.ntfyTopic);
+      showShareCard(msg.to, msg.answerLink, msg.autoNotified);
       break;
     }
 
@@ -1069,74 +1068,138 @@ async function onMessage(msg) {
 }
 
 // ── share card ─────────────────────────────────────────────
-function showShareCard(link, callId, shareOptions, ntfyTopic) {
+function showShareCard(to, answerLink, autoNotified) {
   const existing = document.getElementById('share-card');
   if (existing) existing.remove();
+
+  const toDigits  = (to || '').replace(/\D/g, '');
+  const shareText = 'Hey, call me free on OpenCall — just tap: ' + answerLink;
 
   const card = document.createElement('div');
   card.id = 'share-card';
   card.style.cssText = `
-    position:fixed;bottom:100px;left:50%;
+    position:fixed;bottom:80px;left:50%;
     transform:translateX(-50%);
     background:#111;
     border:1px solid rgba(200,245,90,0.3);
     border-radius:18px;padding:20px;
-    max-width:340px;width:92%;z-index:100;
-    text-align:center;font-family:'DM Mono',monospace;
+    max-width:360px;width:94%;z-index:100;
+    font-family:'DM Mono',monospace;
+    box-shadow:0 8px 32px rgba(0,0,0,0.6);
   `;
-
-  const optionButtons = (shareOptions || []).map(opt => {
-    if (opt.name === 'Copy') {
-      return `<button onclick="copyLink('${link}')"
-        style="padding:8px 4px;background:#1a1a1a;
-               color:#888;border:1px solid #2a2a2a;
-               border-radius:10px;font-size:10px;
-               cursor:pointer;width:100%">
-        Copy link
-      </button>`;
-    }
-    return `<button onclick="openShareOption('${opt.url}')"
-      style="padding:8px 4px;background:#1a1a1a;
-             color:#888;border:1px solid #2a2a2a;
-             border-radius:10px;font-size:10px;
-             cursor:pointer;width:100%">
-      ${opt.name}
-    </button>`;
-  }).join('');
 
   card.innerHTML = `
-    <div style="font-size:10px;color:#666;
-                letter-spacing:.12em;margin-bottom:10px">
-      SEND THIS LINK — JAMES JUST TAPS IT
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <span style="width:8px;height:8px;border-radius:50%;
+                   background:#ff453a;flex-shrink:0;display:inline-block"></span>
+      <span style="font-size:13px;color:#f0ede8;font-weight:600;
+                   font-family:'Syne',sans-serif">
+        ${to} is not on OpenCall yet
+      </span>
     </div>
-    <div style="font-size:11px;color:#c8f55a;
-                word-break:break-all;margin-bottom:14px;
-                background:#0a0a0a;padding:10px;
-                border-radius:10px;line-height:1.6">
-      ${link}
+    <p style="font-size:11px;color:#888;line-height:1.7;margin-bottom:14px">
+      Send them this link — they tap it, browser opens, one tap to answer.
+      No install needed.
+    </p>
+    <div id="sc-link-box"
+      style="font-size:11px;color:#c8f55a;word-break:break-all;
+             background:#0a0a0a;padding:10px 12px;border-radius:10px;
+             line-height:1.6;border:1px solid #1e1e1e;margin-bottom:14px;
+             user-select:all;cursor:text">
+      ${answerLink}
     </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);
-                gap:6px;margin-bottom:12px">
-      ${optionButtons}
-    </div>
-    <button onclick="showQRCode('${link}')"
-      style="width:100%;padding:10px;
-             background:#c8f55a;color:#0a0a0a;
-             border:none;border-radius:12px;
-             font-weight:700;font-size:13px;
-             cursor:pointer;margin-bottom:8px">
-      Show QR Code — James scans with camera
+    <button id="sc-send"
+      style="width:100%;padding:12px;background:#c8f55a;color:#0a0a0a;
+             border:none;border-radius:12px;font-weight:700;font-size:14px;
+             cursor:pointer;margin-bottom:8px;font-family:'Syne',sans-serif;
+             letter-spacing:0.01em">
+      Send this link
     </button>
-    <div style="font-size:10px;color:#444;line-height:1.6">
-      James taps link · browser opens · one tap to answer<br>
-      No app · No account · Works on any phone
+    <button id="sc-copy"
+      style="width:100%;padding:11px;background:transparent;color:#c8f55a;
+             border:1.5px solid rgba(200,245,90,0.35);border-radius:12px;
+             font-size:13px;cursor:pointer;margin-bottom:18px;
+             font-family:'DM Mono',monospace">
+      Copy link
+    </button>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <div style="flex:1;height:1px;background:#222"></div>
+      <span style="font-size:10px;color:#444;white-space:nowrap">or contact directly</span>
+      <div style="flex:1;height:1px;background:#222"></div>
     </div>
-    ${ntfyTopic ? `
-    <div style="margin-top:10px;font-size:10px;color:#666">
-      Auto-notified via ntfy.sh push
+    <p style="font-size:10px;color:#555;margin-bottom:10px">Choose one:</p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;
+                justify-content:center">
+      <button id="sc-wa"
+        style="padding:8px 16px;background:#1a1a1a;color:#888;
+               border:1px solid #2a2a2a;border-radius:20px;font-size:11px;
+               cursor:pointer;font-family:'DM Mono',monospace">
+        WhatsApp
+      </button>
+      <button id="sc-sms"
+        style="padding:8px 16px;background:#1a1a1a;color:#888;
+               border:1px solid #2a2a2a;border-radius:20px;font-size:11px;
+               cursor:pointer;font-family:'DM Mono',monospace">
+        SMS
+      </button>
+      <button id="sc-tg"
+        style="padding:8px 16px;background:#1a1a1a;color:#888;
+               border:1px solid #2a2a2a;border-radius:20px;font-size:11px;
+               cursor:pointer;font-family:'DM Mono',monospace">
+        Telegram
+      </button>
+      <button id="sc-email"
+        style="padding:8px 16px;background:#1a1a1a;color:#888;
+               border:1px solid #2a2a2a;border-radius:20px;font-size:11px;
+               cursor:pointer;font-family:'DM Mono',monospace">
+        Email
+      </button>
+    </div>
+    ${autoNotified?.length ? `
+    <div style="font-size:10px;color:#555;text-align:center;margin-bottom:12px">
+      ✓ Auto-notified via ${autoNotified.join(', ')}
     </div>` : ''}
+    <button id="sc-cancel"
+      style="width:100%;padding:10px;background:transparent;color:#555;
+             border:1px solid #222;border-radius:12px;font-size:12px;
+             cursor:pointer;font-family:'DM Mono',monospace">
+      Cancel
+    </button>
   `;
+
   document.getElementById('app').appendChild(card);
+
+  // Attach event listeners after DOM insertion (avoids inline-onclick URL encoding issues)
+  card.querySelector('#sc-send').addEventListener('click',
+    () => sendShareLink(answerLink, shareText));
+  card.querySelector('#sc-copy').addEventListener('click',
+    () => copyLink(answerLink));
+  card.querySelector('#sc-wa').addEventListener('click',
+    () => openShareOption('https://wa.me/' + toDigits + '?text=' + encodeURIComponent(shareText)));
+  card.querySelector('#sc-sms').addEventListener('click',
+    () => openShareOption('sms:' + toDigits + '?body=' + encodeURIComponent(shareText)));
+  card.querySelector('#sc-tg').addEventListener('click',
+    () => openShareOption('https://t.me/share/url?url=' + encodeURIComponent(answerLink) + '&text=' + encodeURIComponent('Call me free on OpenCall')));
+  card.querySelector('#sc-email').addEventListener('click',
+    () => openShareOption('mailto:?subject=' + encodeURIComponent('Call me on OpenCall') + '&body=' + encodeURIComponent(shareText)));
+  card.querySelector('#sc-cancel').addEventListener('click',
+    () => { card.remove(); endCall(); });
+}
+
+async function sendShareLink(answerLink, shareText) {
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'Call me on OpenCall', text: shareText, url: answerLink });
+      return;
+    } catch(e) { /* user cancelled */ }
+  }
+  // Fallback: clipboard
+  try {
+    await navigator.clipboard.writeText(answerLink);
+    toast('Link copied — paste it to them');
+  } catch(e) {
+    toast('Could not share — use Copy link instead');
+  }
 }
 
 function openShareOption(url) {
@@ -1144,9 +1207,7 @@ function openShareOption(url) {
 }
 
 function copyLink(link) {
-  navigator.clipboard.writeText(link).then(() => {
-    toast('Link copied — paste it to James');
-  });
+  navigator.clipboard.writeText(link).then(() => toast('Link copied'));
 }
 
 function showQRCode(link) {
@@ -1167,7 +1228,7 @@ function showQRCode(link) {
     <div style="color:#c8f55a;font-size:14px;
                 margin:18px 0 6px;font-family:'Syne',sans-serif;
                 font-weight:600">
-      James points his camera at this
+      Point your camera at this
     </div>
     <div style="color:#555;font-size:12px;
                 font-family:'DM Mono',monospace;

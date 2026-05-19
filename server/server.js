@@ -461,19 +461,12 @@ async function handle(ws, msg) {
         const notified = await sendFreeNotifications(to, callerMeta.name, link);
 
         send(ws, {
-          type:          'answer_link_ready',
+          type:         'answer_link_ready',
           callId,
-          link,
+          answerLink:   link,
           to,
-          autoNotified:  notified,
-          ntfyTopic:     'ocp-' + to.replace(/\D/g, ''),
-          shareOptions: [
-            { name: 'WhatsApp', url: 'https://wa.me/?text=' + encodeURIComponent(callerMeta.name + ' is calling you free. Tap to answer: ' + link) },
-            { name: 'Telegram', url: 'https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' + encodeURIComponent(callerMeta.name + ' is calling you free') },
-            { name: 'SMS',      url: 'sms:?body=' + encodeURIComponent('Tap to answer free call from ' + callerMeta.name + ': ' + link) },
-            { name: 'Email',    url: 'mailto:?subject=' + encodeURIComponent(callerMeta.name + ' is calling you') + '&body=' + encodeURIComponent('Tap to answer: ' + link) },
-            { name: 'Copy',     url: link }
-          ]
+          from:         callerMeta.number,
+          autoNotified: notified
         });
         log("☎", `answer link call ${callerMeta.number} → ${to} (${callId})`);
       }
