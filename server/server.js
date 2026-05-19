@@ -24,6 +24,21 @@ const relays    = new Map(); // relayId         → { ws, areaCode, country }
 const callLog          = new Map(); // callId          → { from, to, startedAt }
 const pushSubscriptions = new Map(); // number           → push subscription
 const webPush           = null;      // using native fetch for push
+const pendingCalls      = new Map(); // callId           → { from, to, link, callerWs, ... }
+const simBankRegistry   = new Map(); // country          → WebSocket
+
+const gatewayNumbers = {
+  'CA': '+16470000001',
+  'US': '+13320000001',
+  'IN': '+918000000001',
+  'GB': '+442000000001',
+  'KE': '+254000000001',
+  'AU': '+61200000001',
+  'DE': '+492000000001',
+  'FR': '+331000000001',
+  'NG': '+234000000001',
+  'ZA': '+272000000001'
+};
 
 // ─────────────────────────────────────────────────────────────
 //  Utilities
@@ -101,13 +116,89 @@ async function verifySignature(msg) {
 
 function findRelay(targetNumber) {
   if (relays.size === 0) return null;
-  // try to find relay with matching area code prefix
   const prefix = targetNumber.slice(0, 5); // e.g. "+1416"
   for (const [, relay] of relays) {
     if (relay.areaCode && relay.areaCode === prefix) return relay;
   }
-  // fallback: any available relay
   return relays.values().next().value;
+}
+
+function findBestRelay(targetNumber, country) {
+  if (relays.size === 0) return null;
+  const prefix = targetNumber.slice(0, 5);
+  for (const [relayId, relay] of relays) {
+    if (relay.areaCode && relay.areaCode === prefix) return { relayId, ...relay };
+  }
+  if (country) {
+    for (const [relayId, relay] of relays) {
+      if (relay.country === country) return { relayId, ...relay };
+    }
+  }
+  const [relayId, relay] = relays.entries().next().value;
+  return { relayId, ...relay };
+}
+
+function detectCountryFromNumber(number) {
+  const prefixes = {
+    '+1416': 'CA', '+1647': 'CA', '+1905': 'CA',
+    '+1604': 'CA', '+1403': 'CA', '+1514': 'CA',
+    '+1':    'US',
+    '+44':   'GB',
+    '+91':   'IN',
+    '+254':  'KE',
+    '+61':   'AU',
+    '+49':   'DE',
+    '+33':   'FR',
+    '+234':  'NG',
+    '+27':   'ZA'
+  };
+  for (const [prefix, country] of Object.entries(prefixes)) {
+    if (number.startsWith(prefix)) return country;
+  }
+  return null;
+}
+
+async function sendFreeNotifications(toNumber, fromName, link) {
+  const results = [];
+
+  // Method 1: ntfy.sh push (free, no account)
+  const topic = 'ocp-' + toNumber.replace(/\D/g, '');
+  try {
+    await fetch('https://ntfy.sh/' + topic, {
+      method: 'POST',
+      headers: {
+        'Title':    fromName + ' is calling you free',
+        'Priority': 'urgent',
+        'Tags':     'phone',
+        'Click':    link
+      },
+      body: 'Tap to answer — no app needed'
+    });
+    results.push('ntfy');
+  } catch(e) {}
+
+  // Method 2: Textbelt free SMS (1 per day per IP)
+  try {
+    await fetch('https://textbelt.com/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone:   toNumber,
+        message: fromName + ' is calling you free. Tap: ' + link,
+        key:     'textbelt'
+      })
+    });
+    results.push('sms');
+  } catch(e) {}
+
+  log('📲', 'Notifications sent via:', results.join(', ') || 'none');
+  return results;
+}
+
+function generateAnswerLink(callId, fromName, fromNumber) {
+  const base   = 'https://opencall-server.vercel.app/answer';
+  const params = new URLSearchParams({ call: callId, from: fromName, number: fromNumber });
+  return base + '?' + params.toString();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -116,6 +207,19 @@ function findRelay(targetNumber) {
 const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
+
+  if (req.url.startsWith("/call-info")) {
+    const callId  = new URL('http://x' + req.url).searchParams.get('call');
+    const pending = pendingCalls.get(callId);
+    if (pending) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ found: true, fromName: pending.fromName, from: pending.from, callId }));
+    } else {
+      res.writeHead(404);
+      res.end(JSON.stringify({ found: false }));
+    }
+    return;
+  }
 
   if (req.url === "/health") {
     res.writeHead(200);
@@ -303,25 +407,75 @@ async function handle(ws, msg) {
         callLog.set(callId, { from: callerMeta.number, to, startedAt: Date.now(), mode: "direct" });
         log("☎", `direct call ${callerMeta.number} → ${to} (${callId})`);
 
-      // ── PATH B: number not on OpenCall → route through relay
+      // ── PATH B: number not on OpenCall → tiered fallback
       } else {
-        const relay = findRelay(to);
+        const callerCountry = detectCountryFromNumber(to);
 
-        if (!relay) {
-          return send(ws, { type: "no_relay", number: to });
+        // Priority 1: OCP relay in DHT
+        const relay = findBestRelay(to, callerCountry);
+        if (relay) {
+          const relayWs = registry.get(relay.relayId);
+          if (relayWs) {
+            const gwNumber = gatewayNumbers[relay.country] || null;
+            send(relayWs, {
+              type:           'relay_call',
+              callId,
+              dialNumber:     to,
+              callerIdToShow: gwNumber,
+              callerOcp:      callerMeta.ocpAddress || null
+            });
+            send(ws, { type: 'ringing', callId, to, mode: 'relay' });
+            callLog.set(callId, { from: callerMeta.number, to, startedAt: Date.now(), mode: 'relay', relayWs });
+            log("☎", `relay call ${callerMeta.number} → ${to} via relay ${relay.relayId} (${callId})`);
+            break;
+          }
         }
 
-        // task the relay
-        send(relay.ws, {
-          type:       "relay_call",
-          callId,
-          dialNumber: to,
-          callerWsId: callId   // opaque — relay doesn't know who caller is
-        });
+        // Priority 2: OCP SIM bank
+        const simBank = simBankRegistry.get(callerCountry);
+        if (simBank && simBank.readyState === 1) {
+          send(simBank, {
+            type:           'simbank_call',
+            callId,
+            dialNumber:     to,
+            callerIdToShow: gatewayNumbers[callerCountry] || null
+          });
+          send(ws, { type: 'ringing', callId, to, mode: 'simbank' });
+          callLog.set(callId, { from: callerMeta.number, to, startedAt: Date.now(), mode: 'simbank', relayWs: simBank });
+          log("☎", `simbank call ${callerMeta.number} → ${to} via simbank (${callId})`);
+          break;
+        }
 
-        send(ws, { type: "ringing", callId, to, mode: "relay" });
-        callLog.set(callId, { from: callerMeta.number, to, startedAt: Date.now(), mode: "relay", relayWs: relay.ws });
-        log("☎", `relay call ${callerMeta.number} → ${to} via relay (${callId})`);
+        // Priority 3: Answer link fallback
+        const link = generateAnswerLink(callId, callerMeta.name, callerMeta.number);
+        pendingCalls.set(callId, {
+          from:      callerMeta.number,
+          fromName:  callerMeta.name,
+          to,
+          link,
+          callerWs:  ws,
+          createdAt: Date.now()
+        });
+        setTimeout(() => pendingCalls.delete(callId), 5 * 60 * 1000);
+
+        const notified = await sendFreeNotifications(to, callerMeta.name, link);
+
+        send(ws, {
+          type:          'answer_link_ready',
+          callId,
+          link,
+          to,
+          autoNotified:  notified,
+          ntfyTopic:     'ocp-' + to.replace(/\D/g, ''),
+          shareOptions: [
+            { name: 'WhatsApp', url: 'https://wa.me/?text=' + encodeURIComponent(callerMeta.name + ' is calling you free. Tap to answer: ' + link) },
+            { name: 'Telegram', url: 'https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' + encodeURIComponent(callerMeta.name + ' is calling you free') },
+            { name: 'SMS',      url: 'sms:?body=' + encodeURIComponent('Tap to answer free call from ' + callerMeta.name + ': ' + link) },
+            { name: 'Email',    url: 'mailto:?subject=' + encodeURIComponent(callerMeta.name + ' is calling you') + '&body=' + encodeURIComponent('Tap to answer: ' + link) },
+            { name: 'Copy',     url: link }
+          ]
+        });
+        log("☎", `answer link call ${callerMeta.number} → ${to} (${callId})`);
       }
       break;
     }
@@ -408,6 +562,51 @@ async function handle(ws, msg) {
         if (callerWs) send(callerWs, msg);
       } else {
         if (call.relayWs) send(call.relayWs, msg);
+      }
+      break;
+    }
+
+    // ── JOIN_CALL ─────────────────────────────────────────────
+    // Link callee opens answer page and joins via callId
+    case 'join_call': {
+      const pending = pendingCalls.get(msg.callId);
+      if (!pending) {
+        return send(ws, { type: 'error', reason: 'call_not_found' });
+      }
+      const callerWs = pending.callerWs;
+      if (!callerWs || callerWs.readyState !== 1) {
+        return send(ws, { type: 'error', reason: 'caller_gone' });
+      }
+      metadata.set(ws, {
+        number:        'link:' + msg.callId,
+        name:          'Guest',
+        registeredAt:  Date.now(),
+        ocpAddress:    null
+      });
+      registry.set('link:' + msg.callId, ws);
+      send(ws, {
+        type:     'incoming_call',
+        callId:   msg.callId,
+        from:     pending.from,
+        fromName: pending.fromName,
+        viaLink:  true
+      });
+      send(callerWs, {
+        type:    'callee_joined',
+        callId:  msg.callId,
+        message: 'Other person opened your link'
+      });
+      log('✓', 'link callee joined call:', msg.callId);
+      break;
+    }
+
+    // ── REGISTER_SIMBANK ──────────────────────────────────────
+    case 'register_simbank': {
+      const country = msg.country;
+      if (country) {
+        simBankRegistry.set(country, ws);
+        log('✓', 'SIM bank registered for', country);
+        send(ws, { type: 'simbank_registered', country });
       }
       break;
     }

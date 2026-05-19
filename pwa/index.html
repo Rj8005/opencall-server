@@ -1023,6 +1023,31 @@ async function onMessage(msg) {
       endCall();
       break;
 
+    case 'answer_link_ready': {
+      stopRingback();
+      document.getElementById('call-status-lbl').textContent =
+        'Share link to connect';
+      document.getElementById('call-with').textContent = msg.to;
+      document.getElementById('call-mode').textContent =
+        msg.autoNotified?.length
+          ? 'Auto-notified via ' + msg.autoNotified.join(', ')
+          : 'Share the link below';
+      showShareCard(msg.link, msg.callId, msg.shareOptions, msg.ntfyTopic);
+      break;
+    }
+
+    case 'callee_joined': {
+      const card = document.getElementById('share-card');
+      if (card) card.remove();
+      stopRingback();
+      document.getElementById('call-status-lbl').textContent = 'Connecting...';
+      document.getElementById('call-with').textContent =
+        'Other person joined your link';
+      toast('Other person opened the link');
+      await initWebRTC(true);
+      break;
+    }
+
     case 'sdp_offer':
       await handleOffer(msg.sdp, msg.from);
       break;
@@ -1041,6 +1066,123 @@ async function onMessage(msg) {
       toast('Error: ' + msg.reason);
       break;
   }
+}
+
+// ── share card ─────────────────────────────────────────────
+function showShareCard(link, callId, shareOptions, ntfyTopic) {
+  const existing = document.getElementById('share-card');
+  if (existing) existing.remove();
+
+  const card = document.createElement('div');
+  card.id = 'share-card';
+  card.style.cssText = `
+    position:fixed;bottom:100px;left:50%;
+    transform:translateX(-50%);
+    background:#111;
+    border:1px solid rgba(200,245,90,0.3);
+    border-radius:18px;padding:20px;
+    max-width:340px;width:92%;z-index:100;
+    text-align:center;font-family:'DM Mono',monospace;
+  `;
+
+  const optionButtons = (shareOptions || []).map(opt => {
+    if (opt.name === 'Copy') {
+      return `<button onclick="copyLink('${link}')"
+        style="padding:8px 4px;background:#1a1a1a;
+               color:#888;border:1px solid #2a2a2a;
+               border-radius:10px;font-size:10px;
+               cursor:pointer;width:100%">
+        Copy link
+      </button>`;
+    }
+    return `<button onclick="openShareOption('${opt.url}')"
+      style="padding:8px 4px;background:#1a1a1a;
+             color:#888;border:1px solid #2a2a2a;
+             border-radius:10px;font-size:10px;
+             cursor:pointer;width:100%">
+      ${opt.name}
+    </button>`;
+  }).join('');
+
+  card.innerHTML = `
+    <div style="font-size:10px;color:#666;
+                letter-spacing:.12em;margin-bottom:10px">
+      SEND THIS LINK — JAMES JUST TAPS IT
+    </div>
+    <div style="font-size:11px;color:#c8f55a;
+                word-break:break-all;margin-bottom:14px;
+                background:#0a0a0a;padding:10px;
+                border-radius:10px;line-height:1.6">
+      ${link}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);
+                gap:6px;margin-bottom:12px">
+      ${optionButtons}
+    </div>
+    <button onclick="showQRCode('${link}')"
+      style="width:100%;padding:10px;
+             background:#c8f55a;color:#0a0a0a;
+             border:none;border-radius:12px;
+             font-weight:700;font-size:13px;
+             cursor:pointer;margin-bottom:8px">
+      Show QR Code — James scans with camera
+    </button>
+    <div style="font-size:10px;color:#444;line-height:1.6">
+      James taps link · browser opens · one tap to answer<br>
+      No app · No account · Works on any phone
+    </div>
+    ${ntfyTopic ? `
+    <div style="margin-top:10px;font-size:10px;color:#666">
+      Auto-notified via ntfy.sh push
+    </div>` : ''}
+  `;
+  document.getElementById('app').appendChild(card);
+}
+
+function openShareOption(url) {
+  window.open(url, '_blank');
+}
+
+function copyLink(link) {
+  navigator.clipboard.writeText(link).then(() => {
+    toast('Link copied — paste it to James');
+  });
+}
+
+function showQRCode(link) {
+  const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='
+    + encodeURIComponent(link);
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position:fixed;inset:0;
+    background:rgba(0,0,0,0.88);
+    display:flex;flex-direction:column;
+    align-items:center;justify-content:center;
+    z-index:200;
+  `;
+  overlay.innerHTML = `
+    <img src="${qrUrl}"
+      style="border-radius:14px;border:4px solid #c8f55a;
+             width:220px;height:220px">
+    <div style="color:#c8f55a;font-size:14px;
+                margin:18px 0 6px;font-family:'Syne',sans-serif;
+                font-weight:600">
+      James points his camera at this
+    </div>
+    <div style="color:#555;font-size:12px;
+                font-family:'DM Mono',monospace;
+                margin-bottom:20px">
+      No app needed to scan
+    </div>
+    <button onclick="this.parentElement.remove()"
+      style="padding:10px 28px;background:#1a1a1a;
+             color:#888;border:1px solid #333;
+             border-radius:12px;cursor:pointer;
+             font-family:'DM Mono',monospace">
+      Close
+    </button>
+  `;
+  document.getElementById('app').appendChild(overlay);
 }
 
 // ── dialer actions ─────────────────────────────────────────
@@ -1102,6 +1244,8 @@ function endCall() {
   stopTimer();
   stopRingtone();
   stopRingback();
+  const shareCard = document.getElementById('share-card');
+  if (shareCard) shareCard.remove();
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
   if (callWith) clearRatchetSession(callWith);

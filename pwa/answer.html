@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>Incoming Call · OpenCall</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0a0a0a;
+      --surface: #141414;
+      --border:  #2a2a2a;
+      --text:    #f0ede8;
+      --muted:   #666;
+      --accent:  #c8f55a;
+      --red:     #ff453a;
+      --green:   #30d158;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+    }
+
+    /* ── Screens ─────────────────────────────────────────────── */
+    .screen {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      width: 100%;
+      padding: 48px 28px 80px;
+      text-align: center;
+    }
+    .screen.active { display: flex; }
+
+    /* ── Loading ─────────────────────────────────────────────── */
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 2.5px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+      margin-bottom: 18px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Avatar ──────────────────────────────────────────────── */
+    .avatar {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 42px;
+      font-weight: 700;
+      color: var(--accent);
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .avatar.pulse::before,
+    .avatar.pulse::after {
+      content: '';
+      position: absolute;
+      inset: -14px;
+      border-radius: 50%;
+      border: 1.5px solid var(--accent);
+      opacity: 0;
+      animation: ring 2.2s ease-out infinite;
+    }
+    .avatar.pulse::after { animation-delay: 0.7s; }
+
+    @keyframes ring {
+      0%   { transform: scale(0.88); opacity: 0.5; }
+      100% { transform: scale(1.55); opacity: 0; }
+    }
+
+    /* ── Typography ──────────────────────────────────────────── */
+    .label {
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      color: var(--accent);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-top: 28px;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      margin-bottom: 6px;
+    }
+
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .caller-number {
+      font-family: 'DM Mono', monospace;
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 22px;
+    }
+
+    .tagline {
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+      margin-bottom: 52px;
+      line-height: 1.7;
+    }
+
+    .sub {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.6;
+      max-width: 280px;
+      margin-top: 8px;
+    }
+
+    /* ── Call answer/decline buttons ─────────────────────────── */
+    .btn-row {
+      display: flex;
+      gap: 56px;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .btn-circle {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.12s ease, opacity 0.12s ease;
+      flex-shrink: 0;
+    }
+    .btn-circle:active  { transform: scale(0.90); opacity: 0.8; }
+    .btn-circle:disabled { opacity: 0.3; pointer-events: none; }
+
+    .btn-decline { background: var(--red); }
+    .btn-answer  { background: var(--green); }
+
+    .btn-label {
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+      margin-top: 10px;
+      text-align: center;
+    }
+
+    /* ── Active call ─────────────────────────────────────────── */
+    .timer {
+      font-family: 'DM Mono', monospace;
+      font-size: 32px;
+      font-weight: 500;
+      color: var(--accent);
+      margin-top: 4px;
+      margin-bottom: 10px;
+      letter-spacing: 0.04em;
+    }
+
+    .call-status {
+      font-size: 12px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 20px;
+      margin-top: 36px;
+    }
+
+    .btn-ctrl {
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      border: 1.5px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .btn-ctrl.on {
+      border-color: var(--accent);
+      background: rgba(200, 245, 90, 0.10);
+      color: var(--accent);
+    }
+    .btn-ctrl:active { opacity: 0.7; }
+
+    .btn-hangup {
+      width: 68px;
+      height: 68px;
+      border-radius: 50%;
+      border: none;
+      background: var(--red);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 44px;
+      transition: transform 0.12s, opacity 0.12s;
+    }
+    .btn-hangup:active { transform: scale(0.90); opacity: 0.85; }
+
+    /* ── End / get CTA ───────────────────────────────────────── */
+    .icon-xl {
+      font-size: 52px;
+      margin-bottom: 18px;
+      line-height: 1;
+    }
+
+    .duration {
+      font-family: 'DM Mono', monospace;
+      font-size: 15px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .btn-get {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 28px;
+      padding: 14px 30px;
+      background: var(--accent);
+      color: #0a0a0a;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 15px;
+      text-decoration: none;
+      border-radius: 100px;
+      letter-spacing: 0.01em;
+      transition: opacity 0.15s;
+    }
+    .btn-get:active { opacity: 0.82; }
+
+    /* ── Connecting overlay on incoming screen ───────────────── */
+    #connecting-hint {
+      display: none;
+      font-size: 12px;
+      font-family: 'DM Mono', monospace;
+      color: var(--accent);
+      margin-top: 20px;
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Footer ──────────────────────────────────────────────── */
+    .footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 11px 16px 14px;
+      text-align: center;
+      font-size: 10px;
+      font-family: 'DM Mono', monospace;
+      color: #333;
+      border-top: 1px solid #181818;
+      background: var(--bg);
+      z-index: 100;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Screen: Loading ──────────────────────────────────────── -->
+<div id="screen-loading" class="screen active">
+  <div class="spinner"></div>
+  <p style="font-size:13px;font-family:'DM Mono',monospace;color:var(--muted)">Verifying call…</p>
+</div>
+
+<!-- ── Screen: Expired ──────────────────────────────────────── -->
+<div id="screen-expired" class="screen">
+  <div class="icon-xl">⏱</div>
+  <h2>Link expired</h2>
+  <p class="sub" id="expired-msg">This call link has expired or the caller hung up.</p>
+  <a href="https://opencall-server.vercel.app" class="btn-get" style="margin-top:36px">Get OpenCall</a>
+</div>
+
+<!-- ── Screen: Incoming ─────────────────────────────────────── -->
+<div id="screen-incoming" class="screen">
+  <div style="flex:1 1 0"></div>
+
+  <div class="avatar pulse" id="avatar">?</div>
+  <p class="label" id="incoming-label">Incoming call</p>
+  <h1 id="caller-name">Caller</h1>
+  <p class="caller-number" id="caller-number"></p>
+  <p class="tagline">Free call · No install needed<br>OpenCall Protocol</p>
+
+  <div class="btn-row">
+    <div>
+      <button class="btn-circle btn-decline" id="btn-decline" onclick="declineCall()" aria-label="Decline">
+        <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+          <path d="M7 7l12 12M19 7L7 19" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <p class="btn-label">Decline</p>
+    </div>
+    <div>
+      <button class="btn-circle btn-answer" id="btn-answer" onclick="answerCall()" aria-label="Answer">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <path d="M5.5 7C5.5 6.17 6.17 5.5 7 5.5h3.1a.9.9 0 0 1 .87.66l1.2 4.6a.9.9 0 0 1-.27.91L10.3 13.3c1.3 2.6 3.8 5.1 6.4 6.4l1.63-1.57a.9.9 0 0 1 .91-.27l4.6 1.2a.9.9 0 0 1 .66.87V23a1.5 1.5 0 0 1-1.5 1.5C12.12 24.5 3.5 15.88 3.5 5.5V7z" fill="#fff"/>
+        </svg>
+      </button>
+      <p class="btn-label">Answer</p>
+    </div>
+  </div>
+
+  <p id="connecting-hint">Connecting…</p>
+  <div style="flex:1 1 0"></div>
+</div>
+
+<!-- ── Screen: Declined ─────────────────────────────────────── -->
+<div id="screen-declined" class="screen">
+  <div class="icon-xl" style="color:var(--red)">✗</div>
+  <h2>Call declined</h2>
+  <p class="sub">You declined the call.</p>
+</div>
+
+<!-- ── Screen: Active call ──────────────────────────────────── -->
+<div id="screen-active" class="screen">
+  <div style="flex:1 1 0"></div>
+
+  <div class="avatar" id="avatar-active">?</div>
+  <p class="timer" id="call-timer">0:00</p>
+  <h1 id="active-caller-name">Caller</h1>
+  <p class="call-status">Free call via OpenCall</p>
+
+  <div class="controls">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+      <button class="btn-ctrl" id="btn-mute" onclick="toggleMute()" aria-label="Mute">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+          <rect x="7.5" y="1.5" width="7" height="11" rx="3.5" fill="currentColor"/>
+          <path d="M3.5 10.5a7.5 7.5 0 0 0 15 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>
+          <line x1="11" y1="18" x2="11" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <span style="font-size:10px;font-family:'DM Mono',monospace;color:var(--muted)">Mute</span>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+      <button class="btn-ctrl" id="btn-speaker" onclick="toggleSpeaker()" aria-label="Speaker">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+          <path d="M2.5 7.5h3.5l5-4.5v13.5l-5-4.5H2.5V7.5z" fill="currentColor"/>
+          <path d="M14.5 6.5a5.5 5.5 0 0 1 0 9M17 4a9 9 0 0 1 0 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>
+        </svg>
+      </button>
+      <span style="font-size:10px;font-family:'DM Mono',monospace;color:var(--muted)">Speaker</span>
+    </div>
+  </div>
+
+  <button class="btn-hangup" onclick="hangup()" aria-label="End call">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+      <path d="M13 7.5c-3.6 0-6.9 1.4-9.3 3.7-.3.3-.3.8 0 1.1l2.1 2.1c.3.3.8.3 1.1 0 .9-.9 2-1.5 3.2-1.8l.6 2.4c.1.3.3.5.6.5h3.4c.3 0 .5-.2.6-.5l.6-2.4c1.2.3 2.3.9 3.2 1.8.3.3.8.3 1.1 0l2.1-2.1c.3-.3.3-.8 0-1.1A13 13 0 0 0 13 7.5z" fill="#fff"/>
+    </svg>
+  </button>
+
+  <div style="flex:1 1 0"></div>
+</div>
+
+<!-- ── Screen: Call ended ────────────────────────────────────── -->
+<div id="screen-end" class="screen">
+  <div class="icon-xl" style="color:var(--accent)">✓</div>
+  <h2>Call ended</h2>
+  <p class="duration" id="end-duration">Duration: 0:00</p>
+  <p class="sub">Get OpenCall to receive calls anytime, for free — no carrier needed.</p>
+  <a href="https://opencall-server.vercel.app" class="btn-get">Get OpenCall</a>
+</div>
+
+<!-- Remote audio (hidden) -->
+<audio id="remote-audio" autoplay playsinline></audio>
+
+<!-- Footer — visible on every screen -->
+<div class="footer">
+  No app downloaded &nbsp;·&nbsp; No account &nbsp;·&nbsp; OpenCall Protocol (open source)
+</div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────
+const SERVER = 'https://opencall-server.onrender.com';
+const WS_URL = 'wss://opencall-server.onrender.com';
+
+const RTC_CFG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'turn:ocp-bootstrap-1.onrender.com:3478', username: 'ocp', credential: 'opencall2026' },
+    { urls: 'turn:ocp-bootstrap-2.onrender.com:3478', username: 'ocp', credential: 'opencall2026' },
+    { urls: 'turn:ocp-bootstrap-3.onrender.com:3478', username: 'ocp', credential: 'opencall2026' }
+  ]
+};
+
+// ── URL params ──────────────────────────────────────────────────
+const params     = new URLSearchParams(location.search);
+const callId     = params.get('call');
+let   fromName   = params.get('from')   || 'Unknown Caller';
+let   fromNumber = params.get('number') || '';
+
+// ── Runtime state ───────────────────────────────────────────────
+let ws            = null;
+let pc            = null;
+let localStream   = null;
+let callerNumber  = fromNumber;
+let callStartTime = null;
+let timerInterval = null;
+let isMuted       = false;
+let isSpeakerOff  = false;
+
+// ── Screen management ───────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// ── Caller UI helper ────────────────────────────────────────────
+function setCallerUI(name, number) {
+  const initial = (name || '?')[0].toUpperCase();
+  document.getElementById('avatar').textContent            = initial;
+  document.getElementById('avatar-active').textContent     = initial;
+  document.getElementById('caller-name').textContent       = name;
+  document.getElementById('caller-number').textContent     = number;
+  document.getElementById('active-caller-name').textContent = name;
+}
+
+// ── Init: verify call is live ───────────────────────────────────
+async function init() {
+  if (!callId) {
+    document.getElementById('expired-msg').textContent = 'Invalid call link — no call ID found.';
+    showScreen('screen-expired');
+    return;
+  }
+
+  setCallerUI(fromName, fromNumber);
+
+  try {
+    const res  = await fetch(SERVER + '/call-info?call=' + encodeURIComponent(callId));
+    const data = await res.json();
+
+    if (data.found) {
+      fromName     = data.fromName || fromName;
+      fromNumber   = data.from     || fromNumber;
+      callerNumber = fromNumber;
+      setCallerUI(fromName, fromNumber);
+      showScreen('screen-incoming');
+    } else {
+      showExpired('This call link has expired or the caller hung up.');
+    }
+  } catch(e) {
+    // Server unreachable — show incoming screen optimistically
+    console.warn('[answer] /call-info unreachable, proceeding anyway');
+    showScreen('screen-incoming');
+  }
+}
+
+function showExpired(msg) {
+  if (msg) document.getElementById('expired-msg').textContent = msg;
+  showScreen('screen-expired');
+}
+
+// ── WebSocket ───────────────────────────────────────────────────
+function wsSend(obj) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify(obj));
+    console.log('[→]', obj.type, obj);
+  }
+}
+
+function connectWS() {
+  return new Promise((resolve, reject) => {
+    ws = new WebSocket(WS_URL);
+    ws.onerror = () => reject(new Error('WebSocket connection failed'));
+    // join_call is sent when the server sends 'connected'
+    ws.onopen    = () => resolve();
+    ws.onmessage = onMessage;
+    ws.onclose   = () => {
+      if (document.getElementById('screen-active').classList.contains('active')) {
+        endCall(stopTimer());
+      }
+    };
+  });
+}
+
+async function onMessage(event) {
+  let msg;
+  try { msg = JSON.parse(event.data); } catch { return; }
+  console.log('[←]', msg.type, msg);
+
+  switch (msg.type) {
+
+    case 'connected':
+      wsSend({ type: 'join_call', callId });
+      break;
+
+    case 'incoming_call':
+      // Server confirmed we joined — callerNumber comes from pending call
+      callerNumber = msg.from || callerNumber;
+      break;
+
+    case 'sdp_offer':
+      callerNumber = msg.from || callerNumber;
+      await handleOffer(msg.sdp, msg.from);
+      break;
+
+    case 'ice':
+      if (pc && msg.candidate) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch(e) {}
+      }
+      break;
+
+    case 'hangup':
+      endCall(stopTimer());
+      break;
+
+    case 'error':
+      if (msg.reason === 'call_not_found' || msg.reason === 'caller_gone') {
+        showExpired('The caller has already hung up.');
+        cleanupMedia();
+      }
+      break;
+  }
+}
+
+// ── ANSWER button ───────────────────────────────────────────────
+async function answerCall() {
+  // Get mic permission before anything else
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch(e) {
+    alert('Microphone access is required to answer the call.\n\nTap Allow when your browser asks, then try again.');
+    return;
+  }
+
+  // Disable buttons, show connecting hint
+  document.getElementById('btn-answer').disabled  = true;
+  document.getElementById('btn-decline').disabled = true;
+  document.getElementById('incoming-label').textContent = 'Connecting…';
+  document.getElementById('connecting-hint').style.display = 'block';
+
+  try {
+    await connectWS();
+  } catch(e) {
+    cleanupMedia();
+    document.getElementById('btn-answer').disabled  = false;
+    document.getElementById('btn-decline').disabled = false;
+    document.getElementById('incoming-label').textContent = 'Incoming call';
+    document.getElementById('connecting-hint').style.display = 'none';
+    alert('Could not reach the OpenCall server. Check your connection and try again.');
+  }
+}
+
+// ── WebRTC: handle SDP offer from caller ────────────────────────
+async function handleOffer(sdp, from) {
+  callerNumber = from || callerNumber;
+
+  pc = new RTCPeerConnection(RTC_CFG);
+
+  // Local mic → peer
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+  // Remote audio from peer
+  const audio = document.getElementById('remote-audio');
+  pc.ontrack = e => {
+    if (audio.srcObject !== e.streams[0]) {
+      audio.srcObject = e.streams[0];
+      audio.play().catch(() => {});
+    }
+  };
+
+  // ICE candidates → server → caller
+  pc.onicecandidate = async e => {
+    if (e.candidate) {
+      wsSend({ type: 'ice', to: callerNumber, candidate: e.candidate });
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+    console.log('[RTC] state:', pc.connectionState);
+    if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+      endCall(stopTimer());
+    }
+  };
+
+  await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+
+  wsSend({ type: 'sdp_answer', to: callerNumber, sdp: answer.sdp });
+
+  showScreen('screen-active');
+  startTimer();
+}
+
+// ── Controls ────────────────────────────────────────────────────
+function toggleMute() {
+  if (!localStream) return;
+  isMuted = !isMuted;
+  localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
+  document.getElementById('btn-mute').classList.toggle('on', isMuted);
+}
+
+function toggleSpeaker() {
+  isSpeakerOff = !isSpeakerOff;
+  document.getElementById('remote-audio').muted = isSpeakerOff;
+  document.getElementById('btn-speaker').classList.toggle('on', isSpeakerOff);
+}
+
+// ── DECLINE button ──────────────────────────────────────────────
+function declineCall() {
+  showScreen('screen-declined');
+}
+
+// ── HANGUP button ───────────────────────────────────────────────
+function hangup() {
+  wsSend({ type: 'hangup', callId, with: callerNumber });
+  endCall(stopTimer());
+}
+
+// ── End call + cleanup ──────────────────────────────────────────
+function endCall(duration) {
+  cleanupMedia();
+  document.getElementById('end-duration').textContent = 'Duration: ' + (duration || '0:00');
+  showScreen('screen-end');
+}
+
+function cleanupMedia() {
+  stopTimer();
+  if (pc)          { try { pc.close(); } catch(e) {} pc = null; }
+  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  if (ws && ws.readyState <= 1) { try { ws.close(); } catch(e) {} ws = null; }
+}
+
+// ── Timer ────────────────────────────────────────────────────────
+function startTimer() {
+  callStartTime = Date.now();
+  timerInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - callStartTime) / 1000);
+    document.getElementById('call-timer').textContent =
+      Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }, 1000);
+}
+
+function stopTimer() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  if (!callStartTime) return '0:00';
+  const s = Math.floor((Date.now() - callStartTime) / 1000);
+  callStartTime = null;
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+// ── Boot ─────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
