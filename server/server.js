@@ -710,17 +710,77 @@ async function handle(ws, msg) {
           callerWs:  ws,
           createdAt: Date.now()
         });
-        setTimeout(() => pendingCalls.delete(callId), 5 * 60 * 1000);
+        setTimeout(() => pendingCalls.delete(callId), 15 * 60 * 1000);
+
+        const keepaliveInterval = setInterval(() => {
+          const pending = pendingCalls.get(callId);
+          if (!pending) {
+            clearInterval(keepaliveInterval);
+            return;
+          }
+          const callerWs = pending.callerWs;
+          if (!callerWs || callerWs.readyState !== 1) {
+            clearInterval(keepaliveInterval);
+            pendingCalls.delete(callId);
+            return;
+          }
+          send(callerWs, {
+            type: 'call_keepalive',
+            callId,
+            message: 'Waiting for recipient to open link',
+            elapsed: Math.floor((Date.now() - pending.createdAt) / 1000)
+          });
+        }, 30 * 1000);
+
+        pendingCalls.get(callId).keepaliveInterval = keepaliveInterval;
 
         const notified = await smartNotify(to, callerMeta.name, link, callerCountry);
 
+        const encodedMsg   = encodeURIComponent(
+          `${callerMeta.name} is calling you free on OpenCall.\n` +
+          `Tap to answer — no app needed:\n${link}`
+        );
+        const encodedLink  = encodeURIComponent(link);
+        const encodedTitle = encodeURIComponent(
+          `${callerMeta.name} is calling you free`
+        );
+
         send(ws, {
-          type:         'answer_link_ready',
+          type: 'answer_link_ready',
           callId,
-          answerLink:   link,
+          link,
           to,
-          from:         callerMeta.number,
-          autoNotified: notified
+          country: callerCountry,
+          shareOptions: [
+            {
+              name:     'WhatsApp',
+              color:    '#25D366',
+              icon:     '💬',
+              url:      `whatsapp://send?phone=${to.replace('+','')}&text=${encodedMsg}`,
+              fallback: `https://wa.me/${to.replace('+','')}?text=${encodedMsg}`
+            },
+            {
+              name:     'Telegram',
+              color:    '#2AABEE',
+              icon:     '✈️',
+              url:      `tg://msg?to=${to}&text=${encodedMsg}`,
+              fallback: `https://t.me/share/url?url=${encodedLink}&text=${encodedTitle}`
+            },
+            {
+              name:     'SMS',
+              color:    '#888888',
+              icon:     '📱',
+              url:      `sms:${to}?body=${encodedMsg}`,
+              fallback: `sms:${to}?body=${encodedMsg}`
+            },
+            {
+              name:     'Email',
+              color:    '#EA4335',
+              icon:     '📧',
+              url:      `mailto:?subject=${encodedTitle}&body=${encodedMsg}`,
+              fallback: `mailto:?subject=${encodedTitle}&body=${encodedMsg}`
+            }
+          ]
         });
         log("☎", `answer link call ${callerMeta.number} → ${to} (${callId})`);
       }
@@ -843,6 +903,9 @@ async function handle(ws, msg) {
         callId:  msg.callId,
         message: 'Other person opened your link'
       });
+      if (pending?.keepaliveInterval) {
+        clearInterval(pending.keepaliveInterval);
+      }
       log('✓', 'link callee joined call:', msg.callId);
       break;
     }

@@ -326,6 +326,35 @@ input::placeholder{color:var(--hint)}
 <audio id="remote-audio" autoplay playsinline></audio>
 
 <script>
+// ── Wake lock — keep page awake while call is pending ─────
+let _wakeLock = null;
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      _wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch(e) {}
+}
+async function releaseWakeLock() {
+  try {
+    if (_wakeLock) { await _wakeLock.release(); _wakeLock = null; }
+  } catch(e) {}
+}
+
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && window._callPending) {
+    await requestWakeLock();
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      reconnectAndRejoin();
+    }
+  }
+});
+
+function reconnectAndRejoin() {
+  if (!window._pendingCallId) return;
+  doRegister();
+}
+
 // ── OCP Identity — Web Crypto API (no dependencies) ──────
 const OCP_KEY_STORAGE = 'ocp_identity_v1';
 
@@ -1103,11 +1132,8 @@ async function onMessage(msg) {
       stopRingback();
       document.getElementById('call-status-lbl').textContent = 'Share link to connect';
       document.getElementById('call-with').textContent = msg.to;
-      document.getElementById('call-mode').textContent =
-        msg.autoNotified?.length
-          ? 'Auto-notified via ' + msg.autoNotified.join(', ')
-          : 'Share the link below';
-      showShareCard(msg.to, msg.answerLink, msg.autoNotified);
+      document.getElementById('call-mode').textContent = 'Share the link below';
+      showShareCard(msg.link, msg.callId, msg.shareOptions);
       break;
     }
 
@@ -1137,6 +1163,18 @@ async function onMessage(msg) {
       }
       break;
 
+    case 'call_keepalive': {
+      const statusEl = document.getElementById('share-status');
+      if (statusEl) {
+        const mins = Math.floor(msg.elapsed / 60);
+        const secs = msg.elapsed % 60;
+        const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+        statusEl.textContent = `Waiting... ${timeStr}`;
+      }
+      if (window._callTimeout) clearTimeout(window._callTimeout);
+      break;
+    }
+
     case 'error':
       toast('Error: ' + msg.reason);
       break;
@@ -1144,146 +1182,131 @@ async function onMessage(msg) {
 }
 
 // ── share card ─────────────────────────────────────────────
-function showShareCard(to, answerLink, autoNotified) {
+function showShareCard(link, callId, shareOptions, ntfyTopic) {
   const existing = document.getElementById('share-card');
   if (existing) existing.remove();
 
-  const toDigits  = (to || '').replace(/\D/g, '');
-  const shareText = 'Hey, call me free on OpenCall — just tap: ' + answerLink;
+  window._callPending    = true;
+  window._pendingCallId  = callId;
+  requestWakeLock();
 
   const card = document.createElement('div');
   card.id = 'share-card';
   card.style.cssText = `
-    position:fixed;bottom:80px;left:50%;
+    position:fixed;bottom:90px;left:50%;
     transform:translateX(-50%);
     background:#111;
-    border:1px solid rgba(200,245,90,0.3);
-    border-radius:18px;padding:20px;
-    max-width:360px;width:94%;z-index:100;
-    font-family:'DM Mono',monospace;
-    box-shadow:0 8px 32px rgba(0,0,0,0.6);
+    border:1px solid rgba(200,245,90,0.25);
+    border-radius:20px;padding:20px;
+    max-width:340px;width:92%;z-index:100;
   `;
 
-  card.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-      <span style="width:8px;height:8px;border-radius:50%;
-                   background:#ff453a;flex-shrink:0;display:inline-block"></span>
-      <span style="font-size:13px;color:#f0ede8;font-weight:600;
-                   font-family:'Syne',sans-serif">
-        ${to} is not on OpenCall yet
+  const shareButtons = (shareOptions || []).map(opt => `
+    <button
+      onclick="openShareDirect('${opt.url}','${opt.fallback || opt.url}')"
+      style="display:flex;flex-direction:column;
+             align-items:center;justify-content:center;
+             gap:4px;padding:12px 8px;
+             background:#1a1a1a;
+             border:1px solid #2a2a2a;
+             border-radius:14px;cursor:pointer;
+             flex:1;min-width:60px">
+      <span style="font-size:22px">${opt.icon}</span>
+      <span style="font-size:10px;color:${opt.color};
+                   font-family:'DM Mono',monospace">
+        ${opt.name}
       </span>
-    </div>
-    <p style="font-size:11px;color:#888;line-height:1.7;margin-bottom:14px">
-      Send them this link — they tap it, browser opens, one tap to answer.
-      No install needed.
-    </p>
-    <div id="sc-link-box"
-      style="font-size:11px;color:#c8f55a;word-break:break-all;
-             background:#0a0a0a;padding:10px 12px;border-radius:10px;
-             line-height:1.6;border:1px solid #1e1e1e;margin-bottom:14px;
-             user-select:all;cursor:text">
-      ${answerLink}
-    </div>
-    <button id="sc-send"
-      style="width:100%;padding:12px;background:#c8f55a;color:#0a0a0a;
-             border:none;border-radius:12px;font-weight:700;font-size:14px;
-             cursor:pointer;margin-bottom:8px;font-family:'Syne',sans-serif;
-             letter-spacing:0.01em">
-      Send this link
     </button>
-    <button id="sc-copy"
-      style="width:100%;padding:11px;background:transparent;color:#c8f55a;
-             border:1.5px solid rgba(200,245,90,0.35);border-radius:12px;
-             font-size:13px;cursor:pointer;margin-bottom:18px;
-             font-family:'DM Mono',monospace">
-      Copy link
-    </button>
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-      <div style="flex:1;height:1px;background:#222"></div>
-      <span style="font-size:10px;color:#444;white-space:nowrap">or contact directly</span>
-      <div style="flex:1;height:1px;background:#222"></div>
+  `).join('');
+
+  card.innerHTML = `
+    <div style="font-size:10px;color:#666;
+                letter-spacing:.12em;margin-bottom:6px;
+                text-align:center">
+      SEND THIS LINK — THEY TAP IT TO ANSWER
     </div>
-    <p style="font-size:10px;color:#555;margin-bottom:10px">Choose one:</p>
-    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;
-                justify-content:center">
-      <button id="sc-wa"
-        style="padding:8px 16px;background:#1a1a1a;color:#888;
-               border:1px solid #2a2a2a;border-radius:20px;font-size:11px;
+    <div style="font-size:11px;color:#c8f55a;
+                word-break:break-all;margin-bottom:14px;
+                background:#0a0a0a;padding:10px;
+                border-radius:10px;line-height:1.6;
+                font-family:'DM Mono',monospace">
+      ${link}
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      ${shareButtons}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;
+                gap:8px;margin-bottom:10px">
+      <button onclick="copyAnswerLink('${link}')"
+        style="padding:11px;background:#1a1a1a;
+               color:#888;border:1px solid #2a2a2a;
+               border-radius:12px;font-size:12px;
                cursor:pointer;font-family:'DM Mono',monospace">
-        WhatsApp
+        📋 Copy Link
       </button>
-      <button id="sc-sms"
-        style="padding:8px 16px;background:#1a1a1a;color:#888;
-               border:1px solid #2a2a2a;border-radius:20px;font-size:11px;
-               cursor:pointer;font-family:'DM Mono',monospace">
-        SMS
-      </button>
-      <button id="sc-tg"
-        style="padding:8px 16px;background:#1a1a1a;color:#888;
-               border:1px solid #2a2a2a;border-radius:20px;font-size:11px;
-               cursor:pointer;font-family:'DM Mono',monospace">
-        Telegram
-      </button>
-      <button id="sc-email"
-        style="padding:8px 16px;background:#1a1a1a;color:#888;
-               border:1px solid #2a2a2a;border-radius:20px;font-size:11px;
-               cursor:pointer;font-family:'DM Mono',monospace">
-        Email
+      <button onclick="nativeShare('${link}')"
+        style="padding:11px;background:#c8f55a;
+               color:#0a0a0a;border:none;
+               border-radius:12px;font-size:12px;
+               font-weight:700;cursor:pointer">
+        Share ↗
       </button>
     </div>
-    ${autoNotified?.length ? `
-    <div style="font-size:10px;color:#555;text-align:center;margin-bottom:12px">
-      ✓ Auto-notified via ${autoNotified.join(', ')}
-    </div>` : ''}
-    <button id="sc-cancel"
-      style="width:100%;padding:10px;background:transparent;color:#555;
-             border:1px solid #222;border-radius:12px;font-size:12px;
+
+    <button onclick="showQRCode('${link}')"
+      style="width:100%;padding:10px;
+             background:#1a1a1a;color:#666;
+             border:1px solid #2a2a2a;
+             border-radius:12px;font-size:11px;
              cursor:pointer;font-family:'DM Mono',monospace">
-      Cancel
+      📷 Show QR Code — they scan with camera
     </button>
+
+    <div id="share-status"
+      style="margin-top:10px;font-size:10px;
+             color:#444;text-align:center;
+             line-height:1.6">
+      Waiting for them to open the link...<br>
+      Call stays active for 15 minutes
+    </div>
   `;
 
   document.getElementById('app').appendChild(card);
-
-  // Attach event listeners after DOM insertion (avoids inline-onclick URL encoding issues)
-  card.querySelector('#sc-send').addEventListener('click',
-    () => sendShareLink(answerLink, shareText));
-  card.querySelector('#sc-copy').addEventListener('click',
-    () => copyLink(answerLink));
-  card.querySelector('#sc-wa').addEventListener('click',
-    () => openShareOption('https://wa.me/' + toDigits + '?text=' + encodeURIComponent(shareText)));
-  card.querySelector('#sc-sms').addEventListener('click',
-    () => openShareOption('sms:' + toDigits + '?body=' + encodeURIComponent(shareText)));
-  card.querySelector('#sc-tg').addEventListener('click',
-    () => openShareOption('https://t.me/share/url?url=' + encodeURIComponent(answerLink) + '&text=' + encodeURIComponent('Call me free on OpenCall')));
-  card.querySelector('#sc-email').addEventListener('click',
-    () => openShareOption('mailto:?subject=' + encodeURIComponent('Call me on OpenCall') + '&body=' + encodeURIComponent(shareText)));
-  card.querySelector('#sc-cancel').addEventListener('click',
-    () => { card.remove(); endCall(); });
 }
 
-async function sendShareLink(answerLink, shareText) {
+function openShareDirect(url, fallback) {
+  const start = Date.now();
+  window.location = url;
+  setTimeout(() => {
+    if (Date.now() - start < 1500) {
+      window.open(fallback, '_blank');
+    }
+  }, 500);
+}
+
+function copyAnswerLink(link) {
+  navigator.clipboard.writeText(link).then(() => {
+    const status = document.getElementById('share-status');
+    if (status) status.textContent = 'Link copied — paste it to them';
+    setTimeout(() => {
+      if (status) status.textContent =
+        'Waiting for them to open the link...\nCall stays active for 15 minutes';
+    }, 3000);
+  });
+}
+
+function nativeShare(link) {
   if (navigator.share) {
-    try {
-      await navigator.share({ title: 'Call me on OpenCall', text: shareText, url: answerLink });
-      return;
-    } catch(e) { /* user cancelled */ }
+    navigator.share({
+      title: 'Answer my free call',
+      text:  'Tap to answer my free call — no app needed',
+      url:   link
+    });
+  } else {
+    copyAnswerLink(link);
   }
-  // Fallback: clipboard
-  try {
-    await navigator.clipboard.writeText(answerLink);
-    toast('Link copied — paste it to them');
-  } catch(e) {
-    toast('Could not share — use Copy link instead');
-  }
-}
-
-function openShareOption(url) {
-  window.open(url, '_blank');
-}
-
-function copyLink(link) {
-  navigator.clipboard.writeText(link).then(() => toast('Link copied'));
 }
 
 function showQRCode(link) {
@@ -1541,6 +1564,9 @@ async function doHangup() {
   endCall();
 }
 function endCall() {
+  window._callPending   = false;
+  window._pendingCallId = null;
+  releaseWakeLock();
   stopTimer();
   stopRingtone();
   stopRingback();
