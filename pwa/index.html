@@ -199,8 +199,7 @@ input::placeholder{color:var(--hint)}
         Claim my number →
       </button>
       <p class="note">
-        Run the server locally or deploy free to <a href="https://railway.app" target="_blank">Railway</a>.<br>
-        Your number. Your server. Zero cost.
+        Your calls. Your protocol. Zero cost. Forever free.
       </p>
     </div>
   </div>
@@ -1256,9 +1255,14 @@ function showShareCard(link, callId, shareOptions, ntfyTopic) {
     max-width:340px;width:92%;z-index:100;
   `;
 
+  // Extract recipient phone from WhatsApp fallback URL for Android bridge
+  const _toPhone = (shareOptions?.find(o => o.name === 'WhatsApp')?.fallback || '')
+    .match(/wa\.me\/(\d+)/)?.[1];
+  const _toNumber = _toPhone ? ('+' + _toPhone) : '';
+
   const shareButtons = (shareOptions || []).map(opt => `
     <button
-      onclick="openShareDirect('${opt.url}','${opt.fallback || opt.url}')"
+      onclick="openShareDirect('${opt.url}','${opt.fallback || opt.url}','${opt.name.toLowerCase()}','${_toNumber}')"
       style="display:flex;flex-direction:column;
              align-items:center;justify-content:center;
              gap:4px;padding:12px 8px;
@@ -1331,7 +1335,36 @@ function showShareCard(link, callId, shareOptions, ntfyTopic) {
   document.getElementById('app').appendChild(card);
 }
 
-function openShareDirect(url, fallback) {
+function openShareDirect(url, fallback, platform, toNumber) {
+  // Running inside the Android APK WebView — use native bridge
+  if (window.Android) {
+    try {
+      switch (platform) {
+        case 'whatsapp': {
+          const m   = (fallback || '').match(/wa\.me\/(\d+)\?text=(.+)/);
+          const num = m ? ('+' + m[1]) : (toNumber || '');
+          const msg = m ? decodeURIComponent(m[2]) : '';
+          window.Android.openWhatsApp(num, msg);
+          return;
+        }
+        case 'telegram': {
+          const u   = new URL(fallback);
+          const msg = decodeURIComponent(u.searchParams.get('text') || u.searchParams.get('url') || '');
+          window.Android.openTelegram(toNumber || '', msg);
+          return;
+        }
+        case 'sms': {
+          const m   = (url || '').match(/sms:([^?]+)\?body=(.+)/);
+          const num = m ? m[1] : (toNumber || '');
+          const msg = m ? decodeURIComponent(m[2]) : '';
+          window.Android.openSMS(num, msg);
+          return;
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Running in a browser
   const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
   if (isMobile) {
     window.location.href = url;
@@ -1552,6 +1585,26 @@ function filterCountries(query) {
 function selectCountry(code) {
   window._selectedCountry = code;
   document.getElementById('country-picker-overlay')?.remove();
+
+  const country = COUNTRY_DATA[code];
+  if (country) {
+    const inp    = document.getElementById('inp-dial');
+    const prefix = country.prefix;
+    if (inp) {
+      const cur = inp.value.trim();
+      if (!cur.startsWith('+')) {
+        inp.value = prefix + cur;
+      } else if (cur === '' || cur === prefix) {
+        inp.value = prefix;
+      }
+      // Move cursor to end
+      const len = inp.value.length;
+      inp.setSelectionRange(len, len);
+      inp.focus();
+    }
+    toast(country.flag + ' ' + country.name + ' selected — ' + prefix);
+  }
+
   const number = document.getElementById('inp-dial')?.value || '';
   showCountrySelector(number);
 }
