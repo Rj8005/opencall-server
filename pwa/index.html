@@ -1140,12 +1140,67 @@ async function onMessage(msg) {
     case 'callee_joined': {
       const card = document.getElementById('share-card');
       if (card) card.remove();
+      window._callPending = false;
+      releaseWakeLock();
       stopRingback();
+
+      callId   = msg.callId;
+      callWith = 'link:' + msg.callId;
+
       document.getElementById('call-status-lbl').textContent = 'Connecting...';
-      document.getElementById('call-with').textContent =
-        'Other person joined your link';
+      document.getElementById('call-with').textContent = 'Connecting...';
+      show('call');
       toast('Other person opened the link');
-      await initWebRTC(true);
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch(e) {
+        toast('Microphone error: ' + e.message);
+        break;
+      }
+
+      pc = new RTCPeerConnection(RTC_CFG);
+      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+      pc.onicecandidate = e => {
+        if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type:      'ice',
+            to:        'link:' + msg.callId,
+            candidate: e.candidate,
+            callId:    msg.callId
+          }));
+        }
+      };
+
+      pc.ontrack = e => {
+        const audio = document.getElementById('remote-audio');
+        audio.srcObject = e.streams[0];
+        audio.play().catch(() => {});
+        document.getElementById('call-status-lbl').textContent = 'Connected';
+        if (!timerInterval) startTimer();
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') {
+          document.getElementById('call-status-lbl').textContent = 'Connected';
+          if (!timerInterval) startTimer();
+        }
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          endCall();
+        }
+      };
+
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      await pc.setLocalDescription(offer);
+
+      ws.send(JSON.stringify({
+        type:   'sdp_offer',
+        to:     'link:' + msg.callId,
+        sdp:    offer.sdp,
+        callId: msg.callId
+      }));
+
       break;
     }
 
@@ -1277,13 +1332,13 @@ function showShareCard(link, callId, shareOptions, ntfyTopic) {
 }
 
 function openShareDirect(url, fallback) {
-  const start = Date.now();
-  window.location = url;
-  setTimeout(() => {
-    if (Date.now() - start < 1500) {
-      window.open(fallback, '_blank');
-    }
-  }, 500);
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  if (isMobile) {
+    window.location.href = url;
+    setTimeout(() => { window.open(fallback, '_blank'); }, 1500);
+  } else {
+    window.open(fallback, '_blank');
+  }
 }
 
 function copyAnswerLink(link) {

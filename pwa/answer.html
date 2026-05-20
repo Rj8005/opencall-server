@@ -430,10 +430,14 @@ let ws            = null;
 let pc            = null;
 let localStream   = null;
 let callerNumber  = fromNumber;
+let callerName    = fromName;
 let callStartTime = null;
 let timerInterval = null;
 let isMuted       = false;
 let isSpeakerOff  = false;
+let userAnswered  = false;
+let pendingOffer  = null;
+let pendingCallId = null;
 
 // ── Screen management ───────────────────────────────────────────
 function showScreen(id) {
@@ -520,15 +524,23 @@ async function onMessage(event) {
       wsSend({ type: 'join_call', callId });
       break;
 
-    case 'incoming_call':
-      // Server confirmed we joined — callerNumber comes from pending call
-      callerNumber = msg.from || callerNumber;
+    case 'incoming_call': {
+      callerName   = msg.fromName || msg.from || callerName;
+      callerNumber = msg.from     || callerNumber;
+      setCallerUI(callerName, callerNumber);
       break;
+    }
 
-    case 'sdp_offer':
+    case 'sdp_offer': {
       callerNumber = msg.from || callerNumber;
-      await handleOffer(msg.sdp, msg.from);
+      if (!userAnswered || !localStream) {
+        pendingOffer  = msg.sdp;
+        pendingCallId = msg.callId;
+        return;
+      }
+      await handleOffer(msg.sdp, msg.callId);
       break;
+    }
 
     case 'ice':
       if (pc && msg.candidate) {
@@ -551,10 +563,13 @@ async function onMessage(event) {
 
 // ── ANSWER button ───────────────────────────────────────────────
 async function answerCall() {
+  userAnswered = true;
+
   // Get mic permission before anything else
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch(e) {
+    userAnswered = false;
     alert('Microphone access is required to answer the call.\n\nTap Allow when your browser asks, then try again.');
     return;
   }
@@ -568,25 +583,28 @@ async function answerCall() {
   try {
     await connectWS();
   } catch(e) {
+    userAnswered = false;
     cleanupMedia();
     document.getElementById('btn-answer').disabled  = false;
     document.getElementById('btn-decline').disabled = false;
     document.getElementById('incoming-label').textContent = 'Incoming call';
     document.getElementById('connecting-hint').style.display = 'none';
     alert('Could not reach the OpenCall server. Check your connection and try again.');
+    return;
+  }
+
+  // If the offer arrived before we connected (very fast server), handle it now
+  if (pendingOffer) {
+    await handleOffer(pendingOffer, pendingCallId);
   }
 }
 
 // ── WebRTC: handle SDP offer from caller ────────────────────────
-async function handleOffer(sdp, from) {
-  callerNumber = from || callerNumber;
-
+async function handleOffer(sdp, offerCallId) {
   pc = new RTCPeerConnection(RTC_CFG);
 
-  // Local mic → peer
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-  // Remote audio from peer
   const audio = document.getElementById('remote-audio');
   pc.ontrack = e => {
     if (audio.srcObject !== e.streams[0]) {
@@ -595,10 +613,14 @@ async function handleOffer(sdp, from) {
     }
   };
 
-  // ICE candidates → server → caller
-  pc.onicecandidate = async e => {
-    if (e.candidate) {
-      wsSend({ type: 'ice', to: callerNumber, candidate: e.candidate });
+  pc.onicecandidate = e => {
+    if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type:      'ice',
+        to:        callerNumber,
+        candidate: e.candidate,
+        callId:    offerCallId
+      }));
     }
   };
 
@@ -613,7 +635,12 @@ async function handleOffer(sdp, from) {
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
 
-  wsSend({ type: 'sdp_answer', to: callerNumber, sdp: answer.sdp });
+  ws.send(JSON.stringify({
+    type:   'sdp_answer',
+    to:     callerNumber,
+    sdp:    answer.sdp,
+    callId: offerCallId
+  }));
 
   showScreen('screen-active');
   startTimer();

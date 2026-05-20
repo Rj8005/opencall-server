@@ -448,7 +448,11 @@ async function smartNotify(toNumber, fromName, link, countryOverride) {
 
 function generateAnswerLink(callId, fromName, fromNumber) {
   const base   = 'https://opencall-server.vercel.app/answer';
-  const params = new URLSearchParams({ call: callId, from: fromName, number: fromNumber });
+  const params = new URLSearchParams({
+    call:   callId,
+    from:   fromName   || 'Caller',
+    number: fromNumber || ''
+  });
   return base + '?' + params.toString();
 }
 
@@ -701,7 +705,9 @@ async function handle(ws, msg) {
         }
 
         // Priority 3: Answer link fallback
-        const link = generateAnswerLink(callId, callerMeta.name, callerMeta.number);
+        const callerName   = callerMeta?.name   || callerMeta?.number || 'Caller';
+        const callerNumber = callerMeta?.number || '';
+        const link = generateAnswerLink(callId, callerName, callerNumber);
         pendingCalls.set(callId, {
           from:      callerMeta.number,
           fromName:  callerMeta.name,
@@ -836,18 +842,37 @@ async function handle(ws, msg) {
     }
 
     // ── WebRTC SIGNALING ─────────────────────────────────────
-    // Server just relays — does not inspect SDP or ICE
-    case "sdp_offer":
-    case "sdp_answer":
-    case "ice": {
+    case "sdp_offer": {
       const senderMeta = metadata.get(ws);
-      const targetWs   = registry.get(msg.to);
+      const toWs = registry.get(msg.to) ||
+                   registry.get('link:' + msg.callId);
+      if (toWs) send(toWs, { ...msg, from: senderMeta?.number || msg.from || 'unknown' });
+      break;
+    }
 
-      if (targetWs) {
-        send(targetWs, {
-          ...msg,
-          from: senderMeta?.number || "unknown"
-        });
+    case "sdp_answer": {
+      // Link calls: route by callId; direct calls: route by to
+      const pending = msg.callId && pendingCalls.get(msg.callId);
+      if (pending?.callerWs) {
+        send(pending.callerWs, msg);
+      } else {
+        const toWs = registry.get(msg.to);
+        if (toWs) send(toWs, msg);
+      }
+      break;
+    }
+
+    case "ice": {
+      if (msg.to && registry.get(msg.to)) {
+        send(registry.get(msg.to), msg);
+      } else if (msg.callId) {
+        const linkWs  = registry.get('link:' + msg.callId);
+        const pending = pendingCalls.get(msg.callId);
+        if (linkWs && msg.to !== 'link:' + msg.callId) {
+          send(linkWs, msg);
+        } else if (pending?.callerWs) {
+          send(pending.callerWs, msg);
+        }
       }
       break;
     }
