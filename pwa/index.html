@@ -816,6 +816,82 @@ let ringInterval  = null;
 let ringbackCtx   = null;
 let ringbackInt   = null;
 
+// ── Country / platform data ────────────────────────────────
+const COUNTRY_DATA = {
+  'CA': { name:'Canada',        flag:'🇨🇦', prefix:'+1',   platforms:['whatsapp','rcs','telegram'] },
+  'US': { name:'United States', flag:'🇺🇸', prefix:'+1',   platforms:['rcs','imessage','whatsapp','telegram'] },
+  'GB': { name:'United Kingdom',flag:'🇬🇧', prefix:'+44',  platforms:['whatsapp','rcs','telegram'] },
+  'DE': { name:'Germany',       flag:'🇩🇪', prefix:'+49',  platforms:['whatsapp','telegram','rcs'] },
+  'FR': { name:'France',        flag:'🇫🇷', prefix:'+33',  platforms:['whatsapp','telegram','rcs'] },
+  'IT': { name:'Italy',         flag:'🇮🇹', prefix:'+39',  platforms:['whatsapp','telegram','rcs'] },
+  'ES': { name:'Spain',         flag:'🇪🇸', prefix:'+34',  platforms:['whatsapp','telegram','rcs'] },
+  'NL': { name:'Netherlands',   flag:'🇳🇱', prefix:'+31',  platforms:['whatsapp','telegram','rcs'] },
+  'SE': { name:'Sweden',        flag:'🇸🇪', prefix:'+46',  platforms:['whatsapp','telegram','rcs'] },
+  'NO': { name:'Norway',        flag:'🇳🇴', prefix:'+47',  platforms:['whatsapp','telegram','rcs'] },
+  'RU': { name:'Russia',        flag:'🇷🇺', prefix:'+7',   platforms:['telegram','whatsapp','viber'] },
+  'UA': { name:'Ukraine',       flag:'🇺🇦', prefix:'+380', platforms:['telegram','viber','whatsapp'] },
+  'GR': { name:'Greece',        flag:'🇬🇷', prefix:'+30',  platforms:['viber','whatsapp','telegram'] },
+  'RO': { name:'Romania',       flag:'🇷🇴', prefix:'+40',  platforms:['viber','whatsapp','telegram'] },
+  'RS': { name:'Serbia',        flag:'🇷🇸', prefix:'+381', platforms:['viber','whatsapp','telegram'] },
+  'IN': { name:'India',         flag:'🇮🇳', prefix:'+91',  platforms:['whatsapp','telegram','rcs'] },
+  'CN': { name:'China',         flag:'🇨🇳', prefix:'+86',  platforms:['wechat','line','telegram'] },
+  'JP': { name:'Japan',         flag:'🇯🇵', prefix:'+81',  platforms:['line','telegram','whatsapp'] },
+  'KR': { name:'South Korea',   flag:'🇰🇷', prefix:'+82',  platforms:['kakaotalk','telegram','whatsapp'] },
+  'TH': { name:'Thailand',      flag:'🇹🇭', prefix:'+66',  platforms:['line','whatsapp','telegram'] },
+  'TW': { name:'Taiwan',        flag:'🇹🇼', prefix:'+886', platforms:['line','whatsapp','telegram'] },
+  'ID': { name:'Indonesia',     flag:'🇮🇩', prefix:'+62',  platforms:['whatsapp','line','telegram'] },
+  'PH': { name:'Philippines',   flag:'🇵🇭', prefix:'+63',  platforms:['viber','whatsapp','telegram'] },
+  'MM': { name:'Myanmar',       flag:'🇲🇲', prefix:'+95',  platforms:['viber','whatsapp','telegram'] },
+  'PK': { name:'Pakistan',      flag:'🇵🇰', prefix:'+92',  platforms:['whatsapp','telegram','rcs'] },
+  'IR': { name:'Iran',          flag:'🇮🇷', prefix:'+98',  platforms:['telegram','whatsapp','rcs'] },
+  'SA': { name:'Saudi Arabia',  flag:'🇸🇦', prefix:'+966', platforms:['whatsapp','telegram','rcs'] },
+  'AE': { name:'UAE',           flag:'🇦🇪', prefix:'+971', platforms:['whatsapp','telegram','rcs'] },
+  'NG': { name:'Nigeria',       flag:'🇳🇬', prefix:'+234', platforms:['whatsapp','telegram','rcs'] },
+  'KE': { name:'Kenya',         flag:'🇰🇪', prefix:'+254', platforms:['whatsapp','telegram','rcs'] },
+  'ZA': { name:'South Africa',  flag:'🇿🇦', prefix:'+27',  platforms:['whatsapp','telegram','rcs'] },
+  'EG': { name:'Egypt',         flag:'🇪🇬', prefix:'+20',  platforms:['whatsapp','viber','telegram'] },
+  'GH': { name:'Ghana',         flag:'🇬🇭', prefix:'+233', platforms:['whatsapp','telegram','rcs'] },
+  'ET': { name:'Ethiopia',      flag:'🇪🇹', prefix:'+251', platforms:['whatsapp','telegram','rcs'] },
+  'TZ': { name:'Tanzania',      flag:'🇹🇿', prefix:'+255', platforms:['whatsapp','telegram','rcs'] },
+  'BR': { name:'Brazil',        flag:'🇧🇷', prefix:'+55',  platforms:['whatsapp','telegram','rcs'] },
+  'MX': { name:'Mexico',        flag:'🇲🇽', prefix:'+52',  platforms:['whatsapp','telegram','rcs'] },
+  'CO': { name:'Colombia',      flag:'🇨🇴', prefix:'+57',  platforms:['whatsapp','telegram','rcs'] },
+  'AR': { name:'Argentina',     flag:'🇦🇷', prefix:'+54',  platforms:['whatsapp','telegram','rcs'] },
+  'AU': { name:'Australia',     flag:'🇦🇺', prefix:'+61',  platforms:['whatsapp','rcs','telegram'] },
+  'NZ': { name:'New Zealand',   flag:'🇳🇿', prefix:'+64',  platforms:['whatsapp','rcs','telegram'] },
+};
+
+const PREFIX_MAP = {
+  '+1416':'CA', '+1647':'CA', '+1604':'CA',
+  '+1403':'CA', '+1514':'CA', '+1613':'CA',
+  '+1780':'CA', '+1902':'CA', '+1867':'CA',
+  '+1':   'US', '+44':  'GB', '+49':  'DE',
+  '+33':  'FR', '+39':  'IT', '+34':  'ES',
+  '+31':  'NL', '+46':  'SE', '+47':  'NO',
+  '+7':   'RU', '+380': 'UA', '+30':  'GR',
+  '+40':  'RO', '+381': 'RS', '+91':  'IN',
+  '+86':  'CN', '+81':  'JP', '+82':  'KR',
+  '+66':  'TH', '+886': 'TW', '+62':  'ID',
+  '+63':  'PH', '+95':  'MM', '+92':  'PK',
+  '+98':  'IR', '+966': 'SA', '+971': 'AE',
+  '+234': 'NG', '+254': 'KE', '+27':  'ZA',
+  '+20':  'EG', '+233': 'GH', '+251': 'ET',
+  '+255': 'TZ', '+55':  'BR', '+52':  'MX',
+  '+57':  'CO', '+54':  'AR', '+61':  'AU',
+  '+64':  'NZ',
+};
+
+const PLATFORM_ICONS = {
+  whatsapp:  { icon:'💬', name:'WhatsApp',  color:'#25D366' },
+  telegram:  { icon:'✈️',  name:'Telegram',  color:'#2AABEE' },
+  viber:     { icon:'📳', name:'Viber',      color:'#7360F2' },
+  line:      { icon:'💚', name:'LINE',       color:'#00B900' },
+  kakaotalk: { icon:'💛', name:'KakaoTalk', color:'#FAE100' },
+  wechat:    { icon:'🟢', name:'WeChat',    color:'#07C160' },
+  rcs:       { icon:'📨', name:'RCS',        color:'#4285F4' },
+  imessage:  { icon:'🔵', name:'iMessage',  color:'#007AFF' },
+};
+
 // ── WebRTC config — Google free STUN ──────────────────────
 const RTC_CFG = {
   iceServers: [
@@ -1246,14 +1322,177 @@ function showQRCode(link) {
   document.getElementById('app').appendChild(overlay);
 }
 
+// ── country detection ──────────────────────────────────────
+function detectCountryFromNumber(number) {
+  const sorted = Object.keys(PREFIX_MAP).sort((a, b) => b.length - a.length);
+  for (const prefix of sorted) {
+    if (number.startsWith(prefix)) return PREFIX_MAP[prefix];
+  }
+  return null;
+}
+
+function showCountrySelector(number) {
+  const existing = document.getElementById('country-selector');
+  if (existing) existing.remove();
+
+  if (!number || number.length <= 3) return;
+
+  const countryCode = detectCountryFromNumber(number);
+  const country     = countryCode ? COUNTRY_DATA[countryCode] : null;
+
+  const selector = document.createElement('div');
+  selector.id = 'country-selector';
+  selector.style.cssText = `
+    margin:8px 0;padding:12px 16px;
+    background:#111;border:1px solid #1f1f1f;
+    border-radius:12px;display:flex;
+    align-items:center;gap:10px;flex-wrap:wrap;
+  `;
+
+  if (country) {
+    const platforms = country.platforms.map(p => {
+      const info = PLATFORM_ICONS[p];
+      return info
+        ? `<span style="background:#1a1a1a;padding:4px 8px;border-radius:8px;
+                        font-size:11px;color:${info.color};white-space:nowrap">
+             ${info.icon} ${info.name}
+           </span>`
+        : '';
+    }).join('');
+
+    selector.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:200px">
+        <span style="font-size:22px">${country.flag}</span>
+        <div>
+          <div style="font-size:13px;color:#f0ede8;font-weight:600">
+            ${country.name}
+          </div>
+          <div style="font-size:10px;color:#666;margin-top:2px">Will notify via:</div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">
+            ${platforms}
+          </div>
+        </div>
+      </div>
+      <button id="cs-change-btn"
+        style="padding:6px 12px;background:#1a1a1a;color:#666;
+               border:1px solid #2a2a2a;border-radius:8px;
+               font-size:11px;cursor:pointer;white-space:nowrap">
+        Change ✏️
+      </button>
+    `;
+  } else {
+    selector.innerHTML = `
+      <div style="font-size:12px;color:#666;flex:1">Country not detected</div>
+      <button id="cs-change-btn"
+        style="padding:8px 16px;background:#c8f55a;color:#0a0a0a;
+               border:none;border-radius:8px;font-size:12px;
+               font-weight:700;cursor:pointer">
+        Select Country
+      </button>
+    `;
+  }
+
+  // Insert between .num-display and .keypad inside .dialer-mid
+  const numDisplay = document.querySelector('.num-display');
+  if (numDisplay) {
+    numDisplay.parentNode.insertBefore(selector, numDisplay.nextSibling);
+  }
+
+  selector.querySelector('#cs-change-btn')
+    ?.addEventListener('click', openCountryPicker);
+
+  window._selectedCountry = countryCode;
+}
+
+function openCountryPicker() {
+  const existing = document.getElementById('country-picker-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'country-picker-overlay';
+  overlay.style.cssText = `
+    position:fixed;inset:0;background:rgba(0,0,0,0.92);
+    z-index:300;display:flex;flex-direction:column;
+  `;
+
+  const rows = Object.entries(COUNTRY_DATA)
+    .sort((a, b) => a[1].name.localeCompare(b[1].name))
+    .map(([code, c]) => {
+      const icons = c.platforms.slice(0, 2)
+        .map(p => PLATFORM_ICONS[p]?.icon || '').join(' ');
+      return `
+        <div data-code="${code}"
+          style="display:flex;align-items:center;gap:12px;
+                 padding:14px 20px;border-bottom:1px solid #111;cursor:pointer">
+          <span style="font-size:24px">${c.flag}</span>
+          <div style="flex:1">
+            <div style="font-size:14px;color:#f0ede8">${c.name}</div>
+            <div style="font-size:11px;color:#444;margin-top:2px">${c.prefix}</div>
+          </div>
+          <div style="font-size:16px">${icons}</div>
+        </div>`;
+    }).join('');
+
+  overlay.innerHTML = `
+    <div style="display:flex;align-items:center;padding:16px 20px;
+                border-bottom:1px solid #1f1f1f;background:#0a0a0a">
+      <div style="font-size:15px;color:#f0ede8;font-weight:600;flex:1">
+        Select Country
+      </div>
+      <button id="cp-close"
+        style="background:none;border:none;color:#666;
+               font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <input id="country-search" placeholder="Search country…"
+      style="margin:12px 16px;padding:12px 16px;background:#111;
+             border:1px solid #1f1f1f;border-radius:10px;
+             color:#f0ede8;font-size:14px;outline:none">
+    <div id="country-list" style="overflow-y:auto;flex:1">${rows}</div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#cp-close').addEventListener('click',
+    () => overlay.remove());
+  overlay.querySelector('#country-search').addEventListener('input', e =>
+    filterCountries(e.target.value));
+  overlay.querySelector('#country-list').addEventListener('click', e => {
+    const row = e.target.closest('[data-code]');
+    if (row) selectCountry(row.dataset.code);
+  });
+
+  overlay.querySelector('#country-search').focus();
+}
+
+function filterCountries(query) {
+  const q = query.toLowerCase();
+  document.querySelectorAll('#country-list [data-code]').forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+  });
+}
+
+function selectCountry(code) {
+  window._selectedCountry = code;
+  document.getElementById('country-picker-overlay')?.remove();
+  const number = document.getElementById('inp-dial')?.value || '';
+  showCountrySelector(number);
+}
+
 // ── dialer actions ─────────────────────────────────────────
 function pressKey(d) {
   const inp = document.getElementById('inp-dial');
   if (inp.value.length < 15) inp.value += d;
+  showCountrySelector(inp.value);
 }
 function doDelete() {
   const inp = document.getElementById('inp-dial');
-  inp.value = inp.value.slice(0,-1);
+  inp.value = inp.value.slice(0, -1);
+  if (!inp.value) {
+    document.getElementById('country-selector')?.remove();
+    window._selectedCountry = null;
+  } else {
+    showCountrySelector(inp.value);
+  }
 }
 async function doCall() {
   const to = document.getElementById('inp-dial').value.trim();
@@ -1276,7 +1515,7 @@ async function doCall() {
   await initRatchetSession(to);
 
   // Step 3: Route call via signal server (DHT routing in Phase 3 end)
-  await wsSend({ type:'call', to });
+  await wsSend({ type:'call', to, country: window._selectedCountry || null });
 }
 
 // ── answer / decline ───────────────────────────────────────
@@ -1307,6 +1546,8 @@ function endCall() {
   stopRingback();
   const shareCard = document.getElementById('share-card');
   if (shareCard) shareCard.remove();
+  document.getElementById('country-selector')?.remove();
+  window._selectedCountry = null;
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
   if (callWith) clearRatchetSession(callWith);

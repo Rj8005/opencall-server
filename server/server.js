@@ -26,6 +26,13 @@ const pushSubscriptions = new Map(); // number           → push subscription
 const webPush           = null;      // using native fetch for push
 const pendingCalls      = new Map(); // callId           → { from, to, link, callerWs, ... }
 const simBankRegistry   = new Map(); // country          → WebSocket
+const telegramRegistry  = new Map(); // phone            → telegram chat ID
+const lineRegistry      = new Map(); // phone            → LINE user ID
+
+// WhatsApp Web.js stubs — set waReady=true and assign waClient after
+// calling require('whatsapp-web.js') and authenticating
+let waReady  = false;
+let waClient = null;
 
 const gatewayNumbers = {
   'CA': '+16470000001',
@@ -38,6 +45,79 @@ const gatewayNumbers = {
   'FR': '+331000000001',
   'NG': '+234000000001',
   'ZA': '+272000000001'
+};
+
+const COUNTRY_PLATFORMS = {
+  'IN': ['whatsapp','telegram','rcs'],
+  'BR': ['whatsapp','telegram','rcs'],
+  'NG': ['whatsapp','telegram','rcs'],
+  'KE': ['whatsapp','telegram','rcs'],
+  'ZA': ['whatsapp','telegram','rcs'],
+  'PK': ['whatsapp','telegram','rcs'],
+  'ID': ['whatsapp','line','telegram'],
+  'MX': ['whatsapp','telegram','rcs'],
+  'AR': ['whatsapp','telegram','rcs'],
+  'EG': ['whatsapp','viber','telegram'],
+  'SA': ['whatsapp','telegram','rcs'],
+  'AE': ['whatsapp','telegram','rcs'],
+  'DE': ['whatsapp','telegram','rcs'],
+  'IT': ['whatsapp','telegram','rcs'],
+  'ES': ['whatsapp','telegram','rcs'],
+  'GB': ['whatsapp','rcs','telegram'],
+  'CA': ['whatsapp','rcs','telegram'],
+  'AU': ['whatsapp','rcs','telegram'],
+  'US': ['rcs','imessage','whatsapp','telegram'],
+  'RU': ['telegram','whatsapp','viber'],
+  'UA': ['telegram','viber','whatsapp'],
+  'PH': ['viber','whatsapp','telegram'],
+  'MM': ['viber','whatsapp','telegram'],
+  'GR': ['viber','whatsapp','telegram'],
+  'RO': ['viber','whatsapp','telegram'],
+  'RS': ['viber','whatsapp','telegram'],
+  'JP': ['line','telegram','whatsapp'],
+  'TH': ['line','whatsapp','telegram'],
+  'TW': ['line','whatsapp','telegram'],
+  'KR': ['kakaotalk','telegram','whatsapp'],
+  'CN': ['wechat','line','telegram'],
+  'IR': ['telegram','whatsapp','rcs'],
+};
+
+const PREFIX_TO_COUNTRY = {
+  '+1416':'CA', '+1647':'CA', '+1604':'CA',
+  '+1403':'CA', '+1514':'CA', '+1613':'CA',
+  '+1':   'US',
+  '+44':  'GB',
+  '+91':  'IN',
+  '+86':  'CN',
+  '+81':  'JP',
+  '+82':  'KR',
+  '+66':  'TH',
+  '+886': 'TW',
+  '+62':  'ID',
+  '+63':  'PH',
+  '+95':  'MM',
+  '+7':   'RU',
+  '+380': 'UA',
+  '+30':  'GR',
+  '+40':  'RO',
+  '+381': 'RS',
+  '+49':  'DE',
+  '+39':  'IT',
+  '+34':  'ES',
+  '+33':  'FR',
+  '+55':  'BR',
+  '+52':  'MX',
+  '+57':  'CO',
+  '+54':  'AR',
+  '+234': 'NG',
+  '+254': 'KE',
+  '+27':  'ZA',
+  '+20':  'EG',
+  '+966': 'SA',
+  '+971': 'AE',
+  '+92':  'PK',
+  '+61':  'AU',
+  '+98':  'IR',
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -192,6 +272,177 @@ async function sendFreeNotifications(toNumber, fromName, link) {
   } catch(e) {}
 
   log('📲', 'Notifications sent via:', results.join(', ') || 'none');
+  return results;
+}
+
+function detectCountry(number) {
+  const sorted = Object.keys(PREFIX_TO_COUNTRY)
+    .sort((a, b) => b.length - a.length);
+  for (const prefix of sorted) {
+    if (number.startsWith(prefix)) return PREFIX_TO_COUNTRY[prefix];
+  }
+  return null;
+}
+
+function getPlatformOrder(number) {
+  const country = detectCountry(number);
+  log('🌍', 'Detected country for', number, ':', country || 'unknown');
+  return COUNTRY_PLATFORMS[country] || ['whatsapp','telegram','viber','rcs'];
+}
+
+async function notifyViaPlatform(platform, toNumber, fromName, link) {
+  const msg = `${fromName} is calling you free on OpenCall.\n` +
+              `Tap to answer — no app needed:\n${link}`;
+
+  switch(platform) {
+
+    case 'whatsapp': {
+      if (!waReady) return false;
+      try {
+        const chatId = toNumber.replace('+', '').replace(/\s/g, '') + '@c.us';
+        await waClient.sendMessage(chatId,
+          `📞 *${fromName} is calling you free*\n\n` +
+          `Tap to answer (no install needed):\n${link}\n\n` +
+          `_Free call via OpenCall Protocol_`
+        );
+        log('✓', 'Notified via WhatsApp');
+        return true;
+      } catch(e) {
+        log('✗', 'WhatsApp failed:', e.message);
+        return false;
+      }
+    }
+
+    case 'telegram': {
+      if (!process.env.TELEGRAM_BOT_TOKEN) return false;
+      try {
+        const chatId = telegramRegistry.get(toNumber);
+        if (!chatId) return false;
+        const text = encodeURIComponent(
+          `📞 *${fromName} is calling you free*\n\nTap to answer:\n${link}`
+        );
+        const r = await fetch(
+          `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}` +
+          `/sendMessage?chat_id=${chatId}&text=${text}&parse_mode=Markdown`
+        );
+        const d = await r.json();
+        if (d.ok) { log('✓', 'Notified via Telegram'); return true; }
+        return false;
+      } catch(e) { return false; }
+    }
+
+    case 'viber': {
+      if (!process.env.VIBER_TOKEN) return false;
+      try {
+        const r = await fetch('https://chatapi.viber.com/pa/send_message', {
+          method: 'POST',
+          headers: {
+            'X-Viber-Auth-Token': process.env.VIBER_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            receiver: toNumber.replace('+', ''),
+            type: 'text',
+            text: msg,
+            keyboard: {
+              Type: 'keyboard',
+              Buttons: [{
+                ActionType: 'open-url',
+                ActionBody: link,
+                Text: '📞 Answer Call',
+                BgColor: '#c8f55a'
+              }]
+            }
+          })
+        });
+        const d = await r.json();
+        if (d.status === 0) { log('✓', 'Notified via Viber'); return true; }
+        return false;
+      } catch(e) { return false; }
+    }
+
+    case 'line': {
+      if (!process.env.LINE_TOKEN) return false;
+      try {
+        const userId = lineRegistry.get(toNumber);
+        if (!userId) return false;
+        const r = await fetch('https://api.line.me/v2/bot/message/push', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.LINE_TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            to: userId,
+            messages: [{
+              type: 'template',
+              altText: `${fromName} is calling you`,
+              template: {
+                type: 'buttons',
+                text: `${fromName} is calling you free`,
+                actions: [{ type: 'uri', label: 'Answer Call', uri: link }]
+              }
+            }]
+          })
+        });
+        if (r.ok) { log('✓', 'Notified via LINE'); return true; }
+        return false;
+      } catch(e) { return false; }
+    }
+
+    case 'rcs': {
+      try {
+        await fetch(`https://ntfy.sh/ocp-${toNumber.replace(/\D/g, '')}`, {
+          method: 'POST',
+          headers: {
+            'Title':    `${fromName} is calling you`,
+            'Priority': 'urgent',
+            'Tags':     'phone',
+            'Click':    link
+          },
+          body: 'Tap to answer — no app needed'
+        });
+        log('✓', 'Notified via RCS/ntfy');
+        return true;
+      } catch(e) { return false; }
+    }
+
+    default:
+      return false;
+  }
+}
+
+async function smartNotify(toNumber, fromName, link, countryOverride) {
+  const country   = countryOverride || detectCountry(toNumber);
+  const platforms = (country && COUNTRY_PLATFORMS[country])
+    ? COUNTRY_PLATFORMS[country]
+    : getPlatformOrder(toNumber);
+  const results   = [];
+
+  log('📲', 'Trying platforms in order:', platforms.join(', '), '| country:', country || 'unknown');
+
+  for (const platform of platforms) {
+    const sent = await notifyViaPlatform(platform, toNumber, fromName, link);
+    if (sent) {
+      results.push(platform);
+      if (results.length >= 2) break;
+    }
+  }
+
+  // Always fire ntfy as a silent background push regardless of above
+  try {
+    await fetch(`https://ntfy.sh/ocp-${toNumber.replace(/\D/g, '')}`, {
+      method: 'POST',
+      headers: {
+        'Title':    `${fromName} is calling`,
+        'Priority': 'urgent',
+        'Click':    link
+      },
+      body: 'Free call waiting'
+    });
+  } catch(e) {}
+
+  log('📲', 'Smart notify complete:', results.join(', ') || 'caller shares manually');
   return results;
 }
 
@@ -409,7 +660,10 @@ async function handle(ws, msg) {
 
       // ── PATH B: number not on OpenCall → tiered fallback
       } else {
-        const callerCountry = detectCountryFromNumber(to);
+        const detectedCountry = detectCountryFromNumber(to);
+        const callerCountry   = msg.country || detectedCountry;
+        log('🌍', 'Call to', to, '| Country:', callerCountry || 'unknown',
+            msg.country ? '(client hint)' : '(auto-detected)');
 
         // Priority 1: OCP relay in DHT
         const relay = findBestRelay(to, callerCountry);
@@ -458,7 +712,7 @@ async function handle(ws, msg) {
         });
         setTimeout(() => pendingCalls.delete(callId), 5 * 60 * 1000);
 
-        const notified = await sendFreeNotifications(to, callerMeta.name, link);
+        const notified = await smartNotify(to, callerMeta.name, link, callerCountry);
 
         send(ws, {
           type:         'answer_link_ready',
@@ -600,6 +854,28 @@ async function handle(ws, msg) {
         simBankRegistry.set(country, ws);
         log('✓', 'SIM bank registered for', country);
         send(ws, { type: 'simbank_registered', country });
+      }
+      break;
+    }
+
+    // ── LINK_TELEGRAM ─────────────────────────────────────────
+    case 'link_telegram': {
+      const meta = metadata.get(ws);
+      if (meta?.number && msg.chatId) {
+        telegramRegistry.set(meta.number, msg.chatId);
+        log('✓', 'Telegram linked for', meta.number);
+        send(ws, { type: 'linked', platform: 'telegram' });
+      }
+      break;
+    }
+
+    // ── LINK_LINE ─────────────────────────────────────────────
+    case 'link_line': {
+      const meta = metadata.get(ws);
+      if (meta?.number && msg.userId) {
+        lineRegistry.set(meta.number, msg.userId);
+        log('✓', 'LINE linked for', meta.number);
+        send(ws, { type: 'linked', platform: 'line' });
       }
       break;
     }

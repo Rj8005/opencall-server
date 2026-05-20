@@ -1,0 +1,14 @@
+{
+  "name": "opencall-server",
+  "version": "1.0.0",
+  "description": "OpenCall Signal Server — WebSocket signaling for peer-to-peer calls",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

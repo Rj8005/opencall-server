@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm init *)",
+      "Bash(npm install *)",
+      "PowerShell(Invoke-WebRequest -Uri \"https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.11/dist/modules/libsodium-wrappers.js\" -OutFile \"F:\\\\OpenCall\\\\pwa\\\\libsodium-wrappers.js\")",
+      "PowerShell(\\(Invoke-WebRequest -Uri \"https://unpkg.com/libsodium-wrappers@0.7.11/dist/browsers/sodium.js\" -UseBasicParsing\\).Content.Substring\\(0,200\\))"
+    ]
+  }
+}
