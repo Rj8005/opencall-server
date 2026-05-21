@@ -135,6 +135,16 @@ input::placeholder{color:var(--hint)}
 
 /* ── relay badge ── */
 .relay-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(255,159,67,.12);border:1px solid rgba(255,159,67,.3);border-radius:var(--r-pill);padding:4px 12px;font-size:10px;color:var(--orange);letter-spacing:.08em;text-transform:uppercase;margin-top:8px}
+
+/* ── invite banner ── */
+.invite-banner{width:100%;background:rgba(200,245,90,0.06);border:1px solid rgba(200,245,90,0.18);border-radius:var(--r);padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.invite-banner-msg{font-size:12px;color:var(--muted);letter-spacing:.04em;line-height:1.5}
+.invite-banner-msg.ok{color:var(--green)}
+.invite-banner-msg.err{color:var(--red)}
+.btn-invite{padding:12px 16px;border-radius:var(--r);border:1px solid rgba(200,245,90,0.3);background:rgba(200,245,90,0.08);color:var(--accent);font-family:var(--mono);font-size:12px;cursor:pointer;letter-spacing:.06em;transition:all .15s;text-align:center;text-transform:uppercase}
+.btn-invite:hover{background:rgba(200,245,90,0.14);border-color:rgba(200,245,90,0.45)}
+.btn-invite:active{transform:scale(.97)}
+.btn-invite:disabled{opacity:.4;cursor:not-allowed;transform:none}
 </style>
 </head>
 <body>
@@ -1118,8 +1128,8 @@ async function onMessage(msg) {
       break;
 
     case 'unavailable':
-      toast(msg.number + ' is not on OpenCall yet');
       endCall();
+      showInviteBanner(msg.number);
       break;
 
     case 'no_relay':
@@ -1433,6 +1443,55 @@ function showQRCode(link) {
   document.getElementById('app').appendChild(overlay);
 }
 
+// ── invite banner ─────────────────────────────────────────
+function showInviteBanner(to) {
+  document.getElementById('invite-banner')?.remove();
+  const banner = document.createElement('div');
+  banner.id = 'invite-banner';
+  banner.className = 'invite-banner';
+  const safeNum = (to || '').replace(/'/g, "\\'");
+  banner.innerHTML = `
+    <div class="invite-banner-msg">This number isn't on OpenCall yet</div>
+    <button class="btn-invite" id="btn-send-invite" onclick="sendInvite('${safeNum}')">Send invite via SMS</button>
+  `;
+  const anchor = document.getElementById('country-selector') || document.querySelector('.num-display');
+  if (anchor) anchor.parentNode.insertBefore(banner, anchor.nextSibling);
+}
+
+async function sendInvite(to) {
+  const btn = document.getElementById('btn-send-invite');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+
+  const wsUrl = document.getElementById('inp-server').value.trim();
+  const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+  const safeNum = (to || '').replace(/'/g, "\\'");
+
+  try {
+    const res = await fetch(baseUrl + '/invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: to, from_ocp: myIdentity?.ocp_address || null })
+    });
+
+    const banner = document.getElementById('invite-banner');
+    if (res.ok) {
+      if (banner) banner.innerHTML =
+        `<div class="invite-banner-msg ok">Invite sent! They'll receive a text with a link</div>`;
+    } else {
+      if (banner) banner.innerHTML = `
+        <div class="invite-banner-msg err">Couldn't find carrier for this number</div>
+        <button class="btn-invite" onclick="sendInvite('${safeNum}')">Try again</button>
+      `;
+    }
+  } catch(e) {
+    const banner = document.getElementById('invite-banner');
+    if (banner) banner.innerHTML = `
+      <div class="invite-banner-msg err">Couldn't find carrier for this number</div>
+      <button class="btn-invite" onclick="sendInvite('${safeNum}')">Try again</button>
+    `;
+  }
+}
+
 // ── country detection ──────────────────────────────────────
 function detectCountryFromNumber(number) {
   const sorted = Object.keys(PREFIX_MAP).sort((a, b) => b.length - a.length);
@@ -1618,6 +1677,7 @@ function pressKey(d) {
 function doDelete() {
   const inp = document.getElementById('inp-dial');
   inp.value = inp.value.slice(0, -1);
+  document.getElementById('invite-banner')?.remove();
   if (!inp.value) {
     document.getElementById('country-selector')?.remove();
     window._selectedCountry = null;
@@ -1636,9 +1696,12 @@ async function doCall() {
     const ocpAddr = await dhtLookupPhone(to);
     if (ocpAddr) {
       console.log('[DHT] Found OCP address for', to, ':', ocpAddr);
+      document.getElementById('invite-banner')?.remove();
       toast('Routing via OCP network...');
     } else {
-      console.log('[DHT] Not in DHT — routing via signal server');
+      console.log('[DHT] Not in DHT — showing invite banner');
+      showInviteBanner(to);
+      return;
     }
   }
 
@@ -1680,6 +1743,7 @@ function endCall() {
   stopRingback();
   const shareCard = document.getElementById('share-card');
   if (shareCard) shareCard.remove();
+  document.getElementById('invite-banner')?.remove();
   document.getElementById('country-selector')?.remove();
   window._selectedCountry = null;
   if (pc) { pc.close(); pc = null; }
