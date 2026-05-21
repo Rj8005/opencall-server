@@ -145,6 +145,30 @@ input::placeholder{color:var(--hint)}
 .btn-invite:hover{background:rgba(200,245,90,0.14);border-color:rgba(200,245,90,0.45)}
 .btn-invite:active{transform:scale(.97)}
 .btn-invite:disabled{opacity:.4;cursor:not-allowed;transform:none}
+
+/* ── platform chips ── */
+.platform-btn{background:#1a1a1a;padding:4px 8px;border-radius:8px;font-size:11px;white-space:nowrap;border:none;cursor:pointer;font-family:var(--mono);transition:opacity .15s,filter .15s}
+.platform-btn:hover{opacity:.75;filter:brightness(1.25)}
+.platform-btn:active{transform:scale(.93)}
+
+/* ── invite channel chips ── */
+.inv-sub{font-size:10px;color:var(--hint);letter-spacing:.06em;margin-top:-4px}
+.inv-chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none;-ms-overflow-style:none}
+.inv-chips::-webkit-scrollbar{display:none}
+.inv-chip{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 10px;background:var(--s2);border:1px solid var(--b2);border-radius:var(--r);cursor:pointer;font-family:var(--mono);transition:background .15s,border-color .15s}
+.inv-chip:hover{background:var(--s3);border-color:var(--b3)}
+.inv-chip:active{transform:scale(.91)}
+.inv-chip-ico{font-size:18px;line-height:1}
+.inv-chip-lbl{font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.inv-expand{margin-top:2px}
+.inv-email-row{display:flex;gap:8px;padding-top:6px}
+.inv-email-row input{flex:1;background:var(--s1);border:1px solid var(--b2);border-radius:var(--r);color:var(--tx);font-family:var(--mono);font-size:13px;padding:10px 14px;outline:none;transition:border-color .2s,box-shadow .2s}
+.inv-email-row input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-d)}
+.inv-email-send{padding:10px 14px;border-radius:var(--r);border:1px solid rgba(200,245,90,0.3);background:rgba(200,245,90,0.08);color:var(--accent);font-family:var(--mono);font-size:11px;cursor:pointer;white-space:nowrap;transition:background .15s;letter-spacing:.04em;text-transform:uppercase}
+.inv-email-send:hover{background:rgba(200,245,90,0.16)}
+.inv-qr-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px 0}
+.inv-qr-box{border-radius:10px;overflow:hidden;border:3px solid rgba(200,245,90,0.35)}
+.inv-qr-hint{font-size:10px;color:var(--hint);letter-spacing:.06em}
 </style>
 </head>
 <body>
@@ -926,7 +950,7 @@ const PLATFORM_ICONS = {
   line:      { icon:'💚', name:'LINE',       color:'#00B900' },
   kakaotalk: { icon:'💛', name:'KakaoTalk', color:'#FAE100' },
   wechat:    { icon:'🟢', name:'WeChat',    color:'#07C160' },
-  rcs:       { icon:'📨', name:'RCS',        color:'#4285F4' },
+  rcs:       { icon:'📨', name:'SMS/RCS',     color:'#4285F4' },
   imessage:  { icon:'🔵', name:'iMessage',  color:'#007AFF' },
 };
 
@@ -1444,39 +1468,192 @@ function showQRCode(link) {
 }
 
 // ── invite banner ─────────────────────────────────────────
-function showInviteBanner(to) {
+async function _invGenToken() {
+  const ocp  = myIdentity?.ocp_address || String(Date.now());
+  const raw  = new TextEncoder().encode(ocp + Date.now());
+  const hash = await crypto.subtle.digest('SHA-256', raw);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('').slice(0,8);
+}
+
+function invMsg() {
+  const link = window._invLink || 'https://opencall.net/join';
+  return 'Hey! Call me free on OpenCall (no app needed):\n' + link +
+         '\nJust tap the link, browser opens, one tap to answer.';
+}
+
+async function showInviteBanner(to) {
   document.getElementById('invite-banner')?.remove();
+  const token      = await _invGenToken();
+  window._invPhone = to;
+  window._invLink  = 'https://opencall.net/join/' + token;
+
   const banner = document.createElement('div');
   banner.id = 'invite-banner';
   banner.className = 'invite-banner';
-  const safeNum = (to || '').replace(/'/g, "\\'");
   banner.innerHTML = `
     <div class="invite-banner-msg">This number isn't on OpenCall yet</div>
-    <button class="btn-invite" id="btn-send-invite" onclick="sendInvite('${safeNum}')">Send invite via SMS</button>
+    <div class="inv-sub">Send them an invite link — they tap it to call you free:</div>
+    <div class="inv-chips">
+      <button class="inv-chip" onclick="invOpenWhatsApp()">
+        <span class="inv-chip-ico">💬</span><span class="inv-chip-lbl">WhatsApp</span>
+      </button>
+      <button class="inv-chip" onclick="invOpenSMS()">
+        <span class="inv-chip-ico">📱</span><span class="inv-chip-lbl">SMS</span>
+      </button>
+      <button class="inv-chip" onclick="invOpenTelegram()">
+        <span class="inv-chip-ico">✈️</span><span class="inv-chip-lbl">Telegram</span>
+      </button>
+      <button class="inv-chip" onclick="invOpenSignal()">
+        <span class="inv-chip-ico">🔒</span><span class="inv-chip-lbl">Signal</span>
+      </button>
+      <button class="inv-chip" onclick="invToggleEmail()">
+        <span class="inv-chip-ico">📧</span><span class="inv-chip-lbl">Email</span>
+      </button>
+      <button class="inv-chip" onclick="invOpenSkype()">
+        <span class="inv-chip-ico">💠</span><span class="inv-chip-lbl">Skype</span>
+      </button>
+      <button class="inv-chip" onclick="invOpenCall()">
+        <span class="inv-chip-ico">📞</span><span class="inv-chip-lbl">Call first</span>
+      </button>
+      <button class="inv-chip" onclick="invToggleQR()">
+        <span class="inv-chip-ico">📷</span><span class="inv-chip-lbl">QR</span>
+      </button>
+      <button class="inv-chip" onclick="invCopyLink()">
+        <span class="inv-chip-ico">📋</span><span class="inv-chip-lbl">Copy link</span>
+      </button>
+    </div>
+    <div class="inv-expand" id="inv-expand"></div>
   `;
   const anchor = document.getElementById('country-selector') || document.querySelector('.num-display');
   if (anchor) anchor.parentNode.insertBefore(banner, anchor.nextSibling);
+}
+
+function invOpenWhatsApp() {
+  const digits = (window._invPhone || '').replace(/\D/g, '');
+  window.open('https://wa.me/' + digits + '?text=' + encodeURIComponent(invMsg()), '_blank');
+}
+
+function invOpenSMS() {
+  const clean = (window._invPhone || '').replace(/[^+\d]/g, '');
+  window.location.href = 'sms:' + clean + '?body=' + encodeURIComponent(invMsg());
+}
+
+function invOpenTelegram() {
+  window.open(
+    'https://t.me/share/url?url=' + encodeURIComponent(window._invLink || '') +
+    '&text=' + encodeURIComponent(invMsg()),
+    '_blank'
+  );
+}
+
+function invOpenSignal() {
+  const digits = (window._invPhone || '').replace(/\D/g, '');
+  window.open('https://signal.me/#p/+' + digits, '_blank');
+}
+
+function invOpenSkype() {
+  const clean = (window._invPhone || '').replace(/[^+\d]/g, '');
+  window.location.href = 'skype:' + clean + '?chat';
+}
+
+function invOpenCall() {
+  const clean = (window._invPhone || '').replace(/[^+\d]/g, '');
+  window.location.href = 'tel:' + clean;
+}
+
+function invToggleEmail() {
+  const el = document.getElementById('inv-expand');
+  if (!el) return;
+  if (el.dataset.mode === 'email') { el.innerHTML = ''; el.dataset.mode = ''; return; }
+  el.dataset.mode = 'email';
+  el.innerHTML = `
+    <div class="inv-email-row">
+      <input type="email" id="inv-email-inp" placeholder="their@email.com" autocomplete="email">
+      <button class="inv-email-send" onclick="invSendEmail()">Open Mail ↗</button>
+    </div>
+  `;
+  document.getElementById('inv-email-inp').focus();
+}
+
+function invSendEmail() {
+  const addr = (document.getElementById('inv-email-inp')?.value || '').trim();
+  if (!addr) { document.getElementById('inv-email-inp')?.focus(); return; }
+  const subj = encodeURIComponent('Join me on OpenCall');
+  const body = encodeURIComponent(invMsg());
+  window.location.href = 'mailto:' + addr + '?subject=' + subj + '&body=' + body;
+}
+
+function invToggleQR() {
+  const el = document.getElementById('inv-expand');
+  if (!el) return;
+  if (el.dataset.mode === 'qr') { el.innerHTML = ''; el.dataset.mode = ''; return; }
+  el.dataset.mode = 'qr';
+  el.innerHTML = `
+    <div class="inv-qr-wrap">
+      <div class="inv-qr-box" id="inv-qr-node"></div>
+      <div class="inv-qr-hint">Show this screen — they scan with their camera</div>
+    </div>
+  `;
+  if (typeof QRCode === 'undefined') {
+    const s  = document.createElement('script');
+    s.src    = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    s.onload = _invRenderQR;
+    s.onerror = _invRenderQR;
+    document.head.appendChild(s);
+  } else {
+    _invRenderQR();
+  }
+}
+
+function _invRenderQR() {
+  const node = document.getElementById('inv-qr-node');
+  if (!node) return;
+  const link = window._invLink || 'https://opencall.net/join';
+  if (typeof QRCode !== 'undefined') {
+    new QRCode(node, { text: link, width: 168, height: 168,
+      colorDark: '#c8f55a', colorLight: '#0a0a0a' });
+  } else {
+    const img = document.createElement('img');
+    img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=168x168&data=' +
+              encodeURIComponent(link) + '&color=c8f55a&bgcolor=0a0a0a';
+    img.width = 168; img.height = 168; img.alt = 'QR code';
+    node.appendChild(img);
+  }
+}
+
+function invCopyLink() {
+  navigator.clipboard.writeText(window._invLink || '').then(() => toast('Invite link copied'));
 }
 
 async function sendInvite(to) {
   const btn = document.getElementById('btn-send-invite');
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
 
+  // Normalize to full E.164: strip whitespace/dashes, prepend country prefix if missing
+  let phone = (to || '').replace(/[\s\-().]/g, '');
+  if (!phone.startsWith('+')) {
+    const cc = window._selectedCountry;
+    const prefix = cc && COUNTRY_DATA[cc] ? COUNTRY_DATA[cc].prefix : '';
+    if (prefix) phone = prefix + phone;
+  }
+
   const wsUrl = document.getElementById('inp-server').value.trim();
   const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-  const safeNum = (to || '').replace(/'/g, "\\'");
+  const safeNum = phone.replace(/'/g, "\\'");
 
   try {
     const res = await fetch(baseUrl + '/invite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: to, from_ocp: myIdentity?.ocp_address || null })
+      body: JSON.stringify({ phone, from_ocp: myIdentity?.ocp_address || null })
     });
 
     const banner = document.getElementById('invite-banner');
     if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const via = data.carrier ? ` via ${data.carrier}` : '';
       if (banner) banner.innerHTML =
-        `<div class="invite-banner-msg ok">Invite sent! They'll receive a text with a link</div>`;
+        `<div class="invite-banner-msg ok">Invite sent${via}! They'll receive a text with a link</div>`;
     } else {
       if (banner) banner.innerHTML = `
         <div class="invite-banner-msg err">Couldn't find carrier for this number</div>
@@ -1520,13 +1697,13 @@ function showCountrySelector(number) {
   `;
 
   if (country) {
+    const safeNum = (number || '').replace(/[^+\d]/g, '');
     const platforms = country.platforms.map(p => {
       const info = PLATFORM_ICONS[p];
       return info
-        ? `<span style="background:#1a1a1a;padding:4px 8px;border-radius:8px;
-                        font-size:11px;color:${info.color};white-space:nowrap">
-             ${info.icon} ${info.name}
-           </span>`
+        ? `<button class="platform-btn" style="color:${info.color}"
+             onclick="openPlatformLink('${p}','${safeNum}')"
+             title="Open ${info.name}">${info.icon} ${info.name}</button>`
         : '';
     }).join('');
 
@@ -1666,6 +1843,26 @@ function selectCountry(code) {
 
   const number = document.getElementById('inp-dial')?.value || '';
   showCountrySelector(number);
+}
+
+// ── platform deep links ────────────────────────────────────
+function openPlatformLink(platform, number) {
+  const digits = (number || '').replace(/\D/g, '');
+  const clean  = (number || '').replace(/[^+\d]/g, '');
+  switch (platform) {
+    case 'whatsapp':
+      window.open('https://wa.me/' + digits, '_blank');
+      break;
+    case 'telegram':
+      window.open('https://t.me/+' + digits, '_blank');
+      break;
+    case 'rcs':
+    case 'imessage':
+      window.location.href = 'sms:' + clean;
+      break;
+    default:
+      break;
+  }
 }
 
 // ── dialer actions ─────────────────────────────────────────
