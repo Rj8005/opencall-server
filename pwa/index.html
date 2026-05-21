@@ -213,6 +213,24 @@ input::placeholder{color:var(--hint)}
 @keyframes pulse-channel{0%{transform:scale(1);opacity:1}50%{transform:scale(1.2);opacity:.5}100%{transform:scale(1);opacity:1}}
 .waiting-text{font-size:14px;color:var(--tx);font-weight:600}
 .waiting-sub{font-size:12px;color:var(--muted);line-height:1.5}
+
+/* ── missed call landing page ── */
+#scr-missed{gap:0;padding:max(env(safe-area-inset-top,40px),40px) 28px max(env(safe-area-inset-bottom,40px),40px);overflow-y:auto}
+.missed-call-page{display:flex;flex-direction:column;align-items:center;gap:20px;max-width:360px;width:100%;text-align:center}
+.missed-icon{font-size:72px;line-height:1;filter:drop-shadow(0 0 28px rgba(77,255,145,.4));animation:missed-ring 1.8s ease-in-out infinite}
+@keyframes missed-ring{0%,100%{transform:scale(1) rotate(0deg)}20%{transform:scale(1.08) rotate(-10deg)}40%{transform:scale(1.08) rotate(10deg)}60%{transform:scale(1.08) rotate(-6deg)}80%{transform:scale(1.08) rotate(6deg)}}
+.missed-call-page h2{font-family:var(--disp);font-size:26px;font-weight:800;letter-spacing:-.5px;color:var(--tx);line-height:1.2}
+.missed-call-page>p{font-size:13px;color:var(--muted);line-height:1.6;max-width:280px}
+.missed-number{font-size:12px;color:var(--muted);letter-spacing:.04em}
+.missed-number span{display:block;color:var(--accent);font-family:var(--mono);font-size:11px;word-break:break-all;margin-top:4px;padding:6px 12px;background:var(--accent-d);border-radius:var(--r);border:1px solid var(--accent-g)}
+.missed-info{background:rgba(77,255,145,.05);border:1px solid rgba(77,255,145,.15);border-radius:var(--r);padding:14px 16px;font-size:12px;color:var(--muted);line-height:1.8;max-width:320px;width:100%}
+.answer-btn{width:100%;max-width:320px;padding:22px 28px;border-radius:var(--r-lg);border:none;background:var(--accent);color:#0a0a0a;font-family:var(--disp);font-size:18px;font-weight:800;letter-spacing:.02em;cursor:pointer;transition:all .15s;animation:answer-glow 2s ease-in-out infinite}
+.answer-btn:hover{background:#d4f96a;transform:translateY(-2px);box-shadow:0 12px 36px rgba(200,245,90,.35)}
+.answer-btn:active{transform:scale(.96);animation:none}
+.answer-btn:disabled{opacity:.5;cursor:not-allowed;animation:none;transform:none;background:var(--s2);color:var(--muted)}
+@keyframes answer-glow{0%,100%{box-shadow:0 0 0 0 rgba(200,245,90,.5)}50%{box-shadow:0 0 0 18px rgba(200,245,90,0)}}
+#missed-status{font-size:12px;color:var(--muted);min-height:18px;letter-spacing:.05em;text-align:center}
+.missed-sub{font-size:11px;color:var(--hint);letter-spacing:.06em;line-height:1.8;text-align:center}
 </style>
 </head>
 <body>
@@ -396,6 +414,31 @@ input::placeholder{color:var(--hint)}
         <line x1="23" y1="1" x2="1" y2="23"/>
       </svg>
     </button>
+  </div>
+
+  <!-- ══════════════ MISSED CALL ══════════════ -->
+  <div class="screen hidden" id="scr-missed">
+    <div class="missed-call-page">
+      <div class="missed-icon">📞</div>
+      <h2>You have a missed call</h2>
+      <p>Someone tried to reach you on OpenCall</p>
+      <p class="missed-number">From:<span id="missed-from">Unknown caller</span></p>
+
+      <div class="missed-info">
+        OpenCall is free worldwide calling — no app needed.
+        Just tap the button below to answer.
+      </div>
+
+      <button class="answer-btn" id="answer-missed-btn" onclick="answerMissedCall()">
+        📞 Answer Call
+      </button>
+
+      <div id="missed-status"></div>
+
+      <div class="missed-sub">
+        This call is completely free · End-to-end encrypted
+      </div>
+    </div>
   </div>
 
 </div>
@@ -854,6 +897,92 @@ function clearRatchetSession(withNumber) {
   console.log('[OCP] Ratchet session cleared for', withNumber);
 }
 
+// ── Missed Call Landing Page ──────────────────────────────
+
+function checkMissedCallRoute() {
+  const params  = new URLSearchParams(window.location.search);
+  if (params.get('missed') !== 'true') return;
+
+  const fromOcp = params.get('from') || '';
+  const toNum   = params.get('to')   || '';
+
+  show('missed');
+
+  const fromEl = document.getElementById('missed-from');
+  if (fromEl) {
+    fromEl.textContent = fromOcp
+      ? (fromOcp.startsWith('ocp:') ? fromOcp.slice(0, 28) + '…' : fromOcp)
+      : 'Unknown caller';
+  }
+
+  window._missedFrom = fromOcp;
+  window._missedTo   = toNum;
+  console.log('[Missed] Route detected — from:', fromOcp, 'to:', toNum);
+}
+
+async function answerMissedCall() {
+  const btn      = document.getElementById('answer-missed-btn');
+  const statusEl = document.getElementById('missed-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+  if (statusEl) statusEl.textContent = 'Setting up your identity…';
+
+  // Ensure identity
+  if (!myIdentity) {
+    try { myIdentity = await getOrCreateIdentity(); }
+    catch(e) {
+      toast('Identity error — please try again');
+      if (btn) { btn.disabled = false; btn.textContent = '📞 Answer Call'; }
+      if (statusEl) statusEl.textContent = '';
+      return;
+    }
+  }
+
+  // Guest credentials — use the number they were called on if available
+  const guestNum = window._missedTo || ('guest_' + Date.now().toString(36));
+  myNumber = guestNum;
+  myName   = 'Guest';
+
+  if (statusEl) statusEl.textContent = 'Connecting to server…';
+
+  const server = document.getElementById('inp-server')?.value.trim()
+    || 'wss://opencall-server.onrender.com';
+
+  try { ws = new WebSocket(server); }
+  catch(e) {
+    toast('Invalid server URL');
+    if (btn) { btn.disabled = false; btn.textContent = '📞 Answer Call'; }
+    if (statusEl) statusEl.textContent = '';
+    return;
+  }
+
+  ws.onopen = async () => {
+    setConn('on');
+    if (statusEl) statusEl.textContent = 'Registering…';
+    await wsSend({
+      type:       'register',
+      number:     guestNum,
+      name:       'Guest',
+      public_key: myIdentity ? JSON.stringify(myIdentity.publicKeyJwk) : null
+    });
+  };
+
+  ws.onmessage = e => { try { onMessage(JSON.parse(e.data)); } catch {} };
+
+  ws.onclose = () => {
+    setConn('off');
+    if (callId) endCall();
+  };
+
+  ws.onerror = () => {
+    toast('Cannot reach server — check your connection');
+    if (btn) { btn.disabled = false; btn.textContent = '📞 Answer Call'; }
+    if (statusEl) statusEl.textContent = '';
+  };
+
+  // After 'registered' fires, _pendingMissedCallback triggers the callback call
+  window._pendingMissedCallback = window._missedFrom;
+}
+
 // Load identity on startup
 let myIdentity = null;
 getOrCreateIdentity().then(async id => {
@@ -868,6 +997,7 @@ getOrCreateIdentity().then(async id => {
     }
   });
   subscribePush();
+  checkMissedCallRoute();
 }).catch(e => console.error('[OCP] Identity init failed:', e));
 
 async function subscribePush() {
@@ -1032,13 +1162,14 @@ const COUNTRY_SCORES = {
 };
 
 const CHANNEL_CONFIG = {
-  whatsapp: { label:'WhatsApp',  emoji:'💬', color:'#25D366' },
-  telegram: { label:'Telegram',  emoji:'✈️',  color:'#0088cc' },
-  sms:      { label:'SMS',       emoji:'📱', color:'#666666' },
-  viber:    { label:'Viber',     emoji:'📳', color:'#7360F2' },
-  signal:   { label:'Signal',    emoji:'🔵', color:'#3A76F0' },
-  email:    { label:'Email',     emoji:'📧', color:'#EA4335' },
-  call:     { label:'Call first',emoji:'📞', color:'#34A853' }
+  whatsapp:    { label:'WhatsApp',           emoji:'💬', color:'#25D366' },
+  telegram:    { label:'Telegram',           emoji:'✈️',  color:'#0088cc' },
+  sms:         { label:'SMS',                emoji:'📱', color:'#666666' },
+  viber:       { label:'Viber',              emoji:'📳', color:'#7360F2' },
+  signal:      { label:'Signal',             emoji:'🔵', color:'#3A76F0' },
+  email:       { label:'Email',              emoji:'📧', color:'#EA4335' },
+  call:        { label:'Call first',         emoji:'📞', color:'#34A853' },
+  missed_call: { label:'missed call notify', emoji:'📞', color:'#34A853' }
 };
 
 // ── WebRTC config — Google free STUN ──────────────────────
@@ -1180,13 +1311,26 @@ async function onMessage(msg) {
       if (myIdentity) {
         document.getElementById('lbl-ocpaddr').textContent = myIdentity.ocp_address.slice(0, 16) + '…';
       }
-      show('dialer');
-      toast('Registered as ' + msg.number);
       if (myIdentity && dhtReady) {
         dhtAnnounce(myIdentity.ocp_address, 'online');
         if (myNumber) dhtAnnouncePhone(myNumber, myIdentity.ocp_address);
         console.log('[DHT] Announced identity and phone');
       }
+      // Missed call flow: skip dialer, call back the original caller immediately
+      if (window._pendingMissedCallback) {
+        const target   = window._pendingMissedCallback;
+        window._pendingMissedCallback = null;
+        const statusEl = document.getElementById('missed-status');
+        if (statusEl) statusEl.textContent = 'Calling back…';
+        callWith = target;
+        setTimeout(async () => {
+          await initRatchetSession(target);
+          await wsSend({ type: 'call', to: target });
+        }, 400);
+        break;
+      }
+      show('dialer');
+      toast('Registered as ' + msg.number);
       break;
 
     case 'ringing':
@@ -1795,6 +1939,15 @@ function getRankedChannels(e164) {
     .map(([channel, score]) => ({ channel, score, country }));
 }
 
+function openChannel(url) {
+  if (!url) return;
+  if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
+    window.location.href = url;
+  } else {
+    window.open(url, '_blank');
+  }
+}
+
 function renderChannelButtons(e164, inviteURL) {
   const ranked = getRankedChannels(e164);
   const links  = buildDeepLinks(e164, inviteURL);
@@ -1815,14 +1968,16 @@ function renderChannelButtons(e164, inviteURL) {
       <span class="ch-label">${label}</span>
       <span class="ch-score" style="color:${color}">${score}%</span>
     `;
-    btn.onclick = () => {
-      if (link) {
-        const isMobileScheme = /^(sms:|tel:|viber:)/i.test(link);
-        if (isMobileScheme) { window.location.href = link; }
-        else { window.open(link, '_blank'); }
-      }
-      showWaiting(e164, channel);
-    };
+
+    if (channel === 'call') {
+      btn.id = 'call-first-btn';
+      btn.onclick = () => sendMissedCall(e164, inviteURL);
+    } else if (channel === 'email') {
+      btn.onclick = () => { sendViaEmail(e164, inviteURL); showWaiting(e164, channel); };
+    } else {
+      btn.onclick = () => { openChannel(link); showWaiting(e164, channel); };
+    }
+
     grid.appendChild(btn);
   });
 }
@@ -1875,43 +2030,90 @@ function copyInviteLink() {
   });
 }
 
-async function sendViaTextBelt() {
-  const btn      = document.getElementById('textbelt-btn');
-  const statusEl = document.getElementById('textbelt-status');
-  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-  if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; }
-
-  const wsUrl   = document.getElementById('inp-server').value.trim();
-  const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+async function sendMissedCall(e164, inviteURL) {
+  const btn = document.getElementById('call-first-btn');
+  if (btn) { btn.textContent = '📞 Sending missed call...'; btn.disabled = true; }
 
   try {
-    const res = await fetch(baseUrl + '/invite/send', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal:  AbortSignal.timeout(10000),
-      body:    JSON.stringify({
-        channel:  'textbelt',
-        phone:    window._invPhone,
-        url:      window._invLink,
-        from_ocp: myIdentity?.ocp_address || null
-      })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
+    const resp = await fetch(
+      'https://opencall-server.onrender.com/reach/missed-call' +
+      '?to=' + encodeURIComponent(e164) +
+      '&inviteURL=' + encodeURIComponent(inviteURL),
+      { method: 'GET', signal: AbortSignal.timeout(10000) }
+    );
+    const data = await resp.json();
+
+    if (data.success) {
+      if (btn) { btn.textContent = '✓ Missed call sent!'; btn.style.borderColor = '#BFFF00'; }
+      showWaiting(e164, 'missed_call');
+    } else if (data.fallback === 'sip_not_configured') {
+      if (btn) { btn.textContent = '📞 Call first (manual)'; btn.disabled = false; }
+      window.location.href = 'tel:' + e164;
+    } else {
+      if (btn) { btn.textContent = '✗ Failed — try another option'; btn.disabled = false; }
+    }
+  } catch(err) {
+    if (btn) { btn.textContent = '📞 Call them manually'; btn.disabled = false; }
+    window.open('tel:' + e164);
+  }
+}
+
+function sendViaEmail(e164, inviteURL) {
+  const subject = encodeURIComponent('Join me on OpenCall');
+  const body    = encodeURIComponent(
+    `Hey!\n\nI tried calling you on OpenCall — free worldwide calling.\n\nNo app needed. Just tap this link and we can talk:\n${inviteURL}\n\nWorks in any browser.`
+  );
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+}
+
+async function sendViaTextBelt(e164, inviteURL) {
+  const phone    = e164     || window._invPhone;
+  const url      = inviteURL || window._invLink;
+  const btn      = document.getElementById('textbelt-btn');
+  const statusEl = document.getElementById('textbelt-status');
+
+  if (btn) { btn.textContent = 'Sending...'; btn.disabled = true; }
+  if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; }
+
+  try {
+    const resp = await fetch(
+      'https://opencall-server.onrender.com/reach/textbelt',
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ to: phone, inviteURL: url }),
+        signal:  AbortSignal.timeout(12000)
+      }
+    );
+
+    if (!resp.ok) throw new Error('Server returned ' + resp.status);
+    const data = await resp.json();
+
+    if (data.success) {
+      if (btn) btn.textContent = '✓ SMS sent!';
       if (statusEl) {
-        statusEl.style.color = 'var(--green)';
-        statusEl.textContent = '✓ ' + (data.message || 'SMS sent successfully');
+        statusEl.textContent  = 'Message delivered to ' + phone;
+        statusEl.style.color  = '#BFFF00';
+      }
+      showWaiting(phone, 'sms');
+    } else if (data.quotaExceeded) {
+      if (btn) { btn.textContent = '✗ Daily limit reached'; btn.disabled = false; }
+      if (statusEl) {
+        statusEl.textContent = 'Free SMS limit: 1/day. Use buttons above instead.';
+        statusEl.style.color = '#ff6b6b';
       }
     } else {
+      if (btn) { btn.textContent = '✗ SMS failed'; btn.disabled = false; }
       if (statusEl) {
-        statusEl.style.color = 'var(--red)';
-        statusEl.textContent = '✗ Failed — use the buttons above';
+        statusEl.textContent = 'Use the channel buttons above to send manually.';
+        statusEl.style.color = '#ff6b6b';
       }
     }
-  } catch(e) {
+  } catch(err) {
+    if (btn) { btn.textContent = '✗ Server unreachable'; btn.disabled = false; }
     if (statusEl) {
-      statusEl.style.color = 'var(--muted)';
-      statusEl.textContent = 'Server unavailable — use the buttons above';
+      statusEl.innerHTML    = 'Use the buttons above to send manually.<br>' +
+        '<small style="color:#888">Error: ' + err.message + '</small>';
     }
   }
 }
@@ -1986,7 +2188,7 @@ async function showInviteBanner(to) {
       <div id="channel-grid"></div>
       <div class="auto-send-row">
         <div class="divider">or send automatically</div>
-        <button id="textbelt-btn" onclick="sendViaTextBelt()">
+        <button id="textbelt-btn" onclick="sendViaTextBelt(window._invPhone, window._invLink)">
           📨 Send SMS automatically (free)
         </button>
         <div id="textbelt-status"></div>
