@@ -136,39 +136,53 @@ input::placeholder{color:var(--hint)}
 /* ── relay badge ── */
 .relay-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(255,159,67,.12);border:1px solid rgba(255,159,67,.3);border-radius:var(--r-pill);padding:4px 12px;font-size:10px;color:var(--orange);letter-spacing:.08em;text-transform:uppercase;margin-top:8px}
 
-/* ── invite banner ── */
-.invite-banner{width:100%;background:rgba(200,245,90,0.06);border:1px solid rgba(200,245,90,0.18);border-radius:var(--r);padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+/* ── invite panel ── */
+.invite-banner{width:100%;background:rgba(200,245,90,0.05);border:1px solid rgba(200,245,90,0.18);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:12px}
 .invite-banner-msg{font-size:12px;color:var(--muted);letter-spacing:.04em;line-height:1.5}
 .invite-banner-msg.ok{color:var(--green)}
 .invite-banner-msg.err{color:var(--red)}
-.btn-invite{padding:12px 16px;border-radius:var(--r);border:1px solid rgba(200,245,90,0.3);background:rgba(200,245,90,0.08);color:var(--accent);font-family:var(--mono);font-size:12px;cursor:pointer;letter-spacing:.06em;transition:all .15s;text-align:center;text-transform:uppercase}
-.btn-invite:hover{background:rgba(200,245,90,0.14);border-color:rgba(200,245,90,0.45)}
-.btn-invite:active{transform:scale(.97)}
-.btn-invite:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.inv-header{display:flex;align-items:center;gap:10px}
+.inv-header-flag{font-size:28px;line-height:1}
+.inv-header-title{font-size:14px;color:var(--tx);font-weight:600;letter-spacing:.02em}
+.inv-header-sub{font-size:10px;color:var(--muted);letter-spacing:.06em;margin-top:2px;text-transform:uppercase}
+.inv-link-row{display:flex;gap:8px;align-items:center}
+.inv-link-inp{flex:1;background:var(--s2);border:1px solid var(--b2);border-radius:var(--r);color:var(--hint);font-family:var(--mono);font-size:11px;padding:9px 12px;outline:none;cursor:text;letter-spacing:.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.inv-copy-btn{padding:9px 14px;border-radius:var(--r);border:1px solid rgba(200,245,90,0.3);background:rgba(200,245,90,0.08);color:var(--accent);font-family:var(--mono);font-size:11px;cursor:pointer;white-space:nowrap;transition:background .15s;letter-spacing:.04em;text-transform:uppercase}
+.inv-copy-btn:hover{background:rgba(200,245,90,0.16)}
+.inv-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+@media(max-width:400px){.inv-grid{grid-template-columns:repeat(3,1fr)}}
+.inv-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:12px 6px;background:var(--s1);border:1px solid var(--b2);border-radius:var(--r);cursor:pointer;font-family:var(--mono);transition:background .15s,border-color .15s,filter .15s}
+.inv-btn:hover{background:var(--s2);border-color:var(--b3);filter:brightness(1.12)}
+.inv-btn:active{transform:scale(.93);filter:brightness(1.2)}
+.inv-btn-ico{font-size:20px;line-height:1}
+.inv-btn-lbl{font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.inv-divider{display:flex;align-items:center;gap:10px;font-size:10px;color:var(--hint);letter-spacing:.08em;text-transform:uppercase;margin:4px 0}
+.inv-divider::before,.inv-divider::after{content:'';flex:1;height:1px;background:var(--b2)}
+.inv-auto-row{display:flex;flex-direction:column;gap:8px}
+.inv-auto-btn{padding:12px;border-radius:var(--r);border:1px solid var(--b2);background:var(--s1);color:var(--muted);font-family:var(--mono);font-size:12px;cursor:pointer;transition:all .15s;letter-spacing:.04em;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;text-align:center}
+.inv-auto-btn:hover{background:var(--s2);color:var(--tx);border-color:var(--b3)}
+.inv-auto-btn:disabled{opacity:.4;cursor:not-allowed}
+.inv-auto-btn.accent{border-color:rgba(200,245,90,0.3);background:rgba(200,245,90,0.08);color:var(--accent)}
+.inv-auto-btn.accent:hover{background:rgba(200,245,90,0.14)}
+.inv-send-result{font-size:11px;padding:4px 0;text-align:center;letter-spacing:.06em}
+.inv-send-result.ok{color:var(--green)}
+.inv-send-result.err{color:var(--red)}
+.inv-expand{margin-top:0}
+.inv-email-row{display:flex;gap:8px;padding-top:2px}
+.inv-email-row input{flex:1;background:var(--s1);border:1px solid var(--b2);border-radius:var(--r);color:var(--tx);font-family:var(--mono);font-size:13px;padding:10px 14px;outline:none;transition:border-color .2s,box-shadow .2s}
+.inv-email-row input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-d)}
+.inv-email-send{padding:10px 14px;border-radius:var(--r);border:1px solid rgba(200,245,90,0.3);background:rgba(200,245,90,0.08);color:var(--accent);font-family:var(--mono);font-size:11px;cursor:pointer;white-space:nowrap;transition:background .15s;letter-spacing:.04em;text-transform:uppercase}
+.inv-email-send:hover{background:rgba(200,245,90,0.16)}
+.inv-wechat-box{background:rgba(7,193,96,0.07);border:1px solid rgba(7,193,96,0.25);border-radius:var(--r);padding:12px;font-size:11px;color:var(--muted);line-height:1.7;text-align:center}
+.inv-qr-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0}
+.inv-qr-box{border-radius:10px;overflow:hidden;border:3px solid rgba(200,245,90,0.35)}
+.inv-qr-hint{font-size:10px;color:var(--hint);letter-spacing:.06em}
+.inv-note{font-size:11px;color:var(--muted);background:rgba(255,255,255,0.04);border-left:2px solid rgba(200,245,90,0.3);border-radius:0 var(--r) var(--r) 0;padding:10px 12px;line-height:1.6}
 
 /* ── platform chips ── */
 .platform-btn{background:#1a1a1a;padding:4px 8px;border-radius:8px;font-size:11px;white-space:nowrap;border:none;cursor:pointer;font-family:var(--mono);transition:opacity .15s,filter .15s}
 .platform-btn:hover{opacity:.75;filter:brightness(1.25)}
 .platform-btn:active{transform:scale(.93)}
-
-/* ── invite channel chips ── */
-.inv-sub{font-size:10px;color:var(--hint);letter-spacing:.06em;margin-top:-4px}
-.inv-chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none;-ms-overflow-style:none}
-.inv-chips::-webkit-scrollbar{display:none}
-.inv-chip{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 10px;background:var(--s2);border:1px solid var(--b2);border-radius:var(--r);cursor:pointer;font-family:var(--mono);transition:background .15s,border-color .15s}
-.inv-chip:hover{background:var(--s3);border-color:var(--b3)}
-.inv-chip:active{transform:scale(.91)}
-.inv-chip-ico{font-size:18px;line-height:1}
-.inv-chip-lbl{font-size:9px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
-.inv-expand{margin-top:2px}
-.inv-email-row{display:flex;gap:8px;padding-top:6px}
-.inv-email-row input{flex:1;background:var(--s1);border:1px solid var(--b2);border-radius:var(--r);color:var(--tx);font-family:var(--mono);font-size:13px;padding:10px 14px;outline:none;transition:border-color .2s,box-shadow .2s}
-.inv-email-row input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-d)}
-.inv-email-send{padding:10px 14px;border-radius:var(--r);border:1px solid rgba(200,245,90,0.3);background:rgba(200,245,90,0.08);color:var(--accent);font-family:var(--mono);font-size:11px;cursor:pointer;white-space:nowrap;transition:background .15s;letter-spacing:.04em;text-transform:uppercase}
-.inv-email-send:hover{background:rgba(200,245,90,0.16)}
-.inv-qr-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px 0}
-.inv-qr-box{border-radius:10px;overflow:hidden;border:3px solid rgba(200,245,90,0.35)}
-.inv-qr-hint{font-size:10px;color:var(--hint);letter-spacing:.06em}
 </style>
 </head>
 <body>
@@ -944,14 +958,19 @@ const PREFIX_MAP = {
 };
 
 const PLATFORM_ICONS = {
-  whatsapp:  { icon:'💬', name:'WhatsApp',  color:'#25D366' },
-  telegram:  { icon:'✈️',  name:'Telegram',  color:'#2AABEE' },
-  viber:     { icon:'📳', name:'Viber',      color:'#7360F2' },
-  line:      { icon:'💚', name:'LINE',       color:'#00B900' },
-  kakaotalk: { icon:'💛', name:'KakaoTalk', color:'#FAE100' },
-  wechat:    { icon:'🟢', name:'WeChat',    color:'#07C160' },
+  whatsapp:  { icon:'💬', name:'WhatsApp',   color:'#25D366' },
+  telegram:  { icon:'✈️',  name:'Telegram',   color:'#2AABEE' },
+  viber:     { icon:'📳', name:'Viber',       color:'#7360F2' },
+  line:      { icon:'🟩', name:'LINE',        color:'#00B900' },
+  kakaotalk: { icon:'💛', name:'KakaoTalk',  color:'#FAE100' },
+  wechat:    { icon:'🟢', name:'WeChat',     color:'#07C160' },
+  sms:       { icon:'💬', name:'SMS',         color:'#4285F4' },
+  signal:    { icon:'🔵', name:'Signal',      color:'#3A76F0' },
+  zalo:      { icon:'🔷', name:'Zalo',        color:'#0180C7' },
+  email:     { icon:'📧', name:'Email',       color:'#888888' },
+  call:      { icon:'📞', name:'Call first',  color:'#4dff91' },
   rcs:       { icon:'📨', name:'SMS/RCS',     color:'#4285F4' },
-  imessage:  { icon:'🔵', name:'iMessage',  color:'#007AFF' },
+  imessage:  { icon:'🔵', name:'iMessage',   color:'#007AFF' },
 };
 
 // ── WebRTC config — Google free STUN ──────────────────────
@@ -1467,98 +1486,91 @@ function showQRCode(link) {
   document.getElementById('app').appendChild(overlay);
 }
 
-// ── invite banner ─────────────────────────────────────────
-async function _invGenToken() {
-  const ocp  = myIdentity?.ocp_address || String(Date.now());
-  const raw  = new TextEncoder().encode(ocp + Date.now());
-  const hash = await crypto.subtle.digest('SHA-256', raw);
-  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('').slice(0,8);
-}
+// ── invite panel — worldwide reach-out system ──────────────
 
-function invMsg() {
-  const link = window._invLink || 'https://opencall.net/join';
-  return 'Hey! Call me free on OpenCall (no app needed):\n' + link +
+function invMsg(inviteUrl) {
+  const url = inviteUrl || window._invLink || 'https://opencall.net/join';
+  return 'Hey! Call me free on OpenCall (no app needed):\n' + url +
          '\nJust tap the link, browser opens, one tap to answer.';
 }
 
-async function showInviteBanner(to) {
-  document.getElementById('invite-banner')?.remove();
-  const token      = await _invGenToken();
-  window._invPhone = to;
-  window._invLink  = 'https://opencall.net/join/' + token;
-
-  const banner = document.createElement('div');
-  banner.id = 'invite-banner';
-  banner.className = 'invite-banner';
-  banner.innerHTML = `
-    <div class="invite-banner-msg">This number isn't on OpenCall yet</div>
-    <div class="inv-sub">Send them an invite link — they tap it to call you free:</div>
-    <div class="inv-chips">
-      <button class="inv-chip" onclick="invOpenWhatsApp()">
-        <span class="inv-chip-ico">💬</span><span class="inv-chip-lbl">WhatsApp</span>
-      </button>
-      <button class="inv-chip" onclick="invOpenSMS()">
-        <span class="inv-chip-ico">📱</span><span class="inv-chip-lbl">SMS</span>
-      </button>
-      <button class="inv-chip" onclick="invOpenTelegram()">
-        <span class="inv-chip-ico">✈️</span><span class="inv-chip-lbl">Telegram</span>
-      </button>
-      <button class="inv-chip" onclick="invOpenSignal()">
-        <span class="inv-chip-ico">🔒</span><span class="inv-chip-lbl">Signal</span>
-      </button>
-      <button class="inv-chip" onclick="invToggleEmail()">
-        <span class="inv-chip-ico">📧</span><span class="inv-chip-lbl">Email</span>
-      </button>
-      <button class="inv-chip" onclick="invOpenSkype()">
-        <span class="inv-chip-ico">💠</span><span class="inv-chip-lbl">Skype</span>
-      </button>
-      <button class="inv-chip" onclick="invOpenCall()">
-        <span class="inv-chip-ico">📞</span><span class="inv-chip-lbl">Call first</span>
-      </button>
-      <button class="inv-chip" onclick="invToggleQR()">
-        <span class="inv-chip-ico">📷</span><span class="inv-chip-lbl">QR</span>
-      </button>
-      <button class="inv-chip" onclick="invCopyLink()">
-        <span class="inv-chip-ico">📋</span><span class="inv-chip-lbl">Copy link</span>
-      </button>
-    </div>
-    <div class="inv-expand" id="inv-expand"></div>
-  `;
-  const anchor = document.getElementById('country-selector') || document.querySelector('.num-display');
-  if (anchor) anchor.parentNode.insertBefore(banner, anchor.nextSibling);
+function buildDeeplink(channel, phone, inviteUrl) {
+  const digits = (phone || '').replace(/\D/g, '');
+  const clean  = (phone || '').replace(/[^+\d]/g, '');
+  const encMsg = encodeURIComponent(invMsg(inviteUrl));
+  const encUrl = encodeURIComponent(inviteUrl || '');
+  switch (channel) {
+    case 'whatsapp':  return 'https://wa.me/' + digits + '?text=' + encMsg;
+    case 'telegram':  return 'https://t.me/share/url?url=' + encUrl + '&text=' + encMsg;
+    case 'viber':     return 'viber://forward?text=' + encMsg;
+    case 'line':      return 'https://line.me/R/share?text=' + encMsg;
+    case 'kakaotalk': return 'kakaotalk://sendurl?url=' + encUrl + '&text=' + encMsg;
+    case 'sms':       return 'sms:' + clean + '?body=' + encMsg;
+    case 'signal':    return 'https://signal.me/#p/' + clean;
+    case 'zalo':      return 'https://zalo.me/' + digits;
+    case 'call':      return 'tel:' + clean;
+    default:          return null;
+  }
 }
 
-function invOpenWhatsApp() {
-  const digits = (window._invPhone || '').replace(/\D/g, '');
-  window.open('https://wa.me/' + digits + '?text=' + encodeURIComponent(invMsg()), '_blank');
+function invClickChannel(ch) {
+  const link = window._invDeeplinks && window._invDeeplinks[ch];
+  if (!link) return;
+  if (/^(sms:|tel:|viber:|kakaotalk:)/i.test(link)) {
+    window.location.href = link;
+  } else {
+    window.open(link, '_blank');
+  }
 }
 
-function invOpenSMS() {
-  const clean = (window._invPhone || '').replace(/[^+\d]/g, '');
-  window.location.href = 'sms:' + clean + '?body=' + encodeURIComponent(invMsg());
+function invCopyLink() {
+  const url = window._invLink || '';
+  navigator.clipboard.writeText(url).then(() => {
+    toast('Invite link copied');
+    const btn = document.querySelector('.inv-copy-btn');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = orig; }, 2000);
+    }
+  });
 }
 
-function invOpenTelegram() {
-  window.open(
-    'https://t.me/share/url?url=' + encodeURIComponent(window._invLink || '') +
-    '&text=' + encodeURIComponent(invMsg()),
-    '_blank'
-  );
-}
+async function invSendAuto(channel) {
+  const btnId    = channel === 'textbelt' ? 'inv-tbelt-btn' : 'inv-waapi-btn';
+  const btn      = document.getElementById(btnId);
+  const resultEl = document.getElementById('inv-auto-result');
+  const origHtml = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  if (resultEl) { resultEl.className = 'inv-send-result'; resultEl.textContent = ''; }
 
-function invOpenSignal() {
-  const digits = (window._invPhone || '').replace(/\D/g, '');
-  window.open('https://signal.me/#p/+' + digits, '_blank');
-}
-
-function invOpenSkype() {
-  const clean = (window._invPhone || '').replace(/[^+\d]/g, '');
-  window.location.href = 'skype:' + clean + '?chat';
-}
-
-function invOpenCall() {
-  const clean = (window._invPhone || '').replace(/[^+\d]/g, '');
-  window.location.href = 'tel:' + clean;
+  const wsUrl   = document.getElementById('inp-server').value.trim();
+  const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+  try {
+    const res = await fetch(baseUrl + '/invite/send', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        channel,
+        phone:    window._invPhone,
+        url:      window._invLink,
+        from_ocp: myIdentity?.ocp_address || null
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      if (resultEl) {
+        resultEl.className   = 'inv-send-result ok';
+        resultEl.textContent = '✓ ' + (data.message || (channel === 'textbelt' ? 'SMS sent' : 'Sent via API'));
+      }
+    } else {
+      if (resultEl) { resultEl.className = 'inv-send-result err'; resultEl.textContent = '✗ Failed, try manually'; }
+      if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+    }
+  } catch(e) {
+    if (resultEl) { resultEl.className = 'inv-send-result err'; resultEl.textContent = '✗ Network error, try manually'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+  }
 }
 
 function invToggleEmail() {
@@ -1569,29 +1581,60 @@ function invToggleEmail() {
   el.innerHTML = `
     <div class="inv-email-row">
       <input type="email" id="inv-email-inp" placeholder="their@email.com" autocomplete="email">
-      <button class="inv-email-send" onclick="invSendEmail()">Open Mail ↗</button>
+      <button class="inv-email-send" onclick="invSendEmail()">Send invite</button>
     </div>
+    <div id="inv-email-result" class="inv-send-result"></div>
   `;
   document.getElementById('inv-email-inp').focus();
 }
 
-function invSendEmail() {
+async function invSendEmail() {
   const addr = (document.getElementById('inv-email-inp')?.value || '').trim();
   if (!addr) { document.getElementById('inv-email-inp')?.focus(); return; }
-  const subj = encodeURIComponent('Join me on OpenCall');
-  const body = encodeURIComponent(invMsg());
-  window.location.href = 'mailto:' + addr + '?subject=' + subj + '&body=' + body;
+  const sendBtn  = document.querySelector('.inv-email-send');
+  const resultEl = document.getElementById('inv-email-result');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+
+  const wsUrl   = document.getElementById('inp-server').value.trim();
+  const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+  try {
+    const res = await fetch(baseUrl + '/invite/send', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        channel:  'email',
+        email:    addr,
+        phone:    window._invPhone,
+        url:      window._invLink,
+        from_ocp: myIdentity?.ocp_address || null
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      if (resultEl) { resultEl.className = 'inv-send-result ok'; resultEl.textContent = '✓ ' + (data.message || 'Invite email sent'); }
+      if (sendBtn) sendBtn.textContent = 'Sent ✓';
+    } else {
+      if (resultEl) { resultEl.className = 'inv-send-result err'; resultEl.textContent = '✗ Failed to send email'; }
+      if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send invite'; }
+    }
+  } catch(e) {
+    if (resultEl) { resultEl.className = 'inv-send-result err'; resultEl.textContent = '✗ Network error'; }
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send invite'; }
+  }
 }
 
-function invToggleQR() {
+function invShowWeChatQR() {
   const el = document.getElementById('inv-expand');
   if (!el) return;
-  if (el.dataset.mode === 'qr') { el.innerHTML = ''; el.dataset.mode = ''; return; }
-  el.dataset.mode = 'qr';
+  if (el.dataset.mode === 'wechat') { el.innerHTML = ''; el.dataset.mode = ''; return; }
+  el.dataset.mode = 'wechat';
   el.innerHTML = `
-    <div class="inv-qr-wrap">
-      <div class="inv-qr-box" id="inv-qr-node"></div>
-      <div class="inv-qr-hint">Show this screen — they scan with their camera</div>
+    <div class="inv-wechat-box">
+      WeChat doesn't support direct links.<br>Show them this QR code:
+      <div class="inv-qr-wrap">
+        <div class="inv-qr-box" id="inv-qr-node"></div>
+        <div class="inv-qr-hint">They scan with WeChat's built-in scanner</div>
+      </div>
     </div>
   `;
   if (typeof QRCode === 'undefined') {
@@ -1621,53 +1664,119 @@ function _invRenderQR() {
   }
 }
 
-function invCopyLink() {
-  navigator.clipboard.writeText(window._invLink || '').then(() => toast('Invite link copied'));
-}
+async function showInviteBanner(to) {
+  document.getElementById('invite-banner')?.remove();
+  window._invPhone = to;
 
-async function sendInvite(to) {
-  const btn = document.getElementById('btn-send-invite');
-  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  const countryCode = detectCountryFromNumber(to || '');
+  const country     = countryCode ? COUNTRY_DATA[countryCode] : null;
+  const isChina     = countryCode === 'CN';
 
-  // Normalize to full E.164: strip whitespace/dashes, prepend country prefix if missing
-  let phone = (to || '').replace(/[\s\-().]/g, '');
-  if (!phone.startsWith('+')) {
-    const cc = window._selectedCountry;
-    const prefix = cc && COUNTRY_DATA[cc] ? COUNTRY_DATA[cc].prefix : '';
-    if (prefix) phone = prefix + phone;
-  }
-
-  const wsUrl = document.getElementById('inp-server').value.trim();
+  const wsUrl   = document.getElementById('inp-server').value.trim();
   const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-  const safeNum = phone.replace(/'/g, "\\'");
 
+  // Step 1: Fetch invite token from server
+  let inviteUrl = 'https://opencall.net/join/' + Date.now().toString(36);
   try {
-    const res = await fetch(baseUrl + '/invite', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, from_ocp: myIdentity?.ocp_address || null })
-    });
-
-    const banner = document.getElementById('invite-banner');
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      const via = data.carrier ? ` via ${data.carrier}` : '';
-      if (banner) banner.innerHTML =
-        `<div class="invite-banner-msg ok">Invite sent${via}! They'll receive a text with a link</div>`;
-    } else {
-      if (banner) banner.innerHTML = `
-        <div class="invite-banner-msg err">Couldn't find carrier for this number</div>
-        <button class="btn-invite" onclick="sendInvite('${safeNum}')">Try again</button>
-      `;
+    const tokenRes = await fetch(
+      baseUrl + '/invite/token?from=' + encodeURIComponent(myIdentity?.ocp_address || ''),
+      { signal: AbortSignal.timeout(4000) }
+    );
+    if (tokenRes.ok) {
+      const tokenData = await tokenRes.json();
+      if (tokenData.url) inviteUrl = tokenData.url;
     }
-  } catch(e) {
-    const banner = document.getElementById('invite-banner');
-    if (banner) banner.innerHTML = `
-      <div class="invite-banner-msg err">Couldn't find carrier for this number</div>
-      <button class="btn-invite" onclick="sendInvite('${safeNum}')">Try again</button>
-    `;
-  }
+  } catch(e) { /* keep fallback */ }
+  window._invLink = inviteUrl;
+
+  // Step 2: Fetch channel list for this country/number
+  let channels   = ['whatsapp', 'telegram', 'sms', 'viber'];
+  let serverNote = '';
+  try {
+    const params = new URLSearchParams({ country: countryCode || '', number: to || '' });
+    const chRes  = await fetch(baseUrl + '/invite/channels?' + params,
+                               { signal: AbortSignal.timeout(3000) });
+    if (chRes.ok) {
+      const chData = await chRes.json();
+      if (Array.isArray(chData.channels) && chData.channels.length) channels = chData.channels;
+      serverNote = chData.note || '';
+    }
+  } catch(e) { /* keep defaults */ }
+
+  // Step 3: Build deeplinks map for all channels
+  window._invDeeplinks = {};
+  channels.forEach(ch => {
+    const dl = buildDeeplink(ch, to, inviteUrl);
+    if (dl) window._invDeeplinks[ch] = dl;
+  });
+
+  // Header with flag + country name
+  const headerHtml = country
+    ? `<div class="inv-header">
+         <span class="inv-header-flag">${country.flag}</span>
+         <div>
+           <div class="inv-header-title">${country.name}</div>
+           <div class="inv-header-sub">Not on OpenCall yet · Send invite</div>
+         </div>
+       </div>`
+    : `<div class="invite-banner-msg">This number isn't on OpenCall yet</div>`;
+
+  // Build channel grid
+  const gridBtns = channels.map(ch => {
+    const info = PLATFORM_ICONS[ch];
+    if (!info) return '';
+    if (ch === 'wechat') {
+      return `<button class="inv-btn" onclick="invShowWeChatQR()">
+        <span class="inv-btn-ico">${info.icon}</span>
+        <span class="inv-btn-lbl">${info.name}</span>
+      </button>`;
+    }
+    if (ch === 'email') {
+      return `<button class="inv-btn" onclick="invToggleEmail()">
+        <span class="inv-btn-ico">${info.icon}</span>
+        <span class="inv-btn-lbl">${info.name}</span>
+      </button>`;
+    }
+    if (!window._invDeeplinks[ch]) return '';
+    return `<button class="inv-btn" onclick="invClickChannel('${ch}')">
+      <span class="inv-btn-ico">${info.icon}</span>
+      <span class="inv-btn-lbl">${info.name}</span>
+    </button>`;
+  }).filter(Boolean).join('');
+
+  const banner = document.createElement('div');
+  banner.id = 'invite-banner';
+  banner.className = 'invite-banner';
+  banner.innerHTML = `
+    ${headerHtml}
+    ${serverNote ? `<div class="inv-note">${serverNote}</div>` : ''}
+    <div class="inv-link-row">
+      <input class="inv-link-inp" id="inv-url-display" type="text" readonly
+             value="${inviteUrl.replace(/"/g, '&quot;')}">
+      <button class="inv-copy-btn" onclick="invCopyLink()">Copy link</button>
+    </div>
+    <div class="inv-grid">${gridBtns}</div>
+    <div id="inv-expand"></div>
+    <div class="inv-divider">or send automatically</div>
+    <div class="inv-auto-row">
+      <button class="inv-auto-btn accent" id="inv-tbelt-btn" onclick="invSendAuto('textbelt')">
+        💬 Send SMS automatically
+      </button>
+      <button class="inv-auto-btn" id="inv-waapi-btn" onclick="invSendAuto('whatsapp_api')">
+        💬 Send via WhatsApp API
+      </button>
+      <div id="inv-auto-result"></div>
+    </div>
+  `;
+
+  const anchor = document.getElementById('country-selector') || document.querySelector('.num-display');
+  if (anchor) anchor.parentNode.insertBefore(banner, anchor.nextSibling);
+
+  // WeChat/China: auto-show QR
+  if (isChina) setTimeout(invShowWeChatQR, 100);
 }
+
+// (invite functions defined above in showInviteBanner block)
 
 // ── country detection ──────────────────────────────────────
 function detectCountryFromNumber(number) {
