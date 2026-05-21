@@ -1540,16 +1540,20 @@ async function invSendAuto(channel) {
   const btnId    = channel === 'textbelt' ? 'inv-tbelt-btn' : 'inv-waapi-btn';
   const btn      = document.getElementById(btnId);
   const resultEl = document.getElementById('inv-auto-result');
-  const origHtml = btn ? btn.innerHTML : '';
+  // Button stays disabled for the lifetime of this attempt — no retry loop.
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
   if (resultEl) { resultEl.className = 'inv-send-result'; resultEl.textContent = ''; }
 
   const wsUrl   = document.getElementById('inp-server').value.trim();
   const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
   try {
     const res = await fetch(baseUrl + '/invite/send', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal:  ctrl.signal,
       body:    JSON.stringify({
         channel,
         phone:    window._invPhone,
@@ -1557,6 +1561,7 @@ async function invSendAuto(channel) {
         from_ocp: myIdentity?.ocp_address || null
       })
     });
+    clearTimeout(timer);
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
       if (resultEl) {
@@ -1565,11 +1570,15 @@ async function invSendAuto(channel) {
       }
     } else {
       if (resultEl) { resultEl.className = 'inv-send-result err'; resultEl.textContent = '✗ Failed, try manually'; }
-      if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+      // button stays disabled — caller should use manual deep-link buttons instead
     }
   } catch(e) {
-    if (resultEl) { resultEl.className = 'inv-send-result err'; resultEl.textContent = '✗ Network error, try manually'; }
-    if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+    clearTimeout(timer);
+    if (resultEl) {
+      resultEl.className   = 'inv-send-result err';
+      resultEl.textContent = 'Server unavailable — use the buttons above to send manually';
+    }
+    // button stays disabled — no retry
   }
 }
 
@@ -1593,14 +1602,19 @@ async function invSendEmail() {
   if (!addr) { document.getElementById('inv-email-inp')?.focus(); return; }
   const sendBtn  = document.querySelector('.inv-email-send');
   const resultEl = document.getElementById('inv-email-result');
+  // Button stays disabled — single attempt only, no retry loop.
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
   const wsUrl   = document.getElementById('inp-server').value.trim();
   const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
   try {
     const res = await fetch(baseUrl + '/invite/send', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal:  ctrl.signal,
       body:    JSON.stringify({
         channel:  'email',
         email:    addr,
@@ -1609,17 +1623,22 @@ async function invSendEmail() {
         from_ocp: myIdentity?.ocp_address || null
       })
     });
+    clearTimeout(timer);
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
       if (resultEl) { resultEl.className = 'inv-send-result ok'; resultEl.textContent = '✓ ' + (data.message || 'Invite email sent'); }
       if (sendBtn) sendBtn.textContent = 'Sent ✓';
     } else {
       if (resultEl) { resultEl.className = 'inv-send-result err'; resultEl.textContent = '✗ Failed to send email'; }
-      if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send invite'; }
+      // button stays disabled — no retry
     }
   } catch(e) {
-    if (resultEl) { resultEl.className = 'inv-send-result err'; resultEl.textContent = '✗ Network error'; }
-    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send invite'; }
+    clearTimeout(timer);
+    if (resultEl) {
+      resultEl.className   = 'inv-send-result err';
+      resultEl.textContent = 'Server unavailable — use the buttons above to send manually';
+    }
+    // button stays disabled — no retry
   }
 }
 
@@ -1664,116 +1683,147 @@ function _invRenderQR() {
   }
 }
 
-async function showInviteBanner(to) {
+// Fallback shown when the invite panel throws unexpectedly.
+function _invShowFallback(to, inviteUrl) {
   document.getElementById('invite-banner')?.remove();
+  const url        = inviteUrl || window._invLink || 'https://opencall.net/join/' + Date.now().toString(36);
+  window._invLink  = url;
   window._invPhone = to;
-
-  const countryCode = detectCountryFromNumber(to || '');
-  const country     = countryCode ? COUNTRY_DATA[countryCode] : null;
-  const isChina     = countryCode === 'CN';
-
-  const wsUrl   = document.getElementById('inp-server').value.trim();
-  const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-
-  // Step 1: Fetch invite token from server
-  let inviteUrl = 'https://opencall.net/join/' + Date.now().toString(36);
-  try {
-    const tokenRes = await fetch(
-      baseUrl + '/invite/token?from=' + encodeURIComponent(myIdentity?.ocp_address || ''),
-      { signal: AbortSignal.timeout(4000) }
-    );
-    if (tokenRes.ok) {
-      const tokenData = await tokenRes.json();
-      if (tokenData.url) inviteUrl = tokenData.url;
-    }
-  } catch(e) { /* keep fallback */ }
-  window._invLink = inviteUrl;
-
-  // Step 2: Fetch channel list for this country/number
-  let channels   = ['whatsapp', 'telegram', 'sms', 'viber'];
-  let serverNote = '';
-  try {
-    const params = new URLSearchParams({ country: countryCode || '', number: to || '' });
-    const chRes  = await fetch(baseUrl + '/invite/channels?' + params,
-                               { signal: AbortSignal.timeout(3000) });
-    if (chRes.ok) {
-      const chData = await chRes.json();
-      if (Array.isArray(chData.channels) && chData.channels.length) channels = chData.channels;
-      serverNote = chData.note || '';
-    }
-  } catch(e) { /* keep defaults */ }
-
-  // Step 3: Build deeplinks map for all channels
-  window._invDeeplinks = {};
-  channels.forEach(ch => {
-    const dl = buildDeeplink(ch, to, inviteUrl);
-    if (dl) window._invDeeplinks[ch] = dl;
-  });
-
-  // Header with flag + country name
-  const headerHtml = country
-    ? `<div class="inv-header">
-         <span class="inv-header-flag">${country.flag}</span>
-         <div>
-           <div class="inv-header-title">${country.name}</div>
-           <div class="inv-header-sub">Not on OpenCall yet · Send invite</div>
-         </div>
-       </div>`
-    : `<div class="invite-banner-msg">This number isn't on OpenCall yet</div>`;
-
-  // Build channel grid
-  const gridBtns = channels.map(ch => {
-    const info = PLATFORM_ICONS[ch];
-    if (!info) return '';
-    if (ch === 'wechat') {
-      return `<button class="inv-btn" onclick="invShowWeChatQR()">
-        <span class="inv-btn-ico">${info.icon}</span>
-        <span class="inv-btn-lbl">${info.name}</span>
-      </button>`;
-    }
-    if (ch === 'email') {
-      return `<button class="inv-btn" onclick="invToggleEmail()">
-        <span class="inv-btn-ico">${info.icon}</span>
-        <span class="inv-btn-lbl">${info.name}</span>
-      </button>`;
-    }
-    if (!window._invDeeplinks[ch]) return '';
-    return `<button class="inv-btn" onclick="invClickChannel('${ch}')">
-      <span class="inv-btn-ico">${info.icon}</span>
-      <span class="inv-btn-lbl">${info.name}</span>
-    </button>`;
-  }).filter(Boolean).join('');
-
-  const banner = document.createElement('div');
-  banner.id = 'invite-banner';
+  const safeUrl    = url.replace(/"/g, '&quot;');
+  const banner     = document.createElement('div');
+  banner.id        = 'invite-banner';
   banner.className = 'invite-banner';
   banner.innerHTML = `
-    ${headerHtml}
-    ${serverNote ? `<div class="inv-note">${serverNote}</div>` : ''}
+    <div class="invite-banner-msg">Copy this link and send manually:</div>
     <div class="inv-link-row">
-      <input class="inv-link-inp" id="inv-url-display" type="text" readonly
-             value="${inviteUrl.replace(/"/g, '&quot;')}">
+      <input class="inv-link-inp" type="text" readonly value="${safeUrl}">
       <button class="inv-copy-btn" onclick="invCopyLink()">Copy link</button>
     </div>
-    <div class="inv-grid">${gridBtns}</div>
-    <div id="inv-expand"></div>
-    <div class="inv-divider">or send automatically</div>
-    <div class="inv-auto-row">
-      <button class="inv-auto-btn accent" id="inv-tbelt-btn" onclick="invSendAuto('textbelt')">
-        💬 Send SMS automatically
-      </button>
-      <button class="inv-auto-btn" id="inv-waapi-btn" onclick="invSendAuto('whatsapp_api')">
-        💬 Send via WhatsApp API
-      </button>
-      <div id="inv-auto-result"></div>
-    </div>
   `;
-
   const anchor = document.getElementById('country-selector') || document.querySelector('.num-display');
   if (anchor) anchor.parentNode.insertBefore(banner, anchor.nextSibling);
+}
 
-  // WeChat/China: auto-show QR
-  if (isChina) setTimeout(invShowWeChatQR, 100);
+async function showInviteBanner(to) {
+  // inviteUrl hoisted so the outer catch can reference it in the fallback.
+  let inviteUrl = 'https://opencall.net/join/' + Date.now().toString(36);
+  try {
+    document.getElementById('invite-banner')?.remove();
+    window._invPhone = to;
+
+    const countryCode = detectCountryFromNumber(to || '');
+    const country     = countryCode ? COUNTRY_DATA[countryCode] : null;
+    const isChina     = countryCode === 'CN';
+
+    const wsUrl   = document.getElementById('inp-server').value.trim();
+    const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+
+    // Step 1: Fetch invite token — one attempt, 4 s timeout, keep local fallback on any error.
+    try {
+      const tokenRes = await fetch(
+        baseUrl + '/invite/token?from=' + encodeURIComponent(myIdentity?.ocp_address || ''),
+        { signal: AbortSignal.timeout(4000) }
+      );
+      if (tokenRes.ok) {
+        const tokenData = await tokenRes.json().catch(() => ({}));
+        if (tokenData.url) inviteUrl = tokenData.url;
+      }
+    } catch(e) { /* keep local fallback URL */ }
+    window._invLink = inviteUrl;
+
+    // Step 2: Fetch channel list — fall back to hardcoded defaults on ANY failure
+    // (404, CORS, network error, timeout). Buttons always show.
+    const DEFAULT_CHANNELS = ['whatsapp', 'telegram', 'sms', 'viber'];
+    let channels   = DEFAULT_CHANNELS.slice();
+    let serverNote = '';
+    try {
+      const params = new URLSearchParams({ country: countryCode || '', number: to || '' });
+      const chRes  = await fetch(baseUrl + '/invite/channels?' + params,
+                                 { signal: AbortSignal.timeout(3000) });
+      if (chRes.ok) {
+        const chData = await chRes.json().catch(() => ({}));
+        if (Array.isArray(chData.channels) && chData.channels.length) channels = chData.channels;
+        serverNote = chData.note || '';
+      }
+      // non-ok (404, CORS, server error) → fall through to DEFAULT_CHANNELS silently
+    } catch(e) { /* server unavailable — DEFAULT_CHANNELS already in place */ }
+
+    // Step 3: Build deeplinks map for all channels
+    window._invDeeplinks = {};
+    channels.forEach(ch => {
+      const dl = buildDeeplink(ch, to, inviteUrl);
+      if (dl) window._invDeeplinks[ch] = dl;
+    });
+
+    // Header with flag + country name
+    const headerHtml = country
+      ? `<div class="inv-header">
+           <span class="inv-header-flag">${country.flag}</span>
+           <div>
+             <div class="inv-header-title">${country.name}</div>
+             <div class="inv-header-sub">Not on OpenCall yet · Send invite</div>
+           </div>
+         </div>`
+      : `<div class="invite-banner-msg">This number isn't on OpenCall yet</div>`;
+
+    // Build channel grid
+    const gridBtns = channels.map(ch => {
+      const info = PLATFORM_ICONS[ch];
+      if (!info) return '';
+      if (ch === 'wechat') {
+        return `<button class="inv-btn" onclick="invShowWeChatQR()">
+          <span class="inv-btn-ico">${info.icon}</span>
+          <span class="inv-btn-lbl">${info.name}</span>
+        </button>`;
+      }
+      if (ch === 'email') {
+        return `<button class="inv-btn" onclick="invToggleEmail()">
+          <span class="inv-btn-ico">${info.icon}</span>
+          <span class="inv-btn-lbl">${info.name}</span>
+        </button>`;
+      }
+      if (!window._invDeeplinks[ch]) return '';
+      return `<button class="inv-btn" onclick="invClickChannel('${ch}')">
+        <span class="inv-btn-ico">${info.icon}</span>
+        <span class="inv-btn-lbl">${info.name}</span>
+      </button>`;
+    }).filter(Boolean).join('');
+
+    const banner = document.createElement('div');
+    banner.id = 'invite-banner';
+    banner.className = 'invite-banner';
+    banner.innerHTML = `
+      ${headerHtml}
+      ${serverNote ? `<div class="inv-note">${serverNote}</div>` : ''}
+      <div class="inv-link-row">
+        <input class="inv-link-inp" id="inv-url-display" type="text" readonly
+               value="${inviteUrl.replace(/"/g, '&quot;')}">
+        <button class="inv-copy-btn" onclick="invCopyLink()">Copy link</button>
+      </div>
+      <div class="inv-grid">${gridBtns}</div>
+      <div id="inv-expand"></div>
+      <div class="inv-divider">or send automatically</div>
+      <div class="inv-auto-row">
+        <button class="inv-auto-btn accent" id="inv-tbelt-btn" onclick="invSendAuto('textbelt')">
+          💬 Send SMS automatically
+        </button>
+        <button class="inv-auto-btn" id="inv-waapi-btn" onclick="invSendAuto('whatsapp_api')">
+          💬 Send via WhatsApp API
+        </button>
+        <div id="inv-auto-result"></div>
+      </div>
+    `;
+
+    const anchor = document.getElementById('country-selector') || document.querySelector('.num-display');
+    if (anchor) anchor.parentNode.insertBefore(banner, anchor.nextSibling);
+
+    // WeChat/China: auto-show QR
+    if (isChina) setTimeout(invShowWeChatQR, 100);
+
+  } catch(e) {
+    console.error('[Invite] Panel error:', e.message);
+    _invShowFallback(to, inviteUrl);
+  }
 }
 
 // (invite functions defined above in showInviteBanner block)
