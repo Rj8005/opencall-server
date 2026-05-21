@@ -183,6 +183,36 @@ input::placeholder{color:var(--hint)}
 .platform-btn{background:#1a1a1a;padding:4px 8px;border-radius:8px;font-size:11px;white-space:nowrap;border:none;cursor:pointer;font-family:var(--mono);transition:opacity .15s,filter .15s}
 .platform-btn:hover{opacity:.75;filter:brightness(1.25)}
 .platform-btn:active{transform:scale(.93)}
+
+/* ── channel engine ── */
+#invite-panel{width:100%;display:flex;flex-direction:column;gap:12px}
+.invite-header{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--tx);letter-spacing:.02em}
+.red-dot{color:var(--red);font-size:16px;line-height:1}
+.invite-sub{font-size:11px;color:var(--muted);letter-spacing:.04em}
+.invite-link-row{display:flex;gap:8px;align-items:center}
+#invite-link-input{flex:1;background:var(--s2);border:1px solid var(--b2);border-radius:var(--r);color:var(--hint);font-family:var(--mono);font-size:11px;padding:9px 12px;outline:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.country-row{display:flex;align-items:center;gap:8px;font-size:12px;flex-wrap:wrap}
+.muted{color:var(--muted)}
+.channel-btn{display:flex;flex-direction:column;align-items:center;padding:12px 8px;background:rgba(255,255,255,0.05);border:1px solid;border-radius:12px;cursor:pointer;transition:all .2s;min-width:0;font-family:var(--mono)}
+.channel-btn:hover{background:rgba(255,255,255,0.12);transform:translateY(-2px)}
+.channel-btn:active{transform:translateY(0) scale(.93)}
+.ch-emoji{font-size:22px;line-height:1}
+.ch-label{font-size:10px;color:#fff;margin-top:4px;text-align:center;letter-spacing:.03em}
+.ch-score{font-size:10px;margin-top:2px;font-weight:bold}
+#channel-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:4px 0}
+@media(max-width:400px){#channel-grid{grid-template-columns:repeat(3,1fr)}}
+.auto-send-row{display:flex;flex-direction:column;gap:8px}
+.divider{display:flex;align-items:center;gap:10px;font-size:10px;color:var(--hint);letter-spacing:.08em;text-transform:uppercase}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--b2)}
+#textbelt-btn{padding:12px;border-radius:var(--r);border:1px solid rgba(200,245,90,0.3);background:rgba(200,245,90,0.08);color:var(--accent);font-family:var(--mono);font-size:12px;cursor:pointer;width:100%;transition:all .15s;letter-spacing:.04em;display:flex;align-items:center;justify-content:center;gap:6px}
+#textbelt-btn:hover{background:rgba(200,245,90,0.14)}
+#textbelt-btn:disabled{opacity:.4;cursor:not-allowed}
+#textbelt-status{font-size:11px;text-align:center;padding:4px 0;letter-spacing:.06em;min-height:18px}
+.waiting-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px 0;text-align:center}
+.pulse-ring{width:60px;height:60px;border:3px solid #BFFF00;border-radius:50%;animation:pulse-channel 1.5s infinite;margin:0 auto 8px}
+@keyframes pulse-channel{0%{transform:scale(1);opacity:1}50%{transform:scale(1.2);opacity:.5}100%{transform:scale(1);opacity:1}}
+.waiting-text{font-size:14px;color:var(--tx);font-weight:600}
+.waiting-sub{font-size:12px;color:var(--muted);line-height:1.5}
 </style>
 </head>
 <body>
@@ -973,6 +1003,44 @@ const PLATFORM_ICONS = {
   imessage:  { icon:'🔵', name:'iMessage',   color:'#007AFF' },
 };
 
+// ── Channel engine — country scoring map ──────────────────
+const COUNTRY_SCORES = {
+  "IN": { whatsapp:95, sms:80, telegram:65, viber:30, signal:20, email:60, call:90 },
+  "US": { whatsapp:40, sms:95, telegram:25, viber:10, signal:35, email:70, call:85 },
+  "GB": { whatsapp:75, sms:85, telegram:30, viber:15, signal:25, email:70, call:80 },
+  "RU": { whatsapp:50, sms:70, telegram:95, viber:80, signal:15, email:55, call:85 },
+  "IR": { whatsapp:40, sms:60, telegram:95, viber:20, signal:20, email:40, call:85 },
+  "CN": { whatsapp:10, sms:65, telegram:5,  viber:5,  signal:5,  email:50, call:90 },
+  "JP": { whatsapp:35, sms:75, telegram:20, viber:10, signal:15, email:65, call:85 },
+  "KR": { whatsapp:30, sms:80, telegram:20, viber:10, signal:10, email:60, call:85 },
+  "BR": { whatsapp:95, sms:70, telegram:40, viber:15, signal:15, email:50, call:85 },
+  "DE": { whatsapp:80, sms:75, telegram:35, viber:20, signal:40, email:70, call:80 },
+  "NG": { whatsapp:90, sms:80, telegram:40, viber:15, signal:10, email:45, call:85 },
+  "PK": { whatsapp:90, sms:75, telegram:50, viber:20, signal:15, email:40, call:85 },
+  "BD": { whatsapp:85, sms:75, telegram:45, viber:15, signal:10, email:35, call:85 },
+  "ID": { whatsapp:90, sms:75, telegram:55, viber:20, signal:10, email:45, call:85 },
+  "PH": { whatsapp:80, sms:85, telegram:45, viber:60, signal:10, email:50, call:85 },
+  "VN": { whatsapp:70, sms:75, telegram:40, viber:50, signal:10, email:45, call:85 },
+  "UA": { whatsapp:60, sms:70, telegram:70, viber:85, signal:20, email:55, call:85 },
+  "TR": { whatsapp:85, sms:75, telegram:45, viber:25, signal:15, email:55, call:85 },
+  "MX": { whatsapp:90, sms:75, telegram:35, viber:10, signal:15, email:55, call:85 },
+  "AR": { whatsapp:90, sms:70, telegram:40, viber:10, signal:15, email:55, call:85 },
+  "ZA": { whatsapp:90, sms:80, telegram:30, viber:15, signal:10, email:50, call:85 },
+  "EG": { whatsapp:85, sms:70, telegram:45, viber:20, signal:10, email:45, call:85 },
+  "SA": { whatsapp:90, sms:70, telegram:50, viber:20, signal:10, email:50, call:85 },
+  "DEFAULT": { whatsapp:70, sms:80, telegram:40, viber:25, signal:20, email:60, call:85 }
+};
+
+const CHANNEL_CONFIG = {
+  whatsapp: { label:'WhatsApp',  emoji:'💬', color:'#25D366' },
+  telegram: { label:'Telegram',  emoji:'✈️',  color:'#0088cc' },
+  sms:      { label:'SMS',       emoji:'📱', color:'#666666' },
+  viber:    { label:'Viber',     emoji:'📳', color:'#7360F2' },
+  signal:   { label:'Signal',    emoji:'🔵', color:'#3A76F0' },
+  email:    { label:'Email',     emoji:'📧', color:'#EA4335' },
+  call:     { label:'Call first',emoji:'📞', color:'#34A853' }
+};
+
 // ── WebRTC config — Google free STUN ──────────────────────
 const RTC_CFG = {
   iceServers: [
@@ -1683,15 +1751,180 @@ function _invRenderQR() {
   }
 }
 
+// ── Channel engine — zero-setup worldwide invite system ───
+
+function detectCountry(e164) {
+  const n = e164.replace('+', '');
+  const prefixMap = {
+    '91':'IN',  '1':'US',   '44':'GB',  '7':'RU',   '98':'IR',
+    '86':'CN',  '81':'JP',  '82':'KR',  '55':'BR',  '49':'DE',
+    '234':'NG', '92':'PK',  '880':'BD', '62':'ID',  '63':'PH',
+    '84':'VN',  '380':'UA', '90':'TR',  '52':'MX',  '54':'AR',
+    '27':'ZA',  '20':'EG',  '966':'SA', '971':'AE', '60':'MY',
+    '66':'TH',  '94':'LK',  '977':'NP', '256':'UG',
+    '254':'KE', '233':'GH', '213':'DZ', '212':'MA'
+  };
+  for (const len of [3, 2, 1]) {
+    const prefix = n.substring(0, len);
+    if (prefixMap[prefix]) return prefixMap[prefix];
+  }
+  return 'DEFAULT';
+}
+
+function buildDeepLinks(e164, inviteURL) {
+  const num = e164.replace('+', '');
+  const msg = encodeURIComponent(
+    `Hey! Call me free on OpenCall — no app needed, just tap: ${inviteURL}`
+  );
+  return {
+    whatsapp: `https://wa.me/${num}?text=${msg}`,
+    telegram: `https://t.me/${e164}`,
+    sms:      `sms:${e164}?body=${msg}`,
+    viber:    `viber://chat?number=%2B${num}`,
+    signal:   `https://signal.me/#p/${e164}`,
+    email:    `mailto:?subject=Join me on OpenCall&body=${msg}`,
+    call:     `tel:${e164}`
+  };
+}
+
+function getRankedChannels(e164) {
+  const country = detectCountry(e164);
+  const scores  = COUNTRY_SCORES[country] || COUNTRY_SCORES['DEFAULT'];
+  return Object.entries(scores)
+    .sort((a, b) => b[1] - a[1])
+    .map(([channel, score]) => ({ channel, score, country }));
+}
+
+function renderChannelButtons(e164, inviteURL) {
+  const ranked = getRankedChannels(e164);
+  const links  = buildDeepLinks(e164, inviteURL);
+  const grid   = document.getElementById('channel-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  ranked.forEach(({ channel, score }) => {
+    const cfg = CHANNEL_CONFIG[channel];
+    if (!cfg) return;
+    const { label, emoji, color } = cfg;
+    const link = links[channel];
+    const btn  = document.createElement('button');
+    btn.className = 'channel-btn';
+    btn.style.borderColor = color;
+    btn.innerHTML = `
+      <span class="ch-emoji">${emoji}</span>
+      <span class="ch-label">${label}</span>
+      <span class="ch-score" style="color:${color}">${score}%</span>
+    `;
+    btn.onclick = () => {
+      if (link) {
+        const isMobileScheme = /^(sms:|tel:|viber:)/i.test(link);
+        if (isMobileScheme) { window.location.href = link; }
+        else { window.open(link, '_blank'); }
+      }
+      showWaiting(e164, channel);
+    };
+    grid.appendChild(btn);
+  });
+}
+
+function showWaiting(e164, channel) {
+  const panel = document.getElementById('invite-panel');
+  if (!panel) return;
+  const cfg = CHANNEL_CONFIG[channel] || { label: channel };
+  panel.innerHTML = `
+    <div class="waiting-state">
+      <div class="pulse-ring"></div>
+      <div class="waiting-text">Invite sent via ${cfg.label}</div>
+      <div class="waiting-sub">Waiting for ${e164} to join OpenCall…</div>
+      <button class="inv-auto-btn" onclick="showInvitePanel()" style="margin-top:8px">
+        Try another way
+      </button>
+    </div>
+  `;
+  startJoinPolling(e164);
+}
+
+function startJoinPolling(e164) {
+  const interval = setInterval(async () => {
+    const found = await dhtLookupPhone(e164);
+    if (found) {
+      clearInterval(interval);
+      toast(e164 + ' joined OpenCall! Connecting…');
+      document.getElementById('invite-panel')?.remove();
+      document.getElementById('inp-dial').value = e164;
+      doCall();
+    }
+  }, 5000);
+  setTimeout(() => clearInterval(interval), 600000);
+}
+
+function showInvitePanel() {
+  showInviteBanner(window._invPhone);
+}
+
+function copyInviteLink() {
+  const url = window._invLink || '';
+  navigator.clipboard.writeText(url).then(() => {
+    toast('Invite link copied');
+    const btn = document.querySelector('#invite-panel .inv-copy-btn');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = orig; }, 2000);
+    }
+  });
+}
+
+async function sendViaTextBelt() {
+  const btn      = document.getElementById('textbelt-btn');
+  const statusEl = document.getElementById('textbelt-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; }
+
+  const wsUrl   = document.getElementById('inp-server').value.trim();
+  const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+
+  try {
+    const res = await fetch(baseUrl + '/invite/send', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal:  AbortSignal.timeout(10000),
+      body:    JSON.stringify({
+        channel:  'textbelt',
+        phone:    window._invPhone,
+        url:      window._invLink,
+        from_ocp: myIdentity?.ocp_address || null
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      if (statusEl) {
+        statusEl.style.color = 'var(--green)';
+        statusEl.textContent = '✓ ' + (data.message || 'SMS sent successfully');
+      }
+    } else {
+      if (statusEl) {
+        statusEl.style.color = 'var(--red)';
+        statusEl.textContent = '✗ Failed — use the buttons above';
+      }
+    }
+  } catch(e) {
+    if (statusEl) {
+      statusEl.style.color = 'var(--muted)';
+      statusEl.textContent = 'Server unavailable — use the buttons above';
+    }
+  }
+}
+
 // Fallback shown when the invite panel throws unexpectedly.
 function _invShowFallback(to, inviteUrl) {
-  document.getElementById('invite-banner')?.remove();
+  document.getElementById('invite-panel')?.remove();
   const url        = inviteUrl || window._invLink || 'https://opencall.net/join/' + Date.now().toString(36);
   window._invLink  = url;
   window._invPhone = to;
   const safeUrl    = url.replace(/"/g, '&quot;');
   const banner     = document.createElement('div');
-  banner.id        = 'invite-banner';
+  banner.id        = 'invite-panel';
   banner.className = 'invite-banner';
   banner.innerHTML = `
     <div class="invite-banner-msg">Copy this link and send manually:</div>
@@ -1705,21 +1938,15 @@ function _invShowFallback(to, inviteUrl) {
 }
 
 async function showInviteBanner(to) {
-  // inviteUrl hoisted so the outer catch can reference it in the fallback.
   let inviteUrl = 'https://opencall.net/join/' + Date.now().toString(36);
   try {
-    document.getElementById('invite-banner')?.remove();
+    document.getElementById('invite-panel')?.remove();
     window._invPhone = to;
 
-    const countryCode = detectCountryFromNumber(to || '');
-    const country     = countryCode ? COUNTRY_DATA[countryCode] : null;
-    const isChina     = countryCode === 'CN';
-
-    const wsUrl   = document.getElementById('inp-server').value.trim();
-    const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-
-    // Step 1: Fetch invite token — one attempt, 4 s timeout, keep local fallback on any error.
+    // Fetch invite token — one attempt, 4 s timeout
     try {
+      const wsUrl   = document.getElementById('inp-server').value.trim();
+      const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
       const tokenRes = await fetch(
         baseUrl + '/invite/token?from=' + encodeURIComponent(myIdentity?.ocp_address || ''),
         { signal: AbortSignal.timeout(4000) }
@@ -1731,94 +1958,48 @@ async function showInviteBanner(to) {
     } catch(e) { /* keep local fallback URL */ }
     window._invLink = inviteUrl;
 
-    // Step 2: Fetch channel list — fall back to hardcoded defaults on ANY failure
-    // (404, CORS, network error, timeout). Buttons always show.
-    const DEFAULT_CHANNELS = ['whatsapp', 'telegram', 'sms', 'viber'];
-    let channels   = DEFAULT_CHANNELS.slice();
-    let serverNote = '';
-    try {
-      const params = new URLSearchParams({ country: countryCode || '', number: to || '' });
-      const chRes  = await fetch(baseUrl + '/invite/channels?' + params,
-                                 { signal: AbortSignal.timeout(3000) });
-      if (chRes.ok) {
-        const chData = await chRes.json().catch(() => ({}));
-        if (Array.isArray(chData.channels) && chData.channels.length) channels = chData.channels;
-        serverNote = chData.note || '';
-      }
-      // non-ok (404, CORS, server error) → fall through to DEFAULT_CHANNELS silently
-    } catch(e) { /* server unavailable — DEFAULT_CHANNELS already in place */ }
+    // Country info — use scored engine for channel ranking, COUNTRY_DATA for flag/name
+    const countryCode = detectCountry(to);
+    const countryData = COUNTRY_DATA[countryCode] || null;
+    const flagEmoji   = countryData ? countryData.flag : '🌍';
+    const countryName = countryData ? countryData.name : 'International';
+    const safeUrl     = inviteUrl.replace(/"/g, '&quot;');
 
-    // Step 3: Build deeplinks map for all channels
-    window._invDeeplinks = {};
-    channels.forEach(ch => {
-      const dl = buildDeeplink(ch, to, inviteUrl);
-      if (dl) window._invDeeplinks[ch] = dl;
-    });
-
-    // Header with flag + country name
-    const headerHtml = country
-      ? `<div class="inv-header">
-           <span class="inv-header-flag">${country.flag}</span>
-           <div>
-             <div class="inv-header-title">${country.name}</div>
-             <div class="inv-header-sub">Not on OpenCall yet · Send invite</div>
-           </div>
-         </div>`
-      : `<div class="invite-banner-msg">This number isn't on OpenCall yet</div>`;
-
-    // Build channel grid
-    const gridBtns = channels.map(ch => {
-      const info = PLATFORM_ICONS[ch];
-      if (!info) return '';
-      if (ch === 'wechat') {
-        return `<button class="inv-btn" onclick="invShowWeChatQR()">
-          <span class="inv-btn-ico">${info.icon}</span>
-          <span class="inv-btn-lbl">${info.name}</span>
-        </button>`;
-      }
-      if (ch === 'email') {
-        return `<button class="inv-btn" onclick="invToggleEmail()">
-          <span class="inv-btn-ico">${info.icon}</span>
-          <span class="inv-btn-lbl">${info.name}</span>
-        </button>`;
-      }
-      if (!window._invDeeplinks[ch]) return '';
-      return `<button class="inv-btn" onclick="invClickChannel('${ch}')">
-        <span class="inv-btn-ico">${info.icon}</span>
-        <span class="inv-btn-lbl">${info.name}</span>
-      </button>`;
-    }).filter(Boolean).join('');
-
-    const banner = document.createElement('div');
-    banner.id = 'invite-banner';
-    banner.className = 'invite-banner';
-    banner.innerHTML = `
-      ${headerHtml}
-      ${serverNote ? `<div class="inv-note">${serverNote}</div>` : ''}
-      <div class="inv-link-row">
-        <input class="inv-link-inp" id="inv-url-display" type="text" readonly
-               value="${inviteUrl.replace(/"/g, '&quot;')}">
-        <button class="inv-copy-btn" onclick="invCopyLink()">Copy link</button>
+    const panel = document.createElement('div');
+    panel.id        = 'invite-panel';
+    panel.className = 'invite-banner';
+    panel.innerHTML = `
+      <div class="invite-header">
+        <span class="red-dot">●</span>
+        <span>${to} is not on OpenCall yet</span>
       </div>
-      <div class="inv-grid">${gridBtns}</div>
-      <div id="inv-expand"></div>
-      <div class="inv-divider">or send automatically</div>
-      <div class="inv-auto-row">
-        <button class="inv-auto-btn accent" id="inv-tbelt-btn" onclick="invSendAuto('textbelt')">
-          💬 Send SMS automatically
+      <div class="invite-sub">Choose how to send them the join link:</div>
+      <div class="invite-link-row">
+        <input id="invite-link-input" class="inv-link-inp" type="text" readonly value="${safeUrl}">
+        <button class="inv-copy-btn" onclick="copyInviteLink()">Copy</button>
+      </div>
+      <div class="country-row">
+        <span style="font-size:20px">${flagEmoji}</span>
+        <span style="font-weight:600;color:var(--tx)">${countryName}</span>
+        <span class="muted">· Best options for this region:</span>
+      </div>
+      <div id="channel-grid"></div>
+      <div class="auto-send-row">
+        <div class="divider">or send automatically</div>
+        <button id="textbelt-btn" onclick="sendViaTextBelt()">
+          📨 Send SMS automatically (free)
         </button>
-        <button class="inv-auto-btn" id="inv-waapi-btn" onclick="invSendAuto('whatsapp_api')">
-          💬 Send via WhatsApp API
-        </button>
-        <div id="inv-auto-result"></div>
+        <div id="textbelt-status"></div>
       </div>
     `;
 
     const anchor = document.getElementById('country-selector') || document.querySelector('.num-display');
-    if (anchor) anchor.parentNode.insertBefore(banner, anchor.nextSibling);
+    if (anchor) anchor.parentNode.insertBefore(panel, anchor.nextSibling);
 
-    // WeChat/China: auto-show QR
-    if (isChina) setTimeout(invShowWeChatQR, 100);
+    renderChannelButtons(to, inviteUrl);
+
+    // China: also offer WeChat QR
+    if (countryCode === 'CN') setTimeout(invShowWeChatQR, 100);
 
   } catch(e) {
     console.error('[Invite] Panel error:', e.message);
@@ -2033,7 +2214,7 @@ function pressKey(d) {
 function doDelete() {
   const inp = document.getElementById('inp-dial');
   inp.value = inp.value.slice(0, -1);
-  document.getElementById('invite-banner')?.remove();
+  document.getElementById('invite-panel')?.remove();
   if (!inp.value) {
     document.getElementById('country-selector')?.remove();
     window._selectedCountry = null;
@@ -2052,7 +2233,7 @@ async function doCall() {
     const ocpAddr = await dhtLookupPhone(to);
     if (ocpAddr) {
       console.log('[DHT] Found OCP address for', to, ':', ocpAddr);
-      document.getElementById('invite-banner')?.remove();
+      document.getElementById('invite-panel')?.remove();
       toast('Routing via OCP network...');
     } else {
       console.log('[DHT] Not in DHT — showing invite banner');
@@ -2099,7 +2280,7 @@ function endCall() {
   stopRingback();
   const shareCard = document.getElementById('share-card');
   if (shareCard) shareCard.remove();
-  document.getElementById('invite-banner')?.remove();
+  document.getElementById('invite-panel')?.remove();
   document.getElementById('country-selector')?.remove();
   window._selectedCountry = null;
   if (pc) { pc.close(); pc = null; }
