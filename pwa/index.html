@@ -1134,6 +1134,8 @@ const PLATFORM_ICONS = {
   imessage:  { icon:'🔵', name:'iMessage',   color:'#007AFF' },
 };
 
+const OCPApiBase = 'https://ocp-dht-node.onrender.com';
+
 // ── Channel engine — country scoring map ──────────────────
 const COUNTRY_SCORES = {
   "IN": { whatsapp:95, sms:80, telegram:65, viber:30, signal:20, email:60, call:90 },
@@ -2137,7 +2139,7 @@ async function sendMissedCall(e164, inviteURL) {
 
   try {
     const resp = await fetch(
-      'https://opencall-server.onrender.com/reach/missed-call' +
+      OCPApiBase + '/reach/missed-call' +
       '?to=' + encodeURIComponent(e164) +
       '&inviteURL=' + encodeURIComponent(inviteURL),
       { signal: AbortSignal.timeout(10000) }
@@ -2184,7 +2186,7 @@ async function sendViaTextBelt(e164, inviteURL) {
       const serverBase = (document.getElementById('inp-server')?.value || '')
         .replace('wss://','https://')
         .replace('ws://','http://') ||
-        'https://opencall-server.onrender.com';
+        OCPApiBase;
 
       const resp = await fetch(serverBase + '/reach/fast2sms', {
         method: 'POST',
@@ -2216,7 +2218,7 @@ async function sendViaTextBelt(e164, inviteURL) {
       const serverBase = (document.getElementById('inp-server')?.value || '')
         .replace('wss://','https://')
         .replace('ws://','http://') ||
-        'https://opencall-server.onrender.com';
+        OCPApiBase;
 
       const resp = await fetch(serverBase + '/reach/textbelt', {
         method: 'POST',
@@ -2259,7 +2261,7 @@ async function sendViaTextBelt(e164, inviteURL) {
 async function getInviteURL(myOCPAddress) {
   try {
     const resp = await fetch(
-      'https://opencall-server.onrender.com/invite/token' +
+      OCPApiBase + '/invite/token' +
       '?from=' + encodeURIComponent(myOCPAddress),
       { signal: AbortSignal.timeout(5000) }
     );
