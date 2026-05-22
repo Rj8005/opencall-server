@@ -2257,6 +2257,41 @@ async function sendViaTextBelt(e164, inviteURL) {
   }
 }
 
+async function sendViaFast2SMS(e164, inviteURL) {
+  const btn = document.getElementById('fast2sms-btn');
+  const statusEl = document.getElementById('fast2sms-status');
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending India SMS...'; }
+
+  const phone = e164 || window._invPhone;
+  const url = inviteURL || window.currentInviteURL || window._invLink;
+
+  try {
+    const resp = await fetch(OCPApiBase + '/reach/fast2sms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: phone, inviteURL: url }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const data = await resp.json();
+    if (data.success) {
+      if (btn) { btn.innerHTML = '✓ India SMS sent!'; btn.style.borderColor = '#BFFF00'; }
+      if (statusEl) { statusEl.textContent = 'SMS sent to ' + phone; statusEl.style.color = '#BFFF00'; }
+      showWaiting(phone, 'sms');
+    } else {
+      const errMsg = data.error?.message || JSON.stringify(data.error) || 'Failed';
+      if (btn) { btn.innerHTML = '✗ ' + errMsg.substring(0,40); btn.disabled = false; }
+      if (statusEl) {
+        const num = (phone||'').replace('+','');
+        const msg = encodeURIComponent('Call me free on OpenCall: ' + url);
+        statusEl.innerHTML = 'Use <a href="https://wa.me/' + num +
+          '?text=' + msg + '" target="_blank" style="color:#25D366">WhatsApp instead →</a>';
+      }
+    }
+  } catch(err) {
+    if (btn) { btn.innerHTML = '✗ Failed — use WhatsApp'; btn.disabled = false; }
+  }
+}
+
 // FIX 1 — Invite token: never returns undefined; generates local hash on 404
 async function getInviteURL(myOCPAddress) {
   try {
@@ -2333,9 +2368,26 @@ async function showInviteBanner(to) {
         <span class="muted">· Best options for this region:</span>
       </div>
       <div id="channel-grid"></div>
+      ${detectCountry(to) === 'IN' ? `
+        <div class="auto-send-row" style="margin-top:4px">
+          <button id="fast2sms-btn"
+            style="padding:12px;border-radius:var(--r);
+                   border:1px solid rgba(200,245,90,0.3);
+                   background:rgba(200,245,90,0.08);
+                   color:var(--accent);font-family:var(--mono);
+                   font-size:12px;cursor:pointer;width:100%;
+                   display:flex;align-items:center;
+                   justify-content:center;gap:8px"
+            onclick="sendViaFast2SMS(window._invPhone, window.currentInviteURL)">
+            🇮🇳 Send India SMS (Fast2SMS free trial)
+          </button>
+          <div id="fast2sms-status" style="font-size:11px;text-align:center;padding:4px 0;min-height:18px"></div>
+        </div>
+      ` : ''}
       <div class="auto-send-row">
         <div class="divider">or send automatically</div>
-        <button id="textbelt-btn" onclick="sendViaTextBelt(window._invPhone, window.currentInviteURL)">
+        <button id="textbelt-btn"
+          onclick="sendViaTextBelt(window._invPhone, window.currentInviteURL)">
           📨 Send SMS automatically (free)
         </button>
         <div id="textbelt-status"></div>
