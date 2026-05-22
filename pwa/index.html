@@ -2183,10 +2183,7 @@ async function sendViaTextBelt(e164, inviteURL) {
   try {
     if (country === 'IN') {
       // India: Fast2SMS via server proxy (avoids CORS)
-      const serverBase = (document.getElementById('inp-server')?.value || '')
-        .replace('wss://','https://')
-        .replace('ws://','http://') ||
-        OCPApiBase;
+      const serverBase = OCPApiBase;
 
       const resp = await fetch(serverBase + '/reach/fast2sms', {
         method: 'POST',
@@ -2215,10 +2212,7 @@ async function sendViaTextBelt(e164, inviteURL) {
 
     } else {
       // International: TextBelt via server proxy
-      const serverBase = (document.getElementById('inp-server')?.value || '')
-        .replace('wss://','https://')
-        .replace('ws://','http://') ||
-        OCPApiBase;
+      const serverBase = OCPApiBase;
 
       const resp = await fetch(serverBase + '/reach/textbelt', {
         method: 'POST',
