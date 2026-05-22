@@ -1,4 +1,4 @@
-const CACHE = 'opencall-v2';
+const CACHE = 'ocp-v4';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', e => {
