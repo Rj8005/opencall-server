@@ -2175,39 +2175,83 @@ async function sendViaTextBelt(e164, inviteURL) {
   const phone = e164 || window._invPhone;
   const url = inviteURL || window.currentInviteURL || window._invLink;
   const message = 'Call me free on OpenCall — no app needed, just tap: ' + url;
+  const country = detectCountry(phone);
+  const digits = phone.replace(/\D/g,'');
 
   try {
-    // Call TextBelt DIRECTLY — bypasses server and CORS entirely
-    const resp = await fetch('https://textbelt.com/text', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'phone=' + encodeURIComponent(phone) +
-            '&message=' + encodeURIComponent(message) +
-            '&key=textbelt',
-      signal: AbortSignal.timeout(15000)
-    });
-    const data = await resp.json();
-    if (data.success) {
-      if (btn) {
-        btn.innerHTML = '✓ SMS sent!';
-        btn.style.background = 'rgba(191,255,0,0.15)';
-        btn.style.borderColor = '#BFFF00';
+    if (country === 'IN') {
+      // India: Fast2SMS via server proxy (avoids CORS)
+      const serverBase = (document.getElementById('inp-server')?.value || '')
+        .replace('wss://','https://')
+        .replace('ws://','http://') ||
+        'https://opencall-server.onrender.com';
+
+      const resp = await fetch(serverBase + '/reach/fast2sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: phone, inviteURL: url }),
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (!resp.ok) throw new Error('server_' + resp.status);
+      const data = await resp.json();
+
+      if (data.success) {
+        if (btn) {
+          btn.innerHTML = '✓ SMS sent!';
+          btn.style.background = 'rgba(191,255,0,0.15)';
+          btn.style.borderColor = '#BFFF00';
+        }
+        if (statusEl) {
+          statusEl.textContent = 'SMS sent to ' + phone + ' via Fast2SMS';
+          statusEl.style.color = '#BFFF00';
+        }
+        showWaiting(phone, 'sms');
+      } else {
+        throw new Error(JSON.stringify(data.error) || 'Fast2SMS failed');
       }
-      if (statusEl) {
-        statusEl.textContent = 'SMS sent to ' + phone;
-        statusEl.style.color = '#BFFF00';
-      }
-      showWaiting(phone, 'sms');
-    } else if (data.quotaExceeded) {
-      if (btn) { btn.innerHTML = '✗ Daily limit reached (1 free/day)'; btn.disabled = false; }
-      if (statusEl) { statusEl.textContent = 'Free limit = 1 SMS/day. Use buttons above.'; statusEl.style.color = '#ff6b6b'; }
+
     } else {
-      if (btn) { btn.innerHTML = '✗ ' + (data.error || 'Failed'); btn.disabled = false; }
-      if (statusEl) { statusEl.textContent = 'Try WhatsApp or Telegram above.'; statusEl.style.color = '#ff6b6b'; }
+      // International: TextBelt via server proxy
+      const serverBase = (document.getElementById('inp-server')?.value || '')
+        .replace('wss://','https://')
+        .replace('ws://','http://') ||
+        'https://opencall-server.onrender.com';
+
+      const resp = await fetch(serverBase + '/reach/textbelt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: phone, inviteURL: url }),
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (!resp.ok) throw new Error('server_' + resp.status);
+      const data = await resp.json();
+
+      if (data.success) {
+        if (btn) {
+          btn.innerHTML = '✓ SMS sent!';
+          btn.style.background = 'rgba(191,255,0,0.15)';
+          btn.style.borderColor = '#BFFF00';
+        }
+        if (statusEl) {
+          statusEl.textContent = 'SMS sent to ' + phone;
+          statusEl.style.color = '#BFFF00';
+        }
+        showWaiting(phone, 'sms');
+      } else if (data.quotaExceeded) {
+        if (btn) { btn.innerHTML = '✗ Daily limit reached (1/day free)'; btn.disabled = false; }
+        if (statusEl) { statusEl.textContent = 'Use WhatsApp or Telegram above.'; statusEl.style.color = '#ff6b6b'; }
+      } else {
+        throw new Error(data.error || 'SMS failed');
+      }
     }
+
   } catch(err) {
     if (btn) { btn.innerHTML = '✗ Failed — use buttons above'; btn.disabled = false; }
-    if (statusEl) { statusEl.innerHTML = '<small style="color:#888">' + err.message + '</small>'; }
+    if (statusEl) {
+      statusEl.innerHTML = '<small style="color:#888">' + err.message + '</small>';
+    }
   }
 }
 
