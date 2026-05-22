@@ -15,9 +15,22 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-self.addEventListener('fetch', e => {
-  e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request))
+self.addEventListener('fetch', event => {
+  const url = event.request.url;
+
+  // Never intercept API calls — let them go directly to network
+  if (url.includes('onrender.com') ||
+      url.includes('textbelt.com') ||
+      url.includes('opencall-server') ||
+      url.includes('/reach/') ||
+      url.includes('/invite/') ||
+      url.includes('/health')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  event.respondWith(
+    caches.match(event.request).then(cached => cached || fetch(event.request))
   );
 });
 

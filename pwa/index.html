@@ -2174,24 +2174,19 @@ async function sendViaTextBelt(e164, inviteURL) {
 
   const phone = e164 || window._invPhone;
   const url = inviteURL || window.currentInviteURL || window._invLink;
-  const message = 'Someone wants to call you free on OpenCall. ' +
-                  'No app needed — just tap: ' + url;
+  const message = 'Call me free on OpenCall — no app needed, just tap: ' + url;
 
   try {
-    // Call TextBelt DIRECTLY from browser — no server needed
-    const formData = new FormData();
-    formData.append('phone', phone);
-    formData.append('message', message);
-    formData.append('key', 'textbelt');
-
+    // Call TextBelt DIRECTLY — bypasses server and CORS entirely
     const resp = await fetch('https://textbelt.com/text', {
       method: 'POST',
-      body: formData,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'phone=' + encodeURIComponent(phone) +
+            '&message=' + encodeURIComponent(message) +
+            '&key=textbelt',
       signal: AbortSignal.timeout(15000)
     });
-
     const data = await resp.json();
-
     if (data.success) {
       if (btn) {
         btn.innerHTML = '✓ SMS sent!';
@@ -2205,10 +2200,10 @@ async function sendViaTextBelt(e164, inviteURL) {
       showWaiting(phone, 'sms');
     } else if (data.quotaExceeded) {
       if (btn) { btn.innerHTML = '✗ Daily limit reached (1 free/day)'; btn.disabled = false; }
-      if (statusEl) { statusEl.textContent = 'Use buttons above instead.'; statusEl.style.color = '#ff6b6b'; }
+      if (statusEl) { statusEl.textContent = 'Free limit = 1 SMS/day. Use buttons above.'; statusEl.style.color = '#ff6b6b'; }
     } else {
       if (btn) { btn.innerHTML = '✗ ' + (data.error || 'Failed'); btn.disabled = false; }
-      if (statusEl) { statusEl.textContent = 'Use buttons above.'; statusEl.style.color = '#ff6b6b'; }
+      if (statusEl) { statusEl.textContent = 'Try WhatsApp or Telegram above.'; statusEl.style.color = '#ff6b6b'; }
     }
   } catch(err) {
     if (btn) { btn.innerHTML = '✗ Failed — use buttons above'; btn.disabled = false; }
