@@ -199,6 +199,7 @@ input::placeholder{color:var(--hint)}
 .ch-emoji{font-size:22px;line-height:1}
 .ch-label{font-size:10px;color:#fff;margin-top:4px;text-align:center;letter-spacing:.03em}
 .ch-score{font-size:10px;margin-top:2px;font-weight:bold}
+.ch-hint{font-size:9px;color:rgba(255,255,255,.45);margin-top:3px;text-align:center;line-height:1.2;letter-spacing:.02em}
 #channel-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:4px 0}
 @media(max-width:400px){#channel-grid{grid-template-columns:repeat(3,1fr)}}
 .auto-send-row{display:flex;flex-direction:column;gap:8px}
@@ -1948,6 +1949,52 @@ function openChannel(url) {
   }
 }
 
+// FIX 3 — SMS: opens SMS app on mobile, falls back to WhatsApp Web on desktop
+function handleSMSButton(e164, inviteURL) {
+  const msg      = encodeURIComponent('Call me free on OpenCall — just tap: ' + inviteURL);
+  const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+  if (isMobile) {
+    window.location.href = 'sms:' + e164 + '?body=' + msg;
+  } else {
+    const num = e164.replace('+', '');
+    window.open('https://wa.me/' + num + '?text=' + msg, '_blank');
+    const lbl = document.getElementById('sms-btn-label');
+    if (lbl) lbl.textContent = 'Opened WhatsApp Web';
+  }
+}
+
+// FIX 4 — Telegram: tries app deep-link first, falls back to web after 1.5 s
+function handleTelegramButton(e164) {
+  const num     = e164.replace('+', '');
+  const appLink = 'tg://resolve?phone=' + num;
+  const webLink = 'https://telegram.me/+' + num;
+  window.location.href = appLink;
+  setTimeout(() => { window.open(webLink, '_blank'); }, 1500);
+}
+
+// FIX 5 — Viber: native scheme on mobile, Viber Web on desktop
+function handleViberButton(e164) {
+  const num = e164.replace('+', '');
+  if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
+    window.location.href = 'viber://chat?number=%2B' + num;
+  } else {
+    window.open('https://viber.com/+' + num, '_blank');
+  }
+}
+
+// FIX 6 — Email: must use location.href, not window.open
+function handleEmailButton(inviteURL) {
+  const subject = encodeURIComponent('Join me on OpenCall');
+  const body    = encodeURIComponent(
+    'Hey!\n\n' +
+    'I want to call you free using OpenCall.\n\n' +
+    'No app needed — just tap this link:\n' +
+    inviteURL + '\n\n' +
+    'Works in any browser, completely free.'
+  );
+  window.location.href = 'mailto:?subject=' + subject + '&body=' + body;
+}
+
 function renderChannelButtons(e164, inviteURL) {
   const ranked = getRankedChannels(e164);
   const links  = buildDeepLinks(e164, inviteURL);
@@ -1963,18 +2010,71 @@ function renderChannelButtons(e164, inviteURL) {
     const btn  = document.createElement('button');
     btn.className = 'channel-btn';
     btn.style.borderColor = color;
-    btn.innerHTML = `
-      <span class="ch-emoji">${emoji}</span>
-      <span class="ch-label">${label}</span>
-      <span class="ch-score" style="color:${color}">${score}%</span>
-    `;
 
-    if (channel === 'call') {
-      btn.id = 'call-first-btn';
-      btn.onclick = () => sendMissedCall(e164, inviteURL);
+    // Build inner HTML and wire onclick per channel
+    if (channel === 'whatsapp') {
+      // FIX 2 — WhatsApp: add hint below score
+      btn.innerHTML = `
+        <span class="ch-emoji">${emoji}</span>
+        <span class="ch-label">${label}</span>
+        <span class="ch-score" style="color:${color}">${score}%</span>
+        <span class="ch-hint">tap Send in WA</span>
+      `;
+      btn.onclick = () => { openChannel(link); showWaiting(e164, channel); };
+
+    } else if (channel === 'sms') {
+      // FIX 3 — SMS: labelled span gets id for desktop swap
+      btn.innerHTML = `
+        <span class="ch-emoji">${emoji}</span>
+        <span class="ch-label" id="sms-btn-label">${label}</span>
+        <span class="ch-score" style="color:${color}">${score}%</span>
+      `;
+      btn.onclick = () => { handleSMSButton(e164, inviteURL); showWaiting(e164, channel); };
+
+    } else if (channel === 'telegram') {
+      // FIX 4 — Telegram: app deep-link + web fallback
+      btn.innerHTML = `
+        <span class="ch-emoji">${emoji}</span>
+        <span class="ch-label">${label}</span>
+        <span class="ch-score" style="color:${color}">${score}%</span>
+      `;
+      btn.onclick = () => { handleTelegramButton(e164); showWaiting(e164, channel); };
+
+    } else if (channel === 'viber') {
+      // FIX 5 — Viber: native on mobile, web on desktop
+      btn.innerHTML = `
+        <span class="ch-emoji">${emoji}</span>
+        <span class="ch-label">${label}</span>
+        <span class="ch-score" style="color:${color}">${score}%</span>
+      `;
+      btn.onclick = () => { handleViberButton(e164); showWaiting(e164, channel); };
+
     } else if (channel === 'email') {
-      btn.onclick = () => { sendViaEmail(e164, inviteURL); showWaiting(e164, channel); };
+      // FIX 6 — Email: location.href for mailto
+      btn.innerHTML = `
+        <span class="ch-emoji">${emoji}</span>
+        <span class="ch-label">${label}</span>
+        <span class="ch-score" style="color:${color}">${score}%</span>
+      `;
+      btn.onclick = () => { handleEmailButton(inviteURL); showWaiting(e164, channel); };
+
+    } else if (channel === 'call') {
+      // FIX 8 — Call first: server missed-call, tel: only as fallback
+      btn.id = 'missed-call-btn';
+      btn.innerHTML = `
+        <span class="ch-emoji">${emoji}</span>
+        <span class="ch-label">${label}</span>
+        <span class="ch-score" style="color:${color}">${score}%</span>
+      `;
+      btn.onclick = () => sendMissedCall(e164, inviteURL);
+
     } else {
+      // Signal and any future channels
+      btn.innerHTML = `
+        <span class="ch-emoji">${emoji}</span>
+        <span class="ch-label">${label}</span>
+        <span class="ch-score" style="color:${color}">${score}%</span>
+      `;
       btn.onclick = () => { openChannel(link); showWaiting(e164, channel); };
     }
 
@@ -2030,49 +2130,50 @@ function copyInviteLink() {
   });
 }
 
+// FIX 8 — Call first: POST missed-call to server; tel: only as last resort
 async function sendMissedCall(e164, inviteURL) {
-  const btn = document.getElementById('call-first-btn');
-  if (btn) { btn.textContent = '📞 Sending missed call...'; btn.disabled = true; }
+  const btn = document.getElementById('missed-call-btn');
+  if (btn) { btn.innerHTML = '📞 Sending missed call...'; btn.disabled = true; }
 
   try {
     const resp = await fetch(
       'https://opencall-server.onrender.com/reach/missed-call' +
       '?to=' + encodeURIComponent(e164) +
       '&inviteURL=' + encodeURIComponent(inviteURL),
-      { method: 'GET', signal: AbortSignal.timeout(10000) }
+      { signal: AbortSignal.timeout(10000) }
     );
     const data = await resp.json();
 
     if (data.success) {
-      if (btn) { btn.textContent = '✓ Missed call sent!'; btn.style.borderColor = '#BFFF00'; }
+      if (btn) { btn.innerHTML = '✓ Missed call sent!'; btn.style.borderColor = '#BFFF00'; }
       showWaiting(e164, 'missed_call');
     } else if (data.fallback === 'sip_not_configured') {
-      if (btn) { btn.textContent = '📞 Call first (manual)'; btn.disabled = false; }
-      window.location.href = 'tel:' + e164;
+      if (btn) {
+        btn.innerHTML = '📞 Call them manually';
+        btn.disabled  = false;
+        btn.onclick   = () => { window.location.href = 'tel:' + e164; };
+      }
     } else {
-      if (btn) { btn.textContent = '✗ Failed — try another option'; btn.disabled = false; }
+      if (btn) { btn.innerHTML = '✗ Failed — try another option'; btn.disabled = false; }
     }
   } catch(err) {
-    if (btn) { btn.textContent = '📞 Call them manually'; btn.disabled = false; }
-    window.open('tel:' + e164);
+    if (btn) {
+      btn.innerHTML = '📞 Call them manually';
+      btn.disabled  = false;
+      btn.onclick   = () => { window.location.href = 'tel:' + e164; };
+    }
   }
 }
 
-function sendViaEmail(e164, inviteURL) {
-  const subject = encodeURIComponent('Join me on OpenCall');
-  const body    = encodeURIComponent(
-    `Hey!\n\nI tried calling you on OpenCall — free worldwide calling.\n\nNo app needed. Just tap this link and we can talk:\n${inviteURL}\n\nWorks in any browser.`
-  );
-  window.location.href = `mailto:?subject=${subject}&body=${body}`;
-}
 
+// FIX 7 — TextBelt: correct endpoint, quota handling, BFFF00 success style
 async function sendViaTextBelt(e164, inviteURL) {
-  const phone    = e164     || window._invPhone;
-  const url      = inviteURL || window._invLink;
+  const phone = e164     || window._invPhone;
+  const url   = inviteURL || window.currentInviteURL || window._invLink;
   const btn      = document.getElementById('textbelt-btn');
   const statusEl = document.getElementById('textbelt-status');
 
-  if (btn) { btn.textContent = 'Sending...'; btn.disabled = true; }
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending...'; }
   if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; }
 
   try {
@@ -2082,39 +2183,61 @@ async function sendViaTextBelt(e164, inviteURL) {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ to: phone, inviteURL: url }),
-        signal:  AbortSignal.timeout(12000)
+        signal:  AbortSignal.timeout(15000)
       }
     );
 
-    if (!resp.ok) throw new Error('Server returned ' + resp.status);
+    if (!resp.ok) throw new Error('server_error_' + resp.status);
     const data = await resp.json();
 
     if (data.success) {
-      if (btn) btn.textContent = '✓ SMS sent!';
+      if (btn) {
+        btn.innerHTML          = '✓ SMS sent!';
+        btn.style.background   = 'rgba(191,255,0,0.15)';
+        btn.style.borderColor  = '#BFFF00';
+      }
       if (statusEl) {
-        statusEl.textContent  = 'Message delivered to ' + phone;
-        statusEl.style.color  = '#BFFF00';
+        statusEl.textContent = 'Message sent to ' + phone;
+        statusEl.style.color = '#BFFF00';
       }
       showWaiting(phone, 'sms');
-    } else if (data.quotaExceeded) {
-      if (btn) { btn.textContent = '✗ Daily limit reached'; btn.disabled = false; }
-      if (statusEl) {
-        statusEl.textContent = 'Free SMS limit: 1/day. Use buttons above instead.';
-        statusEl.style.color = '#ff6b6b';
-      }
-    } else {
-      if (btn) { btn.textContent = '✗ SMS failed'; btn.disabled = false; }
-      if (statusEl) {
-        statusEl.textContent = 'Use the channel buttons above to send manually.';
-        statusEl.style.color = '#ff6b6b';
-      }
+      return;
     }
+
+    if (data.quotaExceeded) {
+      if (btn) { btn.innerHTML = '✗ Daily limit reached (1/day free)'; btn.disabled = false; }
+      if (statusEl) {
+        statusEl.textContent = 'TextBelt free = 1 SMS/day. Use buttons above.';
+        statusEl.style.color = '#ff6b6b';
+      }
+      return;
+    }
+
+    throw new Error(data.error || 'unknown');
+
   } catch(err) {
-    if (btn) { btn.textContent = '✗ Server unreachable'; btn.disabled = false; }
+    if (btn) { btn.innerHTML = '✗ Failed — use buttons above'; btn.disabled = false; }
     if (statusEl) {
-      statusEl.innerHTML    = 'Use the buttons above to send manually.<br>' +
-        '<small style="color:#888">Error: ' + err.message + '</small>';
+      statusEl.innerHTML = '<small style="color:#888">' + err.message + '</small>';
     }
+  }
+}
+
+// FIX 1 — Invite token: never returns undefined; generates local hash on 404
+async function getInviteURL(myOCPAddress) {
+  try {
+    const resp = await fetch(
+      'https://opencall-server.onrender.com/invite/token' +
+      '?from=' + encodeURIComponent(myOCPAddress),
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!resp.ok) throw new Error('404');
+    const data = await resp.json();
+    if (!data.url) throw new Error('no_url');
+    return data.url;
+  } catch(e) {
+    const hash = myOCPAddress ? myOCPAddress.substring(4, 12) : Date.now().toString(36);
+    return 'https://opencall-server.vercel.app/join/' + hash;
   }
 }
 
@@ -2145,20 +2268,10 @@ async function showInviteBanner(to) {
     document.getElementById('invite-panel')?.remove();
     window._invPhone = to;
 
-    // Fetch invite token — one attempt, 4 s timeout
-    try {
-      const wsUrl   = document.getElementById('inp-server').value.trim();
-      const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-      const tokenRes = await fetch(
-        baseUrl + '/invite/token?from=' + encodeURIComponent(myIdentity?.ocp_address || ''),
-        { signal: AbortSignal.timeout(4000) }
-      );
-      if (tokenRes.ok) {
-        const tokenData = await tokenRes.json().catch(() => ({}));
-        if (tokenData.url) inviteUrl = tokenData.url;
-      }
-    } catch(e) { /* keep local fallback URL */ }
-    window._invLink = inviteUrl;
+    // FIX 1 — always get a valid invite URL, never undefined
+    inviteUrl = await getInviteURL(myIdentity?.ocp_address || '');
+    window._invLink        = inviteUrl;
+    window.currentInviteURL = inviteUrl;
 
     // Country info — use scored engine for channel ranking, COUNTRY_DATA for flag/name
     const countryCode = detectCountry(to);
@@ -2188,7 +2301,7 @@ async function showInviteBanner(to) {
       <div id="channel-grid"></div>
       <div class="auto-send-row">
         <div class="divider">or send automatically</div>
-        <button id="textbelt-btn" onclick="sendViaTextBelt(window._invPhone, window._invLink)">
+        <button id="textbelt-btn" onclick="sendViaTextBelt(window._invPhone, window.currentInviteURL)">
           📨 Send SMS automatically (free)
         </button>
         <div id="textbelt-status"></div>
