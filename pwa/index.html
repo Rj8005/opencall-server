@@ -2168,58 +2168,51 @@ async function sendMissedCall(e164, inviteURL) {
 
 // FIX 7 — TextBelt: correct endpoint, quota handling, BFFF00 success style
 async function sendViaTextBelt(e164, inviteURL) {
-  const phone = e164     || window._invPhone;
-  const url   = inviteURL || window.currentInviteURL || window._invLink;
-  const btn      = document.getElementById('textbelt-btn');
+  const btn = document.getElementById('textbelt-btn');
   const statusEl = document.getElementById('textbelt-status');
-
   if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending...'; }
-  if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; }
+
+  const phone = e164 || window._invPhone;
+  const url = inviteURL || window.currentInviteURL || window._invLink;
+  const message = 'Someone wants to call you free on OpenCall. ' +
+                  'No app needed — just tap: ' + url;
 
   try {
-    const resp = await fetch(
-      'https://opencall-server.onrender.com/reach/textbelt',
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ to: phone, inviteURL: url }),
-        signal:  AbortSignal.timeout(15000)
-      }
-    );
+    // Call TextBelt DIRECTLY from browser — no server needed
+    const formData = new FormData();
+    formData.append('phone', phone);
+    formData.append('message', message);
+    formData.append('key', 'textbelt');
 
-    if (!resp.ok) throw new Error('server_error_' + resp.status);
+    const resp = await fetch('https://textbelt.com/text', {
+      method: 'POST',
+      body: formData,
+      signal: AbortSignal.timeout(15000)
+    });
+
     const data = await resp.json();
 
     if (data.success) {
       if (btn) {
-        btn.innerHTML          = '✓ SMS sent!';
-        btn.style.background   = 'rgba(191,255,0,0.15)';
-        btn.style.borderColor  = '#BFFF00';
+        btn.innerHTML = '✓ SMS sent!';
+        btn.style.background = 'rgba(191,255,0,0.15)';
+        btn.style.borderColor = '#BFFF00';
       }
       if (statusEl) {
-        statusEl.textContent = 'Message sent to ' + phone;
+        statusEl.textContent = 'SMS sent to ' + phone;
         statusEl.style.color = '#BFFF00';
       }
       showWaiting(phone, 'sms');
-      return;
+    } else if (data.quotaExceeded) {
+      if (btn) { btn.innerHTML = '✗ Daily limit reached (1 free/day)'; btn.disabled = false; }
+      if (statusEl) { statusEl.textContent = 'Use buttons above instead.'; statusEl.style.color = '#ff6b6b'; }
+    } else {
+      if (btn) { btn.innerHTML = '✗ ' + (data.error || 'Failed'); btn.disabled = false; }
+      if (statusEl) { statusEl.textContent = 'Use buttons above.'; statusEl.style.color = '#ff6b6b'; }
     }
-
-    if (data.quotaExceeded) {
-      if (btn) { btn.innerHTML = '✗ Daily limit reached (1/day free)'; btn.disabled = false; }
-      if (statusEl) {
-        statusEl.textContent = 'TextBelt free = 1 SMS/day. Use buttons above.';
-        statusEl.style.color = '#ff6b6b';
-      }
-      return;
-    }
-
-    throw new Error(data.error || 'unknown');
-
   } catch(err) {
     if (btn) { btn.innerHTML = '✗ Failed — use buttons above'; btn.disabled = false; }
-    if (statusEl) {
-      statusEl.innerHTML = '<small style="color:#888">' + err.message + '</small>';
-    }
+    if (statusEl) { statusEl.innerHTML = '<small style="color:#888">' + err.message + '</small>'; }
   }
 }
 
