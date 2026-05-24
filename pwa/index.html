@@ -266,7 +266,7 @@ input::placeholder{color:var(--hint)}
       </div>
       <div>
         <div class="field-label">Signal server</div>
-        <input type="text" id="inp-server" placeholder="wss://opencall-server-production.up.railway.app" value="wss://opencall-server.onrender.com"/>
+        <input type="text" id="inp-server" placeholder="wss://opencall-server-production.up.railway.app" value="wss://opencall-server-pqfe.onrender.com"/>
       </div>
       <div>
         <div class="field-label">Your OCP address</div>
@@ -694,9 +694,9 @@ const ratchetSessions = new Map(); // callWith → session state
 
 // ── OCP DHT Client ────────────────────────────────────────
 const DHT_BOOTSTRAP = [
-  'wss://ocp-bootstrap-1.onrender.com/ws',
-  'wss://ocp-bootstrap-2.onrender.com/ws',
-  'wss://ocp-bootstrap-3.onrender.com/ws'
+  'wss://ocp-bootstrap-1-nui5.onrender.com/ws',
+  'wss://ocp-node.onrender.com/ws',
+  'wss://ocp-bootstrap-1-nui5.onrender.com/ws'
 ];
 const dhtPeers = new Map();
 let dhtReady = false;
@@ -946,7 +946,7 @@ async function answerMissedCall() {
   if (statusEl) statusEl.textContent = 'Connecting to server…';
 
   const server = document.getElementById('inp-server')?.value.trim()
-    || 'wss://opencall-server.onrender.com';
+    || 'wss://opencall-server-pqfe.onrender.com';
 
   try { ws = new WebSocket(server); }
   catch(e) {
@@ -1134,7 +1134,7 @@ const PLATFORM_ICONS = {
   imessage:  { icon:'🔵', name:'iMessage',   color:'#007AFF' },
 };
 
-const OCPApiBase = 'https://ocp-dht-node.onrender.com';
+const OCPApiBase = 'https://ocp-dht-node-5ul1.onrender.com';
 
 // ── Channel engine — country scoring map ──────────────────
 const COUNTRY_SCORES = {
@@ -1181,17 +1181,17 @@ const RTC_CFG = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     {
-      urls: 'turn:ocp-bootstrap-1.onrender.com:3478',
+      urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478',
       username: 'ocp',
       credential: 'opencall2026'
     },
     {
-      urls: 'turn:ocp-bootstrap-2.onrender.com:3478',
+      urls: 'turn:ocp-node.onrender.com:3478',
       username: 'ocp',
       credential: 'opencall2026'
     },
     {
-      urls: 'turn:ocp-bootstrap-3.onrender.com:3478',
+      urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478',
       username: 'ocp',
       credential: 'opencall2026'
     }
