@@ -25,6 +25,7 @@ const callLog          = new Map(); // callId          → { from, to, startedAt
 const pushSubscriptions = new Map(); // number           → push subscription
 const webPush           = null;      // using native fetch for push
 const pendingCalls      = new Map(); // callId           → { from, to, link, callerWs, ... }
+const pendingUSSD       = new Map(); // callee           → { callId, from, channel }
 const simBankRegistry   = new Map(); // country          → WebSocket
 const telegramRegistry  = new Map(); // phone            → telegram chat ID
 const lineRegistry      = new Map(); // phone            → LINE user ID
@@ -473,6 +474,44 @@ const server = http.createServer((req, res) => {
       res.writeHead(404);
       res.end(JSON.stringify({ found: false }));
     }
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/internal/bridge') {
+    let body = '';
+    req.on('data', d => body += d);
+    req.on('end', () => {
+      try {
+        const { callId, callee, channel } = JSON.parse(body);
+        log('USSD bridge request', callId, callee, channel);
+
+        // Find the caller's WebSocket from pending calls
+        const pending = pendingCalls.get(callId);
+        if (!pending) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: 'callId not found' }));
+          return;
+        }
+
+        // Find callee WebSocket if they opened the link
+        const calleeWs = [...metadata.entries()]
+          .find(([ws, m]) => m.number === callee)?.[0];
+
+        if (calleeWs) {
+          // They opened the app — send call.ring
+          send(calleeWs, { type: 'call.ring', callId, from: pending.from });
+        } else {
+          // They haven't opened app yet — store for when they do
+          pendingUSSD.set(callee, { callId, from: pending.from, channel });
+        }
+
+        res.writeHead(200);
+        res.end(JSON.stringify({ status: 'bridging', callId }));
+      } catch(e) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
     return;
   }
 
@@ -965,6 +1004,14 @@ async function handle(ws, msg) {
         log('✓', 'LINE linked for', meta.number);
         send(ws, { type: 'linked', platform: 'line' });
       }
+      break;
+    }
+
+    // ── CALL.INVITE ───────────────────────────────────────────
+    // USSD Go bridge sends this when a user dials in and presses 1
+    case 'call.invite': {
+      pendingCalls.set(msg.callId, { from: msg.from, to: msg.to, ts: Date.now() });
+      log('✓', 'USSD call.invite stored', msg.callId, msg.from, '→', msg.to);
       break;
     }
 
