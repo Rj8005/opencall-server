@@ -1497,10 +1497,41 @@ async function onMessage(msg) {
       break;
     }
 
+    case 'ussd_sent':
+      // Server confirmed USSD was pushed to callee's phone
+      showStatus('📳 USSD alert sent to their phone. Waiting for them to press 1...');
+      showUSSDWaitingUI(msg.callee, msg.country);
+      break;
+
+    case 'ussd_accepted':
+      // Callee pressed 1 — now do WebRTC
+      showStatus('✅ They accepted! Connecting...');
+      startWebRTC(msg.callId);
+      break;
+
+    case 'ussd_declined':
+      showStatus('❌ They declined the call.');
+      resetCallUI();
+      break;
+
     case 'error':
       toast('Error: ' + msg.reason);
       break;
   }
+}
+
+// ── USSD waiting UI ────────────────────────────────────────
+function showUSSDWaitingUI(callee, country) {
+  const panel = document.getElementById('status-panel')
+    || document.createElement('div');
+  panel.innerHTML = `
+    <div style="background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:16px;margin:12px 0;">
+      <div style="font-size:13px;color:#888;margin-bottom:8px;">USSD alert sent</div>
+      <div style="font-size:15px;color:#fff;">${callee}</div>
+      <div style="font-size:12px;color:#c8f55a;margin-top:4px;">${country} — their phone screen shows a menu</div>
+      <div style="font-size:12px;color:#666;margin-top:8px;">They press 1 to accept → call connects instantly</div>
+    </div>
+  `;
 }
 
 // ── share card ─────────────────────────────────────────────
