@@ -232,6 +232,26 @@ input::placeholder{color:var(--hint)}
 @keyframes answer-glow{0%,100%{box-shadow:0 0 0 0 rgba(200,245,90,.5)}50%{box-shadow:0 0 0 18px rgba(200,245,90,0)}}
 #missed-status{font-size:12px;color:var(--muted);min-height:18px;letter-spacing:.05em;text-align:center}
 .missed-sub{font-size:11px;color:var(--hint);letter-spacing:.06em;line-height:1.8;text-align:center}
+
+/* ── relay choice panel ── */
+#relay-choice-panel{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:var(--s1);border:1px solid rgba(200,245,90,0.25);border-radius:var(--r-lg);padding:20px;max-width:340px;width:92%;z-index:100;display:flex;flex-direction:column;gap:14px}
+.relay-choice-title{font-size:11px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;text-align:center}
+.relay-choice-country{font-family:var(--disp);font-size:18px;font-weight:700;color:var(--tx);text-align:center;letter-spacing:-.02em}
+.relay-choice-sub{font-size:12px;color:var(--muted);text-align:center;letter-spacing:.04em}
+.relay-choice-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.relay-btn{padding:14px 10px;border-radius:var(--r);border:1px solid var(--b2);background:var(--s2);color:var(--tx);font-family:var(--disp);font-size:13px;font-weight:600;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;transition:all .15s;letter-spacing:.02em}
+.relay-btn:hover{background:var(--s3);border-color:var(--b3)}
+.relay-btn:active{transform:scale(.95)}
+.relay-btn.primary{border-color:rgba(200,245,90,0.4);background:rgba(200,245,90,0.08);color:var(--accent)}
+.relay-btn.primary:hover{background:rgba(200,245,90,0.14)}
+.relay-btn-icon{font-size:22px;line-height:1}
+
+/* ── SMS wait panel ── */
+#sms-wait-panel{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:var(--s1);border:1px solid var(--b2);border-radius:var(--r-lg);padding:24px;max-width:320px;width:92%;z-index:100;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center}
+.sms-wait-pulse{width:48px;height:48px;border-radius:50%;border:3px solid var(--accent);animation:sms-pulse 1.6s ease-in-out infinite;flex-shrink:0}
+@keyframes sms-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.22);opacity:.45}}
+.sms-wait-msg{font-size:13px;color:var(--tx);letter-spacing:.04em;line-height:1.55}
+.sms-wait-sub{font-size:11px;color:var(--muted);letter-spacing:.05em;line-height:1.6}
 </style>
 </head>
 <body>
@@ -1407,6 +1427,7 @@ async function onMessage(msg) {
     case 'callee_joined': {
       const card = document.getElementById('share-card');
       if (card) card.remove();
+      hideRelayPanel();                        // dismiss relay choice / SMS wait panels
       window._callPending = false;
       releaseWakeLock();
       stopRingback();
@@ -1414,10 +1435,10 @@ async function onMessage(msg) {
       callId   = msg.callId;
       callWith = 'link:' + msg.callId;
 
-      document.getElementById('call-status-lbl').textContent = 'Connecting...';
+      document.getElementById('call-status-lbl').textContent = 'They opened the link! Connecting...';
       document.getElementById('call-with').textContent = 'Connecting...';
       show('call');
-      toast('Other person opened the link');
+      toast('They opened the link! Connecting...');
 
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -1497,6 +1518,37 @@ async function onMessage(msg) {
       break;
     }
 
+    case 'relay_found': {
+      const cd = COUNTRY_DATA[msg.country];
+      const countryLabel = cd ? (cd.flag + ' ' + cd.name) : (msg.country || 'a relay');
+      if (msg.relay_mode === 'call') {
+        hideRelayPanel();
+        document.getElementById('call-status-lbl').textContent =
+          'Connecting via ' + countryLabel + ' relay...';
+        await wsSend({ type: 'use_relay_call', callId });
+      } else if (msg.relay_mode === 'sms') {
+        hideRelayPanel();
+        showSMSWaitPanel('Sending SMS invite via ' + countryLabel + ' relay...');
+        await wsSend({ type: 'use_relay_sms', callId });
+      } else {
+        // relay_mode === 'both' — let Person A choose
+        showRelayChoicePanel(callId, countryLabel);
+      }
+      break;
+    }
+
+    case 'sms_routing':
+      if (msg.status === 'sending') showSMSWaitPanel('📱 Sending SMS invite...');
+      break;
+
+    case 'sms_delivered':
+      updateSMSWaitPanel(
+        msg.status === 'ok'
+          ? '✅ SMS sent! Waiting for them to tap the link...'
+          : '⚠️ SMS delivery uncertain — waiting...'
+      );
+      break;
+
     case 'ussd_sent':
       // Server confirmed USSD was pushed to callee's phone
       showStatus('📳 USSD alert sent to their phone. Waiting for them to press 1...');
@@ -1518,6 +1570,74 @@ async function onMessage(msg) {
       toast('Error: ' + msg.reason);
       break;
   }
+}
+
+// ── relay choice panel ────────────────────────────────────
+function showRelayChoicePanel(cId, countryLabel) {
+  hideRelayPanel();
+  const panel = document.createElement('div');
+  panel.id = 'relay-choice-panel';
+  panel.innerHTML = `
+    <div class="relay-choice-title">Relay found in</div>
+    <div class="relay-choice-country">${countryLabel}</div>
+    <div class="relay-choice-sub">How would you like to reach them?</div>
+    <div class="relay-choice-btns">
+      <button class="relay-btn" onclick="useRelayCall('${cId}')">
+        <span class="relay-btn-icon">📞</span>
+        <span>Call them</span>
+      </button>
+      <button class="relay-btn primary" onclick="useRelaySMS('${cId}')">
+        <span class="relay-btn-icon">💬</span>
+        <span>Send SMS invite</span>
+      </button>
+    </div>
+  `;
+  document.getElementById('app').appendChild(panel);
+}
+
+function hideRelayPanel() {
+  document.getElementById('relay-choice-panel')?.remove();
+  document.getElementById('sms-wait-panel')?.remove();
+}
+
+function showSMSWaitPanel(msg) {
+  document.getElementById('sms-wait-panel')?.remove();
+  const panel = document.createElement('div');
+  panel.id = 'sms-wait-panel';
+  panel.innerHTML = `
+    <div class="sms-wait-pulse"></div>
+    <div class="sms-wait-msg">${msg}</div>
+    <div class="sms-wait-sub">They'll receive a link — one tap to answer from their phone</div>
+  `;
+  document.getElementById('app').appendChild(panel);
+}
+
+function updateSMSWaitPanel(msg) {
+  const panel = document.getElementById('sms-wait-panel');
+  if (!panel) { showSMSWaitPanel(msg); return; }
+  const msgEl = panel.querySelector('.sms-wait-msg');
+  if (msgEl) msgEl.textContent = msg;
+  const pulse = panel.querySelector('.sms-wait-pulse');
+  if (pulse) pulse.style.borderColor = 'var(--green)';
+}
+
+async function useRelayCall(cId) {
+  hideRelayPanel();
+  document.getElementById('call-status-lbl').textContent = 'Connecting via relay...';
+  await wsSend({ type: 'use_relay_call', callId: cId });
+}
+
+async function useRelaySMS(cId) {
+  hideRelayPanel();
+  showSMSWaitPanel('📱 Sending SMS invite...');
+  await wsSend({ type: 'use_relay_sms', callId: cId });
+}
+
+// ── status message (shared by USSD + relay flows) ──────────
+function showStatus(msg) {
+  const lbl = document.getElementById('call-status-lbl');
+  if (lbl) lbl.textContent = msg;
+  toast(msg, 4000);
 }
 
 // ── USSD waiting UI ────────────────────────────────────────

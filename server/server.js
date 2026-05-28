@@ -41,11 +41,12 @@ const gatewayNumbers = {
   'IN': '+918000000001',
   'GB': '+442000000001',
   'KE': '+254000000001',
-  'AU': '+61200000001',
-  'DE': '+492000000001',
-  'FR': '+331000000001',
   'NG': '+234000000001',
-  'ZA': '+272000000001'
+  'GH': '+233000000001',
+  'AU': '+610000000001',
+  'DE': '+490000000001',
+  'FR': '+330000000001',
+  'ZA': '+270000000001'
 };
 
 const COUNTRY_PLATFORMS = {
@@ -643,8 +644,8 @@ async function handle(ws, msg) {
       const areaCode = msg.areaCode || null;   // e.g. "+1416"
       const country  = msg.country  || null;   // e.g. "CA"
 
-      relays.set(relayId, { ws, areaCode, country, registeredAt: Date.now() });
-      metadata.set(ws, { relayId, areaCode, country });
+      relays.set(relayId, { ws, areaCode, country, relay_mode: msg.relay_mode || 'both', registeredAt: Date.now() });
+      metadata.set(ws, { relayId, areaCode, country, relay_mode: msg.relay_mode || 'both' });
 
       send(ws, { type: "relay_registered", relayId });
       log("✓", "relay registered", relayId, country, areaCode);
@@ -713,12 +714,13 @@ async function handle(ws, msg) {
         if (relay) {
           const relayWs = registry.get(relay.relayId);
           if (relayWs) {
-            const gwNumber = gatewayNumbers[relay.country] || null;
+            const callerIdToShow = gatewayNumbers[detectCountry(to)] || '+10000000001';
             send(relayWs, {
               type:           'relay_call',
               callId,
               dialNumber:     to,
-              callerIdToShow: gwNumber,
+              callerIdToShow: callerIdToShow,
+              joinURL:        'https://opencall.net/join/' + callId,
               callerOcp:      callerMeta.ocpAddress || null
             });
             send(ws, { type: 'ringing', callId, to, mode: 'relay' });
@@ -1004,6 +1006,80 @@ async function handle(ws, msg) {
         log('✓', 'LINE linked for', meta.number);
         send(ws, { type: 'linked', platform: 'line' });
       }
+      break;
+    }
+
+    // ── RELAY_SMS ─────────────────────────────────────────────
+    // Caller routes through a relay that sends an SMS invite
+    case 'relay_sms': {
+      const callerMeta = metadata.get(ws);
+      if (!callerMeta?.number) {
+        return send(ws, { type: 'error', reason: 'not_registered' });
+      }
+
+      const to     = normalizeNumber(msg.to);
+      const callId = makeCallId();
+
+      if (!to) {
+        return send(ws, { type: 'error', reason: 'invalid_number' });
+      }
+
+      const targetCountry = detectCountry(to);
+
+      // Find a relay in the target country that supports SMS
+      let smsRelay = null;
+      for (const [, relay] of relays) {
+        if (relay.country === targetCountry &&
+            (relay.relay_mode === 'sms' || relay.relay_mode === 'both') &&
+            relay.ws?.readyState === 1) {
+          smsRelay = relay;
+          break;
+        }
+      }
+
+      if (!smsRelay) {
+        return send(ws, { type: 'error', reason: 'no_sms_relay_available' });
+      }
+
+      const joinURL = 'https://opencall.net/join/' + callId;
+
+      send(smsRelay.ws, {
+        type:         'relay_sms',
+        callId,
+        targetNumber: to,
+        callerName:   'OpenCall',
+        joinURL
+      });
+
+      send(ws, {
+        type:    'sms_routing',
+        status:  'sending',
+        message: 'Sending SMS invite via relay...'
+      });
+
+      pendingCalls.set(callId, {
+        from:      callerMeta.number,
+        fromName:  callerMeta.name,
+        to,
+        callerWs:  ws,
+        createdAt: Date.now()
+      });
+      setTimeout(() => pendingCalls.delete(callId), 15 * 60 * 1000);
+
+      log('📱', `relay_sms ${callerMeta.number} → ${to} via ${targetCountry} relay (${callId})`);
+      break;
+    }
+
+    // ── SMS_SENT ──────────────────────────────────────────────
+    // Relay confirms it sent the SMS — forward delivery status to caller
+    case 'sms_sent': {
+      const call = pendingCalls.get(msg.callId) || callLog.get(msg.callId);
+      if (!call) break;
+      const callerWs = call.callerWs || registry.get(call.from);
+      if (callerWs) {
+        send(callerWs, { type: 'sms_delivered', callId: msg.callId, status: msg.status });
+      }
+      log('✓', 'sms_sent confirmed for', msg.callId, '| status:', msg.status);
       break;
     }
 
