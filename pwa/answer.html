@@ -1,408 +1,467 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#0a0a0a">
-  <title>Incoming Call · OpenCall</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Incoming Call · OpenCall</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-deep: #060a10;
+  --bg-card: rgba(13, 31, 53, 0.75);
+  --bg-field: rgba(3, 7, 13, 0.85);
+  --bg-overlay: rgba(6, 10, 16, 0.92);
+  --blue: #63b4ff;
+  --blue-dim: rgba(99, 180, 255, 0.12);
+  --blue-border: rgba(99, 180, 255, 0.15);
+  --blue-glow: rgba(99, 180, 255, 0.06);
+  --green: #1d9e75;
+  --green-dim: rgba(29, 158, 117, 0.15);
+  --green-border: rgba(29, 158, 117, 0.35);
+  --purple: #7f77dd;
+  --purple-dim: rgba(127, 119, 221, 0.12);
+  --text-primary: #e8f4ff;
+  --text-secondary: #6b8fad;
+  --text-muted: rgba(99, 180, 255, 0.35);
+  --border: rgba(99, 180, 255, 0.1);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+}
 
-    :root {
-      --bg:      #0a0a0a;
-      --surface: #141414;
-      --border:  #2a2a2a;
-      --text:    #f0ede8;
-      --muted:   #666;
-      --accent:  #c8f55a;
-      --red:     #ff453a;
-      --green:   #30d158;
-    }
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-    html, body {
-      height: 100%;
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Syne', sans-serif;
-      -webkit-font-smoothing: antialiased;
-      overscroll-behavior: none;
-    }
+body {
+  font-family: 'Syne', -apple-system, sans-serif;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+  position: relative;
+}
 
-    /* ── Screens ─────────────────────────────────────────────── */
-    .screen {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100dvh;
-      width: 100%;
-      padding: 48px 28px 80px;
-      text-align: center;
-    }
-    .screen.active { display: flex; }
+/* ── Ambient rings background ── */
+body::before {
+  content: '';
+  position: fixed;
+  width: 700px; height: 700px;
+  border-radius: 50%;
+  border: 1px solid rgba(99,180,255,0.05);
+  top: -200px; left: -150px;
+  pointer-events: none; z-index: 0;
+}
+body::after {
+  content: '';
+  position: fixed;
+  width: 500px; height: 500px;
+  border-radius: 50%;
+  border: 1px solid rgba(99,180,255,0.07);
+  top: -120px; left: -70px;
+  pointer-events: none; z-index: 0;
+}
+.ring-3 {
+  position: fixed;
+  width: 320px; height: 320px;
+  border-radius: 50%;
+  border: 1px solid rgba(99,180,255,0.1);
+  top: -50px; left: 10px;
+  pointer-events: none; z-index: 0;
+}
+.ring-4 {
+  position: fixed;
+  width: 180px; height: 180px;
+  border-radius: 50%;
+  border: 1px solid rgba(99,180,255,0.14);
+  top: 10px; left: 50px;
+  pointer-events: none; z-index: 0;
+}
+.pulse-node {
+  position: fixed;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--blue);
+  top: 90px; left: 146px;
+  animation: nodebeat 3s ease-in-out infinite;
+  pointer-events: none; z-index: 0;
+}
+@keyframes nodebeat {
+  0%,100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.9; transform: scale(1.4); }
+}
 
-    /* ── Loading ─────────────────────────────────────────────── */
-    .spinner {
-      width: 36px;
-      height: 36px;
-      border: 2.5px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.75s linear infinite;
-      margin-bottom: 18px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+/* ── Layout ── */
+.app-container {
+  position: relative; z-index: 1;
+  max-width: 400px;
+  margin: 0 auto;
+  padding: 0 16px 80px;
+  min-height: 100vh;
+}
 
-    /* ── Avatar ──────────────────────────────────────────────── */
-    .avatar {
-      width: 100px;
-      height: 100px;
-      border-radius: 50%;
-      background: var(--surface);
-      border: 2px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 42px;
-      font-weight: 700;
-      color: var(--accent);
-      position: relative;
-      flex-shrink: 0;
-    }
+/* ── Header ── */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0 12px;
+}
+.logo-lockup {
+  display: flex; align-items: center; gap: 10px;
+}
+.logo-svg-wrap {
+  width: 32px; height: 32px;
+  background: var(--bg-card);
+  border: 1px solid var(--blue-border);
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+}
+.logo-name { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.logo-ver  { font-size: 9px; color: var(--text-muted); letter-spacing: 0.5px; }
+.status-pill {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.5px;
+  padding: 4px 10px; border-radius: 20px;
+}
+.pill-online { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
+.pill-calling { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue-border); }
+.pill-routing { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(127,119,221,0.3); }
 
-    .avatar.pulse::before,
-    .avatar.pulse::after {
-      content: '';
-      position: absolute;
-      inset: -14px;
-      border-radius: 50%;
-      border: 1.5px solid var(--accent);
-      opacity: 0;
-      animation: ring 2.2s ease-out infinite;
-    }
-    .avatar.pulse::after { animation-delay: 0.7s; }
+/* ── Cards ── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  margin-bottom: 10px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.card-label {
+  font-size: 9px; text-transform: uppercase;
+  letter-spacing: 0.8px; color: var(--text-muted);
+  margin-bottom: 6px;
+}
 
-    @keyframes ring {
-      0%   { transform: scale(0.88); opacity: 0.5; }
-      100% { transform: scale(1.55); opacity: 0; }
-    }
+/* ── Identity card ── */
+.identity-val {
+  font-size: 11px; color: #c8dff5;
+  font-family: 'DM Mono', monospace;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.copy-btn {
+  font-size: 9px; color: var(--blue);
+  cursor: pointer; opacity: 0.6;
+  transition: opacity 0.2s;
+}
+.copy-btn:hover { opacity: 1; }
 
-    /* ── Typography ──────────────────────────────────────────── */
-    .label {
-      font-size: 11px;
-      font-family: 'DM Mono', monospace;
-      color: var(--accent);
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      margin-top: 28px;
-      margin-bottom: 10px;
-    }
+/* ── Dial display ── */
+.dial-display {
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  text-align: center;
+  margin-bottom: 10px;
+}
+.dial-number {
+  font-size: 28px; font-weight: 300;
+  color: var(--text-primary);
+  font-family: 'DM Mono', monospace;
+  letter-spacing: 3px;
+  min-height: 42px;
+}
+.dial-hint {
+  font-size: 10px; color: var(--text-muted);
+  margin-top: 6px;
+}
 
-    h1 {
-      font-size: 30px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      line-height: 1.1;
-      margin-bottom: 6px;
-    }
+/* ── Keypad ── */
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.key {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 0;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  user-select: none;
+}
+.key:active,
+.key:hover { background: rgba(13,31,53,0.95); border-color: var(--blue-border); }
+.key-num {
+  font-size: 20px; font-weight: 500;
+  color: var(--text-primary); line-height: 1;
+}
+.key-sub {
+  font-size: 7px; color: var(--text-muted);
+  letter-spacing: 1px; margin-top: 2px;
+}
 
-    h2 {
-      font-size: 22px;
-      font-weight: 700;
-      margin-bottom: 10px;
-    }
+/* ── Action row ── */
+.action-row {
+  display: flex; align-items: center;
+  justify-content: center; gap: 28px;
+  margin-bottom: 8px;
+}
+.btn-call {
+  width: 60px; height: 60px; border-radius: 50%;
+  background: var(--green-dim); border: 1px solid var(--green-border);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 24px;
+  transition: background 0.2s;
+}
+.btn-call:hover { background: rgba(29,158,117,0.25); }
+.btn-aux {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--bg-card); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 16px; color: var(--text-secondary);
+}
 
-    .caller-number {
-      font-family: 'DM Mono', monospace;
-      font-size: 14px;
-      color: var(--muted);
-      margin-bottom: 22px;
-    }
+/* ── Active call screen ── */
+.call-screen {
+  text-align: center; padding: 20px 0;
+}
+.caller-avatar {
+  width: 80px; height: 80px; border-radius: 50%;
+  border: 2px solid var(--green-border);
+  background: var(--bg-card);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 16px;
+  font-size: 28px; font-weight: 700; color: var(--green);
+}
+.caller-name {
+  font-size: 20px; font-weight: 600;
+  color: var(--text-primary);
+}
+.call-status-text {
+  font-size: 11px; color: var(--green);
+  letter-spacing: 0.4px; margin-top: 6px;
+}
+.call-route-badge {
+  display: inline-block; margin-top: 8px;
+  font-size: 9px; color: var(--text-muted);
+  background: var(--bg-field); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 10px;
+  font-family: 'DM Mono', monospace;
+}
+.call-timer {
+  font-size: 36px; font-weight: 300;
+  font-family: 'DM Mono', monospace;
+  color: var(--text-primary);
+  margin: 24px 0;
+}
+.call-btns {
+  display: flex; justify-content: center; gap: 20px;
+}
+.cbtn {
+  width: 56px; height: 56px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 20px;
+  transition: transform 0.1s;
+}
+.cbtn:active { transform: scale(0.94); }
+.cbtn-mute,.cbtn-spk {
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.cbtn-end {
+  background: rgba(61,10,10,0.8);
+  border: 1px solid rgba(122,26,26,0.6);
+  color: #ff6b6b;
+}
 
-    .tagline {
-      font-size: 11px;
-      font-family: 'DM Mono', monospace;
-      color: var(--muted);
-      margin-bottom: 52px;
-      line-height: 1.7;
-    }
+/* ── Relay waiting / share ── */
+.relay-waiting { text-align: center; padding: 8px 0; }
+.rw-icon { font-size: 36px; margin-bottom: 12px; }
+.rw-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.rw-sub { font-size: 11px; color: var(--text-muted); line-height: 1.6; margin-top: 6px; }
+.relay-btn {
+  width: 100%; margin-top: 10px;
+  padding: 12px; border-radius: var(--radius-md);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  border: none; transition: opacity 0.2s;
+}
+.relay-btn:hover { opacity: 0.85; }
+.relay-btn-sms {
+  background: var(--green-dim); color: var(--green);
+  border: 1px solid var(--green-border);
+}
+.relay-btn-call {
+  background: var(--blue-dim); color: var(--blue);
+  border: 1px solid var(--blue-border);
+}
+.share-section-label {
+  font-size: 9px; color: var(--text-muted);
+  letter-spacing: 0.8px; text-transform: uppercase;
+  margin: 14px 0 8px;
+}
+.share-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px;
+}
+.share-btn {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 9px 4px;
+  text-align: center; cursor: pointer;
+  font-size: 9px; color: var(--text-muted);
+  transition: border-color 0.15s;
+}
+.share-btn:hover { border-color: var(--blue-border); color: var(--blue); }
+.share-icon { font-size: 16px; display: block; margin-bottom: 3px; }
+.join-link-box {
+  background: var(--bg-field); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 12px;
+  font-size: 10px; font-family: 'DM Mono', monospace;
+  color: var(--text-muted); word-break: break-all;
+  margin-top: 10px; text-align: left;
+}
 
-    .sub {
-      font-size: 14px;
-      color: var(--muted);
-      line-height: 1.6;
-      max-width: 280px;
-      margin-top: 8px;
-    }
+/* ── Stats row ── */
+.stats-row {
+  display: flex; gap: 8px; margin-bottom: 10px;
+}
+.stat-box {
+  flex: 1; background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px; text-align: center;
+}
+.stat-num { font-size: 20px; font-weight: 700; color: var(--text-primary); }
+.stat-lbl { font-size: 8px; color: var(--text-muted); letter-spacing: 0.5px; margin-top: 3px; }
 
-    /* ── Call answer/decline buttons ─────────────────────────── */
-    .btn-row {
-      display: flex;
-      gap: 56px;
-      align-items: center;
-      justify-content: center;
-    }
+/* ── Status footer ── */
+.status-footer {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: rgba(6,10,16,0.95);
+  border-top: 1px solid rgba(99,180,255,0.06);
+  padding: 8px 20px;
+  display: flex; align-items: center;
+  justify-content: space-between;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+}
+.sf-indicator {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block; margin-right: 6px;
+}
+.sf-on { background: var(--green); }
+.sf-routing { background: var(--purple); }
+.sf-off { background: var(--text-muted); }
+.sf-text { font-size: 9px; color: var(--text-muted); }
 
-    .btn-circle {
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
-      border: none;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.12s ease, opacity 0.12s ease;
-      flex-shrink: 0;
-    }
-    .btn-circle:active  { transform: scale(0.90); opacity: 0.8; }
-    .btn-circle:disabled { opacity: 0.3; pointer-events: none; }
+/* ── Input fields ── */
+input[type=text], input[type=tel] {
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: 'DM Mono', monospace;
+  font-size: 12px; padding: 10px 12px;
+  width: 100%; outline: none;
+  transition: border-color 0.2s;
+}
+input[type=text]:focus, input[type=tel]:focus {
+  border-color: var(--blue-border);
+}
+input::placeholder { color: var(--text-muted); }
 
-    .btn-decline { background: var(--red); }
-    .btn-answer  { background: var(--green); }
+/* ── Animations ── */
+@keyframes callavatar {
+  0%,100% { box-shadow: 0 0 0 0 rgba(29,158,117,0.3); }
+  50% { box-shadow: 0 0 0 12px rgba(29,158,117,0); }
+}
+.caller-avatar.ringing { animation: callavatar 1.5s ease-out infinite; }
 
-    .btn-label {
-      font-size: 11px;
-      font-family: 'DM Mono', monospace;
-      color: var(--muted);
-      margin-top: 10px;
-      text-align: center;
-    }
-
-    /* ── Active call ─────────────────────────────────────────── */
-    .timer {
-      font-family: 'DM Mono', monospace;
-      font-size: 32px;
-      font-weight: 500;
-      color: var(--accent);
-      margin-top: 4px;
-      margin-bottom: 10px;
-      letter-spacing: 0.04em;
-    }
-
-    .call-status {
-      font-size: 12px;
-      font-family: 'DM Mono', monospace;
-      color: var(--muted);
-      margin-top: 6px;
-    }
-
-    .controls {
-      display: flex;
-      gap: 20px;
-      margin-top: 36px;
-    }
-
-    .btn-ctrl {
-      width: 58px;
-      height: 58px;
-      border-radius: 50%;
-      border: 1.5px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: border-color 0.15s, background 0.15s, color 0.15s;
-    }
-    .btn-ctrl.on {
-      border-color: var(--accent);
-      background: rgba(200, 245, 90, 0.10);
-      color: var(--accent);
-    }
-    .btn-ctrl:active { opacity: 0.7; }
-
-    .btn-hangup {
-      width: 68px;
-      height: 68px;
-      border-radius: 50%;
-      border: none;
-      background: var(--red);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-top: 44px;
-      transition: transform 0.12s, opacity 0.12s;
-    }
-    .btn-hangup:active { transform: scale(0.90); opacity: 0.85; }
-
-    /* ── End / get CTA ───────────────────────────────────────── */
-    .icon-xl {
-      font-size: 52px;
-      margin-bottom: 18px;
-      line-height: 1;
-    }
-
-    .duration {
-      font-family: 'DM Mono', monospace;
-      font-size: 15px;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-
-    .btn-get {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 28px;
-      padding: 14px 30px;
-      background: var(--accent);
-      color: #0a0a0a;
-      font-family: 'Syne', sans-serif;
-      font-weight: 700;
-      font-size: 15px;
-      text-decoration: none;
-      border-radius: 100px;
-      letter-spacing: 0.01em;
-      transition: opacity 0.15s;
-    }
-    .btn-get:active { opacity: 0.82; }
-
-    /* ── Connecting overlay on incoming screen ───────────────── */
-    #connecting-hint {
-      display: none;
-      font-size: 12px;
-      font-family: 'DM Mono', monospace;
-      color: var(--accent);
-      margin-top: 20px;
-      letter-spacing: 0.06em;
-    }
-
-    /* ── Footer ──────────────────────────────────────────────── */
-    .footer {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 11px 16px 14px;
-      text-align: center;
-      font-size: 10px;
-      font-family: 'DM Mono', monospace;
-      color: #333;
-      border-top: 1px solid #181818;
-      background: var(--bg);
-      z-index: 100;
-      letter-spacing: 0.04em;
-    }
-  </style>
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.screen-fade { animation: fadein 0.25s ease; }
+</style>
 </head>
 <body>
+<div class="ring-3" aria-hidden="true"></div>
+<div class="ring-4" aria-hidden="true"></div>
+<div class="pulse-node" aria-hidden="true"></div>
 
-<!-- ── Screen: Loading ──────────────────────────────────────── -->
-<div id="screen-loading" class="screen active">
-  <div class="spinner"></div>
-  <p style="font-size:13px;font-family:'DM Mono',monospace;color:var(--muted)">Verifying call…</p>
-</div>
-
-<!-- ── Screen: Expired ──────────────────────────────────────── -->
-<div id="screen-expired" class="screen">
-  <div class="icon-xl">⏱</div>
-  <h2>Link expired</h2>
-  <p class="sub" id="expired-msg">This call link has expired or the caller hung up.</p>
-  <a href="https://opencall-server.vercel.app" class="btn-get" style="margin-top:36px">Get OpenCall</a>
-</div>
-
-<!-- ── Screen: Incoming ─────────────────────────────────────── -->
-<div id="screen-incoming" class="screen">
-  <div style="flex:1 1 0"></div>
-
-  <div class="avatar pulse" id="avatar">?</div>
-  <p class="label" id="incoming-label">Incoming call</p>
-  <h1 id="caller-name">Caller</h1>
-  <p class="caller-number" id="caller-number"></p>
-  <p class="tagline">Free call · No install needed<br>OpenCall Protocol</p>
-
-  <div class="btn-row">
-    <div>
-      <button class="btn-circle btn-decline" id="btn-decline" onclick="declineCall()" aria-label="Decline">
-        <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
-          <path d="M7 7l12 12M19 7L7 19" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+<div class="app-container">
+  <header class="app-header">
+    <div class="logo-lockup">
+      <div class="logo-svg-wrap">
+        <svg width="18" height="18" viewBox="0 0 18 18">
+          <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(99,180,255,0.2)" stroke-width="1"/>
+          <circle cx="9" cy="9" r="4.5" fill="none" stroke="rgba(99,180,255,0.35)" stroke-width="1"/>
+          <circle cx="9" cy="9" r="2" fill="none" stroke="rgba(99,180,255,0.6)" stroke-width="1"/>
+          <circle cx="9" cy="9" r="1" fill="#63b4ff"/>
         </svg>
-      </button>
-      <p class="btn-label">Decline</p>
+      </div>
+      <div>
+        <div class="logo-name">OpenCall</div>
+        <div class="logo-ver">Incoming call</div>
+      </div>
     </div>
-    <div>
-      <button class="btn-circle btn-answer" id="btn-answer" onclick="answerCall()" aria-label="Answer">
-        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-          <path d="M5.5 7C5.5 6.17 6.17 5.5 7 5.5h3.1a.9.9 0 0 1 .87.66l1.2 4.6a.9.9 0 0 1-.27.91L10.3 13.3c1.3 2.6 3.8 5.1 6.4 6.4l1.63-1.57a.9.9 0 0 1 .91-.27l4.6 1.2a.9.9 0 0 1 .66.87V23a1.5 1.5 0 0 1-1.5 1.5C12.12 24.5 3.5 15.88 3.5 5.5V7z" fill="#fff"/>
-        </svg>
-      </button>
-      <p class="btn-label">Answer</p>
+  </header>
+
+  <div id="screen-ringing" class="screen-fade" style="text-align:center;padding:32px 0">
+    <div class="caller-avatar ringing" id="ans-avatar">?</div>
+    <div class="caller-name" id="ans-name">Incoming call</div>
+    <div class="call-status-text">Free call · OpenCall Protocol</div>
+    <div class="call-route-badge" id="ans-from">from OCP network</div>
+    <div style="display:flex;justify-content:center;gap:32px;margin-top:40px">
+      <div class="cbtn cbtn-end" id="btn-decline" style="width:64px;height:64px;font-size:22px">&#9742;</div>
+      <div class="cbtn" id="btn-answer"
+           style="width:64px;height:64px;font-size:22px;background:var(--green-dim);border:1px solid var(--green-border)">
+        &#9742;
+      </div>
+    </div>
+    <div style="margin-top:16px;font-size:10px;color:var(--text-muted)">
+      No app needed · No account · End-to-end encrypted
     </div>
   </div>
 
-  <p id="connecting-hint">Connecting…</p>
-  <div style="flex:1 1 0"></div>
-</div>
-
-<!-- ── Screen: Declined ─────────────────────────────────────── -->
-<div id="screen-declined" class="screen">
-  <div class="icon-xl" style="color:var(--red)">✗</div>
-  <h2>Call declined</h2>
-  <p class="sub">You declined the call.</p>
-</div>
-
-<!-- ── Screen: Active call ──────────────────────────────────── -->
-<div id="screen-active" class="screen">
-  <div style="flex:1 1 0"></div>
-
-  <div class="avatar" id="avatar-active">?</div>
-  <p class="timer" id="call-timer">0:00</p>
-  <h1 id="active-caller-name">Caller</h1>
-  <p class="call-status">Free call via OpenCall</p>
-
-  <div class="controls">
-    <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
-      <button class="btn-ctrl" id="btn-mute" onclick="toggleMute()" aria-label="Mute">
-        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-          <rect x="7.5" y="1.5" width="7" height="11" rx="3.5" fill="currentColor"/>
-          <path d="M3.5 10.5a7.5 7.5 0 0 0 15 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>
-          <line x1="11" y1="18" x2="11" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        </svg>
-      </button>
-      <span style="font-size:10px;font-family:'DM Mono',monospace;color:var(--muted)">Mute</span>
-    </div>
-    <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
-      <button class="btn-ctrl" id="btn-speaker" onclick="toggleSpeaker()" aria-label="Speaker">
-        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-          <path d="M2.5 7.5h3.5l5-4.5v13.5l-5-4.5H2.5V7.5z" fill="currentColor"/>
-          <path d="M14.5 6.5a5.5 5.5 0 0 1 0 9M17 4a9 9 0 0 1 0 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>
-        </svg>
-      </button>
-      <span style="font-size:10px;font-family:'DM Mono',monospace;color:var(--muted)">Speaker</span>
+  <div id="screen-active" class="call-screen screen-fade" style="display:none">
+    <div class="caller-avatar" id="ans-active-avatar">?</div>
+    <div class="caller-name" id="ans-active-name">Connected</div>
+    <div class="call-status-text">End-to-end encrypted</div>
+    <div class="call-route-badge">OpenCall Protocol</div>
+    <div class="call-timer" id="ans-timer">0:00</div>
+    <div class="call-btns">
+      <div class="cbtn cbtn-mute" id="ans-mute">&#128263;</div>
+      <div class="cbtn cbtn-end" id="ans-end">&#9742;</div>
+      <div class="cbtn cbtn-spk" id="ans-spk">&#128264;</div>
     </div>
   </div>
 
-  <button class="btn-hangup" onclick="hangup()" aria-label="End call">
-    <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
-      <path d="M13 7.5c-3.6 0-6.9 1.4-9.3 3.7-.3.3-.3.8 0 1.1l2.1 2.1c.3.3.8.3 1.1 0 .9-.9 2-1.5 3.2-1.8l.6 2.4c.1.3.3.5.6.5h3.4c.3 0 .5-.2.6-.5l.6-2.4c1.2.3 2.3.9 3.2 1.8.3.3.8.3 1.1 0l2.1-2.1c.3-.3.3-.8 0-1.1A13 13 0 0 0 13 7.5z" fill="#fff"/>
-    </svg>
-  </button>
-
-  <div style="flex:1 1 0"></div>
+  <div id="screen-ended" style="display:none;text-align:center;padding:40px 0">
+    <div style="font-size:14px;color:var(--text-muted)">Call ended</div>
+    <div class="caller-name" id="ans-duration" style="margin-top:8px">0:00</div>
+    <div style="margin-top:24px;font-size:12px;color:var(--text-muted)">
+      Make free calls anytime
+    </div>
+    <a href="/" class="relay-btn relay-btn-sms"
+       style="display:block;margin-top:12px;text-decoration:none;text-align:center">
+      Get OpenCall free
+    </a>
+  </div>
 </div>
 
-<!-- ── Screen: Call ended ────────────────────────────────────── -->
-<div id="screen-end" class="screen">
-  <div class="icon-xl" style="color:var(--accent)">✓</div>
-  <h2>Call ended</h2>
-  <p class="duration" id="end-duration">Duration: 0:00</p>
-  <p class="sub">Get OpenCall to receive calls anytime, for free — no carrier needed.</p>
-  <a href="https://opencall-server.vercel.app" class="btn-get">Get OpenCall</a>
+<div class="status-footer">
+  <span class="sf-text">No app downloaded · No account</span>
+  <span class="sf-text">OpenCall Protocol</span>
 </div>
 
-<!-- Remote audio (hidden) -->
 <audio id="remote-audio" autoplay playsinline></audio>
-
-<!-- Footer — visible on every screen -->
-<div class="footer">
-  No app downloaded &nbsp;·&nbsp; No account &nbsp;·&nbsp; OpenCall Protocol (open source)
-</div>
 
 <script>
 // ── Config ──────────────────────────────────────────────────────
@@ -441,25 +500,27 @@ let pendingCallId = null;
 
 // ── Screen management ───────────────────────────────────────────
 function showScreen(id) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
+  ['screen-ringing', 'screen-active', 'screen-ended'].forEach(sid => {
+    const el = document.getElementById(sid);
+    if (el) el.style.display = sid === id ? '' : 'none';
+  });
 }
 
 // ── Caller UI helper ────────────────────────────────────────────
 function setCallerUI(name, number) {
   const initial = (name || '?')[0].toUpperCase();
-  document.getElementById('avatar').textContent            = initial;
-  document.getElementById('avatar-active').textContent     = initial;
-  document.getElementById('caller-name').textContent       = name;
-  document.getElementById('caller-number').textContent     = number;
-  document.getElementById('active-caller-name').textContent = name;
+  document.getElementById('ans-avatar').textContent        = initial;
+  document.getElementById('ans-active-avatar').textContent = initial;
+  document.getElementById('ans-name').textContent          = name;
+  document.getElementById('ans-from').textContent          = number || 'from OCP network';
+  document.getElementById('ans-active-name').textContent   = name;
 }
 
 // ── Init: verify call is live ───────────────────────────────────
 async function init() {
   if (!callId) {
-    document.getElementById('expired-msg').textContent = 'Invalid call link — no call ID found.';
-    showScreen('screen-expired');
+    document.getElementById('ans-duration').textContent = 'Invalid call link';
+    showScreen('screen-ended');
     return;
   }
 
@@ -474,20 +535,18 @@ async function init() {
       fromNumber   = data.from     || fromNumber;
       callerNumber = fromNumber;
       setCallerUI(fromName, fromNumber);
-      showScreen('screen-incoming');
     } else {
       showExpired('This call link has expired or the caller hung up.');
     }
   } catch(e) {
-    // Server unreachable — show incoming screen optimistically
+    // Server unreachable — show ringing screen optimistically
     console.warn('[answer] /call-info unreachable, proceeding anyway');
-    showScreen('screen-incoming');
   }
 }
 
 function showExpired(msg) {
-  if (msg) document.getElementById('expired-msg').textContent = msg;
-  showScreen('screen-expired');
+  document.getElementById('ans-duration').textContent = msg || 'Link expired';
+  showScreen('screen-ended');
 }
 
 // ── WebSocket ───────────────────────────────────────────────────
@@ -502,11 +561,11 @@ function connectWS() {
   return new Promise((resolve, reject) => {
     ws = new WebSocket(WS_URL);
     ws.onerror = () => reject(new Error('WebSocket connection failed'));
-    // join_call is sent when the server sends 'connected'
     ws.onopen    = () => resolve();
     ws.onmessage = onMessage;
     ws.onclose   = () => {
-      if (document.getElementById('screen-active').classList.contains('active')) {
+      const el = document.getElementById('screen-active');
+      if (el && el.style.display !== 'none') {
         endCall(stopTimer());
       }
     };
@@ -565,7 +624,6 @@ async function onMessage(event) {
 async function answerCall() {
   userAnswered = true;
 
-  // Get mic permission before anything else
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch(e) {
@@ -574,26 +632,28 @@ async function answerCall() {
     return;
   }
 
-  // Disable buttons, show connecting hint
-  document.getElementById('btn-answer').disabled  = true;
-  document.getElementById('btn-decline').disabled = true;
-  document.getElementById('incoming-label').textContent = 'Connecting…';
-  document.getElementById('connecting-hint').style.display = 'block';
+  const btnAns = document.getElementById('btn-answer');
+  const btnDec = document.getElementById('btn-decline');
+  btnAns.style.pointerEvents = 'none';
+  btnAns.style.opacity       = '0.4';
+  btnDec.style.pointerEvents = 'none';
+  btnDec.style.opacity       = '0.4';
+  document.getElementById('ans-name').textContent = 'Connecting…';
 
   try {
     await connectWS();
   } catch(e) {
     userAnswered = false;
     cleanupMedia();
-    document.getElementById('btn-answer').disabled  = false;
-    document.getElementById('btn-decline').disabled = false;
-    document.getElementById('incoming-label').textContent = 'Incoming call';
-    document.getElementById('connecting-hint').style.display = 'none';
+    btnAns.style.pointerEvents = '';
+    btnAns.style.opacity       = '';
+    btnDec.style.pointerEvents = '';
+    btnDec.style.opacity       = '';
+    document.getElementById('ans-name').textContent = callerName;
     alert('Could not reach the OpenCall server. Check your connection and try again.');
     return;
   }
 
-  // If the offer arrived before we connected (very fast server), handle it now
   if (pendingOffer) {
     await handleOffer(pendingOffer, pendingCallId);
   }
@@ -651,18 +711,19 @@ function toggleMute() {
   if (!localStream) return;
   isMuted = !isMuted;
   localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
-  document.getElementById('btn-mute').classList.toggle('on', isMuted);
+  document.getElementById('ans-mute').classList.toggle('active', isMuted);
 }
 
 function toggleSpeaker() {
   isSpeakerOff = !isSpeakerOff;
   document.getElementById('remote-audio').muted = isSpeakerOff;
-  document.getElementById('btn-speaker').classList.toggle('on', isSpeakerOff);
+  document.getElementById('ans-spk').classList.toggle('active', isSpeakerOff);
 }
 
 // ── DECLINE button ──────────────────────────────────────────────
 function declineCall() {
-  showScreen('screen-declined');
+  document.getElementById('ans-duration').textContent = 'Call declined';
+  showScreen('screen-ended');
 }
 
 // ── HANGUP button ───────────────────────────────────────────────
@@ -674,8 +735,8 @@ function hangup() {
 // ── End call + cleanup ──────────────────────────────────────────
 function endCall(duration) {
   cleanupMedia();
-  document.getElementById('end-duration').textContent = 'Duration: ' + (duration || '0:00');
-  showScreen('screen-end');
+  document.getElementById('ans-duration').textContent = duration || '0:00';
+  showScreen('screen-ended');
 }
 
 function cleanupMedia() {
@@ -690,7 +751,7 @@ function startTimer() {
   callStartTime = Date.now();
   timerInterval = setInterval(() => {
     const s = Math.floor((Date.now() - callStartTime) / 1000);
-    document.getElementById('call-timer').textContent =
+    document.getElementById('ans-timer').textContent =
       Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   }, 1000);
 }
@@ -703,6 +764,13 @@ function stopTimer() {
   callStartTime = null;
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
+
+// ── Button wiring ────────────────────────────────────────────────
+document.getElementById('btn-answer').addEventListener('click', answerCall);
+document.getElementById('btn-decline').addEventListener('click', declineCall);
+document.getElementById('ans-mute').addEventListener('click', toggleMute);
+document.getElementById('ans-spk').addEventListener('click', toggleSpeaker);
+document.getElementById('ans-end').addEventListener('click', hangup);
 
 // ── Boot ─────────────────────────────────────────────────────────
 init();
