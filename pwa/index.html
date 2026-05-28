@@ -418,60 +418,58 @@ input::placeholder { color: var(--text-muted); }
 
   <!-- ══════════════ REGISTER ══════════════ -->
   <div class="screen" id="scr-register">
-    <div class="logo">
-      <div class="logo-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81a19.79 19.79 0 01-3.07-8.67A2 2 0 012 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
+
+    <div style="padding:32px 0 20px;text-align:center;">
+      <div style="display:inline-flex;align-items:center;justify-content:center;
+                  width:48px;height:48px;border-radius:14px;
+                  background:var(--bg-card);border:1px solid var(--blue-border);
+                  margin-bottom:14px;">
+        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" fill="none"
+                  stroke="rgba(99,180,255,0.25)" stroke-width="1"/>
+          <circle cx="12" cy="12" r="6.5" fill="none"
+                  stroke="rgba(99,180,255,0.4)" stroke-width="1"/>
+          <circle cx="12" cy="12" r="3" fill="none"
+                  stroke="rgba(99,180,255,0.65)" stroke-width="1.2"/>
+          <circle cx="12" cy="12" r="1.5" fill="#63b4ff"/>
         </svg>
       </div>
-      <h1>OpenCall</h1>
-      <p>Internet calls · No carrier · No cost</p>
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);">OpenCall</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Internet calls · No carrier · No cost</div>
     </div>
 
-    <div class="form">
-      <div>
-        <div class="field-label">Your name</div>
-        <input type="text" id="inp-name" placeholder="e.g. Alex" maxlength="30" autocomplete="name"/>
+    <div class="card">
+      <div class="field-group">
+        <label class="card-label">Your name</label>
+        <input type="text" id="input-name" placeholder="Rahul Kumar" style="margin-top:4px"/>
       </div>
-      <div>
-        <div class="field-label">Your number (US / Canada)</div>
-        <input type="tel" id="inp-number" placeholder="+1 ··· ··· ····" autocomplete="tel"/>
+      <div class="field-group" style="margin-top:12px">
+        <label class="card-label">Your number</label>
+        <input type="tel" id="input-number" placeholder="+91 98005 05720" style="margin-top:4px"/>
       </div>
-      <div>
-        <div class="field-label">Signal server</div>
-        <input type="text" id="inp-server" placeholder="wss://opencall-server-production.up.railway.app" value="wss://opencall-server-pqfe.onrender.com"/>
+      <div class="field-group" style="margin-top:12px">
+        <label class="card-label">Signal server</label>
+        <input type="text" id="input-server"
+               value="wss://opencall-server-pqfe.onrender.com"
+               style="margin-top:4px;font-size:10px"/>
       </div>
-      <div>
-        <div class="field-label">Your OCP address</div>
-        <input type="text" id="inp-ocp-address" readonly placeholder="generating..." style="background:var(--s2);color:var(--muted);cursor:default;font-size:13px;letter-spacing:.02em"/>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:-6px">
-        <button
-          onclick="exportIdentity()"
-          style="flex:1;padding:10px;background:var(--s2);color:var(--muted);
-                 border:1px solid var(--b2);border-radius:var(--r);
-                 font-family:var(--mono);font-size:11px;cursor:pointer;
-                 letter-spacing:.06em"
-          type="button">
-          EXPORT KEY
-        </button>
-        <button
-          onclick="importIdentity()"
-          style="flex:1;padding:10px;background:var(--s2);color:var(--muted);
-                 border:1px solid var(--b2);border-radius:var(--r);
-                 font-family:var(--mono);font-size:11px;cursor:pointer;
-                 letter-spacing:.06em"
-          type="button">
-          IMPORT KEY
-        </button>
-      </div>
-      <button class="btn btn-primary" id="btn-register" onclick="doRegister()">
+      <button id="btn-claim" class="relay-btn relay-btn-sms"
+              style="margin-top:16px;font-size:13px;padding:14px;">
         Claim my number →
       </button>
-      <p class="note">
-        Your calls. Your protocol. Zero cost. Forever free.
-      </p>
     </div>
+
+    <div style="margin-top:10px">
+      <div class="card-label" style="margin-bottom:6px">Your OCP address</div>
+      <div class="identity-val">
+        <span id="ocp-address-display"
+              style="font-size:10px;word-break:break-all">
+          generating...
+        </span>
+        <span class="copy-btn" onclick="copyOCPAddress()">copy</span>
+      </div>
+    </div>
+
   </div>
 
   <!-- ══════════════ DIALER ══════════════ -->
@@ -481,10 +479,15 @@ input::placeholder { color: var(--text-muted); }
     <span style="display:none" id="lbl-mynum"></span>
     <span style="display:none" id="lbl-ocpaddr"></span>
 
+    <div id="dialer-user-bar" style="display:flex;align-items:center;justify-content:space-between;padding:0 0 10px">
+      <span id="header-user-info" style="font-size:12px;color:var(--text-secondary);font-family:'DM Mono',monospace;letter-spacing:0.3px"></span>
+      <a id="link-change" href="#" style="font-size:10px;color:var(--blue);opacity:0.7;text-decoration:none">change</a>
+    </div>
+
     <div class="card">
       <div class="card-label">Your identity</div>
       <div class="identity-val">
-        <span id="ocp-address-display">ocp:loading...</span>
+        <span id="ocp-addr-dialer">ocp:loading...</span>
         <span class="copy-btn" onclick="copyOCPAddress()">copy</span>
       </div>
     </div>
@@ -516,38 +519,96 @@ input::placeholder { color: var(--text-muted); }
     </div>
   </div>
 
-  <!-- ══════════════ INCOMING ══════════════ -->
-  <div class="screen hidden" id="scr-incoming">
-    <div class="pulse-wrap">
-      <div class="avatar" id="inc-avatar">?</div>
-    </div>
-    <div class="inc-label">Incoming call</div>
-    <div class="inc-name" id="inc-name">Unknown</div>
-    <div class="inc-num"  id="inc-num">+1...</div>
+  <!-- ══════════════ MISSED CALL ══════════════ -->
+  <div class="screen hidden" id="scr-missed">
+    <div class="missed-call-page">
+      <div class="missed-icon">📞</div>
+      <h2>You have a missed call</h2>
+      <p>Someone tried to reach you on OpenCall</p>
+      <p class="missed-number">From:<span id="missed-from">Unknown caller</span></p>
 
-    <div class="inc-actions">
-      <div>
-        <button class="act-circle dec" onclick="doDecline()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10.68 13.31a16 16 0 003.41 2.6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.42 19.42 0 01-3.33-2.67m-2.67-3.34a19.79 19.79 0 01-3.07-8.63A2 2 0 014 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91"/>
-            <line x1="23" y1="1" x2="1" y2="23"/>
-          </svg>
-        </button>
-        <div class="act-label" style="margin-top:10px;text-align:center">Decline</div>
+      <div class="missed-info">
+        OpenCall is free worldwide calling — no app needed.
+        Just tap the button below to answer.
       </div>
-      <div>
-        <button class="act-circle ans" onclick="doAnswer()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81a19.79 19.79 0 01-3.07-8.67A2 2 0 012 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
-          </svg>
-        </button>
-        <div class="act-label" style="margin-top:10px;text-align:center">Answer</div>
+
+      <button class="answer-btn" id="answer-missed-btn" onclick="answerMissedCall()">
+        📞 Answer Call
+      </button>
+
+      <div id="missed-status"></div>
+
+      <div class="missed-sub">
+        This call is completely free · End-to-end encrypted
       </div>
     </div>
   </div>
 
-  <!-- ══════════════ ACTIVE CALL ══════════════ -->
-  <div class="screen hidden" id="scr-call">
+</div><!-- /#app -->
+
+<!-- ══════════════ INCOMING CALL OVERLAY ══════════════ -->
+<div id="overlay-incoming-call"
+     style="display:none;position:fixed;inset:0;
+            background:var(--bg-deep);z-index:100;
+            overflow-y:auto;">
+  <div class="ring-3" aria-hidden="true"></div>
+  <div class="ring-4" aria-hidden="true"></div>
+  <div class="pulse-node" aria-hidden="true"></div>
+
+  <div class="app-container" style="padding-top:60px;text-align:center;">
+
+    <div style="font-size:10px;color:var(--text-muted);
+                letter-spacing:0.8px;text-transform:uppercase;
+                margin-bottom:20px;">
+      Incoming call
+    </div>
+
+    <div class="caller-avatar ringing" id="inc-avatar"
+         style="width:88px;height:88px;font-size:32px;margin:0 auto 16px;">
+      ?
+    </div>
+
+    <div class="caller-name" id="inc-name">Unknown</div>
+    <div class="call-status-text" id="inc-num">+1...</div>
+    <div class="call-route-badge" style="margin:8px auto;">
+      via OCP network · free
+    </div>
+
+    <div style="display:flex;justify-content:center;
+                gap:48px;margin-top:48px;">
+      <div style="text-align:center;">
+        <div class="cbtn cbtn-end" id="btn-decline-inc"
+             style="width:64px;height:64px;font-size:22px;margin:0 auto 8px;">
+          &#9742;
+        </div>
+        <div style="font-size:10px;color:var(--text-muted);">Decline</div>
+      </div>
+      <div style="text-align:center;">
+        <div class="cbtn" id="btn-answer-inc"
+             style="width:64px;height:64px;font-size:22px;
+                    background:var(--green-dim);
+                    border:1px solid var(--green-border);
+                    margin:0 auto 8px;">
+          &#9742;
+        </div>
+        <div style="font-size:10px;color:var(--green);">Answer</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════ ACTIVE CALL OVERLAY ══════════════ -->
+<div id="overlay-active-call"
+     style="display:none;position:fixed;inset:0;
+            background:var(--bg-deep);z-index:100;
+            overflow-y:auto;">
+  <div class="ring-3" aria-hidden="true"></div>
+  <div class="ring-4" aria-hidden="true"></div>
+  <div class="pulse-node" aria-hidden="true"></div>
+
+  <div class="app-container" style="padding-top:20px;">
+
     <div class="call-screen screen-fade" id="call-screen-ui">
       <div class="caller-avatar ringing" id="caller-avatar">
         <span id="caller-initial">?</span>
@@ -601,34 +662,10 @@ input::placeholder { color: var(--text-muted); }
         Generating link...
       </div>
     </div>
+
   </div>
-
-  <!-- ══════════════ MISSED CALL ══════════════ -->
-  <div class="screen hidden" id="scr-missed">
-    <div class="missed-call-page">
-      <div class="missed-icon">📞</div>
-      <h2>You have a missed call</h2>
-      <p>Someone tried to reach you on OpenCall</p>
-      <p class="missed-number">From:<span id="missed-from">Unknown caller</span></p>
-
-      <div class="missed-info">
-        OpenCall is free worldwide calling — no app needed.
-        Just tap the button below to answer.
-      </div>
-
-      <button class="answer-btn" id="answer-missed-btn" onclick="answerMissedCall()">
-        📞 Answer Call
-      </button>
-
-      <div id="missed-status"></div>
-
-      <div class="missed-sub">
-        This call is completely free · End-to-end encrypted
-      </div>
-    </div>
-  </div>
-
 </div>
+
 <div id="toast"></div>
 <audio id="remote-audio" autoplay playsinline></audio>
 
@@ -659,7 +696,11 @@ document.addEventListener('visibilitychange', async () => {
 
 function reconnectAndRejoin() {
   if (!window._pendingCallId) return;
-  doRegister();
+  const server = localStorage.getItem('server_url') || 'wss://opencall-server-pqfe.onrender.com';
+  const name   = localStorage.getItem('user_name')  || myName   || '';
+  const number = localStorage.getItem('user_number') || myNumber || '';
+  if (name && number) initSignalServer(server, name, number);
+  else doRegister();
 }
 
 // ── OCP Identity — Web Crypto API (no dependencies) ──────
@@ -818,7 +859,10 @@ async function importIdentity() {
       const identity = JSON.parse(new TextDecoder().decode(decrypted));
       await saveIdentity(identity);
       myIdentity = identity;
-      document.getElementById('inp-ocp-address').value = identity.ocp_address;
+      const _r = document.getElementById('ocp-address-display');
+      const _d = document.getElementById('ocp-addr-dialer');
+      if (_r) _r.textContent = identity.ocp_address;
+      if (_d) _d.textContent = identity.ocp_address;
       toast('Identity imported successfully');
     } catch(e) {
       toast('Wrong passphrase or corrupted file');
@@ -1131,7 +1175,8 @@ async function answerMissedCall() {
 
   if (statusEl) statusEl.textContent = 'Connecting to server…';
 
-  const server = document.getElementById('inp-server')?.value.trim()
+  const server = document.getElementById('input-server')?.value.trim()
+    || localStorage.getItem('server_url')
     || 'wss://opencall-server-pqfe.onrender.com';
 
   try { ws = new WebSocket(server); }
@@ -1176,10 +1221,11 @@ async function answerMissedCall() {
 let myIdentity = null;
 getOrCreateIdentity().then(async id => {
   myIdentity = id;
-  const field = document.getElementById('inp-ocp-address');
-  if (field) field.value = id.ocp_address;
-  const addrDisplay = document.getElementById('ocp-address-display');
-  if (addrDisplay) addrDisplay.textContent = id.ocp_address;
+  // Update all OCP address display elements (register + dialer screens)
+  const reg    = document.getElementById('ocp-address-display');
+  const dialer = document.getElementById('ocp-addr-dialer');
+  if (reg)    reg.textContent    = id.ocp_address;
+  if (dialer) dialer.textContent = id.ocp_address;
   console.log('[OCP] Ready ✓ Identity:', id.ocp_address);
   initDHT().then(() => {
     if (dhtReady && myIdentity) {
@@ -1399,8 +1445,9 @@ function appendDigit(d) {
   syncDialDisplay();
 }
 function copyOCPAddress() {
-  const addr = document.getElementById('ocp-address-display')?.textContent;
-  if (addr && !addr.includes('loading')) {
+  const addr = (document.getElementById('ocp-address-display')?.textContent
+    || document.getElementById('ocp-addr-dialer')?.textContent || '').trim();
+  if (addr && !addr.includes('loading') && !addr.includes('generating')) {
     navigator.clipboard.writeText(addr).then(() => toast('OCP address copied'));
   }
 }
@@ -1430,40 +1477,27 @@ function toast(msg, dur=3200) {
 
 // ── connection status ──────────────────────────────────────
 function setConn(state) {
-  const dot = document.getElementById('conn-dot');
-  const lbl = document.getElementById('conn-lbl');
-  dot.className = 'dot ' + (state === 'on' ? 'on' : state === 'err' ? 'err' : '');
-  lbl.textContent = state === 'on' ? 'Connected' : state === 'err' ? 'Error' : 'Offline';
+  const el = document.getElementById('conn-status');
+  if (!el) return;
+  el.className = 'sf-indicator ' + (state === 'on' ? 'sf-on' : state === 'err' ? 'sf-routing' : 'sf-off');
 }
 
-// ── register ───────────────────────────────────────────────
-async function doRegister() {
-  // Load or generate OCP cryptographic identity
+// ── initSignalServer — connect WebSocket with given credentials ─
+async function initSignalServer(server, name, number) {
   if (!myIdentity) {
     myIdentity = await getOrCreateIdentity();
-    console.log('[OCP] Using identity:', myIdentity.ocp_address);
   }
-  document.getElementById('inp-ocp-address').value = myIdentity.ocp_address;
-
-  const name   = document.getElementById('inp-name').value.trim();
-  const number = document.getElementById('inp-number').value.trim();
-  const server = document.getElementById('inp-server').value.trim();
-  if (!name)   return toast('Enter your name');
-  if (!number) return toast('Enter your number');
-  if (!server) return toast('Enter server URL');
 
   myName   = name;
   myNumber = number;
 
-  const btn = document.getElementById('btn-register');
-  btn.disabled = true;
-  btn.textContent = 'Connecting...';
+  if (ws && ws.readyState === WebSocket.OPEN) ws.close();
 
   try {
     ws = new WebSocket(server);
   } catch(e) {
     toast('Invalid server URL');
-    resetBtn(); return;
+    return;
   }
 
   ws.onopen = async () => {
@@ -1484,19 +1518,39 @@ async function doRegister() {
     setConnectionStatus('offline');
     toast('Disconnected');
     if (callId) endCall();
-    resetBtn();
-    show('register');
   };
   ws.onerror = () => {
     toast('Cannot reach server — is it running?');
-    resetBtn();
   };
 }
 
+// ── register ───────────────────────────────────────────────
+async function doRegister() {
+  if (!myIdentity) {
+    myIdentity = await getOrCreateIdentity();
+    console.log('[OCP] Using identity:', myIdentity.ocp_address);
+  }
+
+  const name   = document.getElementById('input-name')?.value.trim()  || '';
+  const number = document.getElementById('input-number')?.value.trim() || '';
+  const server = document.getElementById('input-server')?.value.trim()
+    || localStorage.getItem('server_url')
+    || 'wss://opencall-server-pqfe.onrender.com';
+  if (!name)   return toast('Enter your name');
+  if (!number) return toast('Enter your number');
+  if (!server) return toast('Enter server URL');
+
+  const btn = document.getElementById('btn-claim');
+  if (btn) { btn.disabled = true; btn.textContent = 'Connecting...'; }
+
+  await initSignalServer(server, name, number);
+}
+
 function resetBtn() {
-  const btn = document.getElementById('btn-register');
+  const btn = document.getElementById('btn-claim');
+  if (!btn) return;
   btn.disabled = false;
-  btn.textContent = 'Claim my number →';
+  btn.textContent = 'Claim my number';
 }
 
 function doLogout() {
@@ -1545,7 +1599,7 @@ async function onMessage(msg) {
       document.getElementById('caller-name-display').textContent = msg.to;
       document.getElementById('caller-initial').textContent = (msg.to || '?')[0].toUpperCase();
       document.getElementById('call-route-info').textContent = msg.mode === 'relay' ? 'via relay' : 'via OCP network';
-      show('call');
+      showActiveCallOverlay();
       startRingback();
       break;
 
@@ -1565,7 +1619,7 @@ async function onMessage(msg) {
       document.getElementById('caller-initial').textContent = (callWith || '?')[0].toUpperCase();
       document.getElementById('call-route-info').textContent = callMode === 'relay' ? 'via relay' : 'via OCP network';
       document.getElementById('caller-avatar').classList.remove('ringing');
-      show('call');
+      showActiveCallOverlay();
       startTimer();
       break;
 
@@ -1573,10 +1627,7 @@ async function onMessage(msg) {
       pendingCall = msg;
       callWith    = msg.from;
       callMode    = 'direct';
-      document.getElementById('inc-name').textContent   = msg.fromName || 'Unknown';
-      document.getElementById('inc-num').textContent    = msg.from;
-      document.getElementById('inc-avatar').textContent = (msg.fromName || '?')[0].toUpperCase();
-      show('incoming');
+      showIncomingOverlay(msg.fromName || 'Unknown', msg.from);
       startRingtone();
       break;
 
@@ -1626,7 +1677,7 @@ async function onMessage(msg) {
 
       document.getElementById('call-status-detail').textContent = 'They opened the link! Connecting...';
       document.getElementById('caller-name-display').textContent = 'Connecting...';
-      show('call');
+      showActiveCallOverlay();
       toast('They opened the link! Connecting...');
 
       try {
@@ -2052,7 +2103,7 @@ async function invSendAuto(channel) {
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
   if (resultEl) { resultEl.className = 'inv-send-result'; resultEl.textContent = ''; }
 
-  const wsUrl   = document.getElementById('inp-server').value.trim();
+  const wsUrl   = (document.getElementById('input-server')?.value || localStorage.getItem('server_url') || 'wss://opencall-server-pqfe.onrender.com').trim();
   const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
 
   const ctrl  = new AbortController();
@@ -2113,7 +2164,7 @@ async function invSendEmail() {
   // Button stays disabled — single attempt only, no retry loop.
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
-  const wsUrl   = document.getElementById('inp-server').value.trim();
+  const wsUrl   = (document.getElementById('input-server')?.value || localStorage.getItem('server_url') || 'wss://opencall-server-pqfe.onrender.com').trim();
   const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
 
   const ctrl  = new AbortController();
@@ -2914,6 +2965,8 @@ async function doCall() {
 // ── answer / decline ───────────────────────────────────────
 async function doAnswer() {
   stopRingtone();
+  hideIncomingOverlay();
+  showActiveCallOverlay();
   callId   = pendingCall.callId;
   callWith = pendingCall.from;
   callMode = 'direct';
@@ -2923,6 +2976,7 @@ async function doAnswer() {
 }
 async function doDecline() {
   stopRingtone();
+  hideIncomingOverlay();
   await wsSend({ type:'reject', callId:pendingCall.callId, from:pendingCall.from });
   pendingCall = null;
   show('dialer');
@@ -2934,6 +2988,8 @@ async function doHangup() {
   endCall();
 }
 function endCall() {
+  hideActiveCallOverlay();
+  hideIncomingOverlay();
   window._callPending   = false;
   window._pendingCallId = null;
   releaseWakeLock();
@@ -3162,6 +3218,101 @@ async function testCrypto() {
   return { identity, signature, encrypted };
 }
 
+// ── two-screen flow ────────────────────────────────────────
+function copyRegOCPAddress() {
+  copyOCPAddress();
+}
+
+function showScreen(name) {
+  if (name === 'register') show('register');
+  else if (name === 'dialer') show('dialer');
+}
+
+function updateHeaderInfo(name, number) {
+  const el = document.getElementById('header-user-info');
+  if (el) el.textContent = name + ' · ' + number;
+}
+
+function initFlow() {
+  // Missed-call landing page — don't interfere with that flow
+  if (new URLSearchParams(window.location.search).get('missed') === 'true') return;
+
+  const claimed = localStorage.getItem('claimed');
+  const name    = localStorage.getItem('user_name');
+  const number  = localStorage.getItem('user_number');
+  const server  = localStorage.getItem('server_url') || 'wss://opencall-server-pqfe.onrender.com';
+
+  if (claimed === 'true' && name && number) {
+    show('dialer');
+    updateHeaderInfo(name, number);
+    initSignalServer(server, name, number);
+  } else {
+    show('register');
+    // Pre-fill saved values into the form
+    const nameEl = document.getElementById('input-name');
+    const numEl  = document.getElementById('input-number');
+    const srvEl  = document.getElementById('input-server');
+    if (nameEl && name)   nameEl.value = name;
+    if (numEl  && number) numEl.value  = number;
+    if (srvEl  && server) srvEl.value  = server;
+  }
+}
+
+// ── overlay helpers ────────────────────────────────────────
+function showIncomingOverlay(name, number) {
+  document.getElementById('inc-name').textContent   = name   || 'Unknown';
+  document.getElementById('inc-num').textContent    = number || '+1...';
+  document.getElementById('inc-avatar').textContent = (name  || '?')[0].toUpperCase();
+  document.getElementById('overlay-incoming-call').style.display = 'block';
+}
+function hideIncomingOverlay() {
+  document.getElementById('overlay-incoming-call').style.display = 'none';
+}
+function showActiveCallOverlay() {
+  document.getElementById('overlay-active-call').style.display = 'block';
+}
+function hideActiveCallOverlay() {
+  document.getElementById('overlay-active-call').style.display = 'none';
+}
+
+document.getElementById('btn-decline-inc')?.addEventListener('click', doDecline);
+document.getElementById('btn-answer-inc')?.addEventListener('click', doAnswer);
+
+// btn-claim: save to localStorage then connect
+document.getElementById('btn-claim')?.addEventListener('click', () => {
+  const name   = document.getElementById('input-name')?.value?.trim();
+  const number = document.getElementById('input-number')?.value?.trim();
+  const server = (document.getElementById('input-server')?.value?.trim())
+    || 'wss://opencall-server-pqfe.onrender.com';
+  if (!name || !number) {
+    toast('Please enter your name and number');
+    return;
+  }
+  localStorage.setItem('user_name',   name);
+  localStorage.setItem('user_number', number);
+  localStorage.setItem('server_url',  server);
+  localStorage.setItem('claimed',     'true');
+  show('dialer');
+  updateHeaderInfo(name, number);
+  initSignalServer(server, name, number);
+});
+
+// "change" link: go back to registration
+document.getElementById('link-change')?.addEventListener('click', e => {
+  e.preventDefault();
+  localStorage.removeItem('claimed');
+  show('register');
+  // Pre-fill current values so user can edit
+  const nameEl = document.getElementById('input-name');
+  const numEl  = document.getElementById('input-number');
+  const srvEl  = document.getElementById('input-server');
+  if (nameEl) nameEl.value = localStorage.getItem('user_name')   || '';
+  if (numEl)  numEl.value  = localStorage.getItem('user_number') || '';
+  if (srvEl)  srvEl.value  = localStorage.getItem('server_url')  || 'wss://opencall-server-pqfe.onrender.com';
+});
+
+initFlow();
+
 function setConnectionStatus(state) {
   const dot  = document.getElementById('sf-dot');
   const text = document.getElementById('sf-text');
@@ -3199,6 +3350,7 @@ function setDHTStatus(nodeCount) {
 
 <div class="status-footer">
   <div>
+    <span id="conn-status" class="sf-indicator sf-off"></span>
     <span class="sf-indicator sf-off" id="sf-dot"></span>
     <span class="sf-text" id="sf-text">Connecting...</span>
   </div>
