@@ -25,6 +25,7 @@ const callLog          = new Map(); // callId          → { from, to, startedAt
 const pushSubscriptions = new Map(); // number           → push subscription
 const webPush           = null;      // using native fetch for push
 const pendingCalls      = new Map(); // callId           → { from, to, link, callerWs, ... }
+const sentAnswerLinks   = new Set(); // callId           → de-duplicate answer_link_ready
 const pendingUSSD       = new Map(); // callee           → { callId, from, channel }
 const simBankRegistry   = new Map(); // country          → WebSocket
 const telegramRegistry  = new Map(); // phone            → telegram chat ID
@@ -156,14 +157,13 @@ function log(icon, ...args) {
   console.log(`[${time}] ${icon}`, ...args);
 }
 
-function normalizeNumber(raw) {
-  if (!raw) return null;
-  const digits = String(raw).replace(/\D/g, "");
-  if (digits.length < 7) return null;
-  // assume US/Canada if no country code
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  return `+${digits}`;
+function normalizeNumber(num) {
+  if (!num) return '';
+  // strip spaces, dashes, brackets — leave digits and leading +
+  let n = String(num).replace(/[\s\-\(\)]/g, '');
+  // ensure starts with +
+  if (!n.startsWith('+')) n = '+' + n;
+  return n;
 }
 
 function makeCallId() {
@@ -495,8 +495,9 @@ const server = http.createServer((req, res) => {
         }
 
         // Find callee WebSocket if they opened the link
+        const normCallee = normalizeNumber(callee);
         const calleeWs = [...metadata.entries()]
-          .find(([ws, m]) => m.number === callee)?.[0];
+          .find(([ws, m]) => normalizeNumber(m.number) === normCallee)?.[0];
 
         if (calleeWs) {
           // They opened the app — send call.ring
@@ -791,6 +792,10 @@ async function handle(ws, msg) {
         const encodedTitle = encodeURIComponent(
           `${callerMeta.name} is calling you free`
         );
+
+        if (sentAnswerLinks.has(callId)) break;
+        sentAnswerLinks.add(callId);
+        setTimeout(() => sentAnswerLinks.delete(callId), 60000);
 
         send(ws, {
           type: 'answer_link_ready',

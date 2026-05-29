@@ -390,34 +390,22 @@ input::placeholder { color: var(--text-muted); }
   to   { opacity: 1; transform: translateY(0); }
 }
 .screen-fade { animation: fadein 0.25s ease; }
+
+#screen-register { display: block; }
+#screen-dialer   { display: none; }
 </style>
 </head>
 <body>
-<div class="ring-3" aria-hidden="true"></div>
-<div class="ring-4" aria-hidden="true"></div>
-<div class="pulse-node" aria-hidden="true"></div>
-<div id="app" class="app-container">
 
-  <header class="app-header">
-    <div class="logo-lockup">
-      <div class="logo-svg-wrap">
-        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-          <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(99,180,255,0.2)" stroke-width="1"/>
-          <circle cx="9" cy="9" r="4.5" fill="none" stroke="rgba(99,180,255,0.35)" stroke-width="1"/>
-          <circle cx="9" cy="9" r="2" fill="none" stroke="rgba(99,180,255,0.6)" stroke-width="1"/>
-          <circle cx="9" cy="9" r="1" fill="#63b4ff"/>
-        </svg>
-      </div>
-      <div>
-        <div class="logo-name">OpenCall</div>
-        <div class="logo-ver">OCP v1.0</div>
-      </div>
-    </div>
-    <div id="status-pill" class="status-pill pill-online">Online</div>
-  </header>
+<!-- ════════════════════════════════════════════════════════
+     SCREEN 1 — REGISTER
+     ════════════════════════════════════════════════════════ -->
+<div id="screen-register">
+  <div class="ring-3" aria-hidden="true"></div>
+  <div class="ring-4" aria-hidden="true"></div>
+  <div class="pulse-node" aria-hidden="true"></div>
 
-  <!-- ══════════════ REGISTER ══════════════ -->
-  <div class="screen" id="scr-register">
+  <div class="app-container">
 
     <div style="padding:32px 0 20px;text-align:center;">
       <div style="display:inline-flex;align-items:center;justify-content:center;
@@ -471,18 +459,43 @@ input::placeholder { color: var(--text-muted); }
     </div>
 
   </div>
+</div>
 
-  <!-- ══════════════ DIALER ══════════════ -->
-  <div class="screen hidden" id="scr-dialer">
-    <!-- hidden state input — existing dial logic reads/writes this -->
+<!-- ════════════════════════════════════════════════════════
+     SCREEN 2 — DIALER
+     ════════════════════════════════════════════════════════ -->
+<div id="screen-dialer">
+  <div class="ring-3" aria-hidden="true"></div>
+  <div class="ring-4" aria-hidden="true"></div>
+  <div class="pulse-node" aria-hidden="true"></div>
+
+  <div class="app-container">
+
+    <header class="app-header">
+      <div class="logo-lockup">
+        <div class="logo-svg-wrap">
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(99,180,255,0.2)" stroke-width="1"/>
+            <circle cx="9" cy="9" r="4.5" fill="none" stroke="rgba(99,180,255,0.35)" stroke-width="1"/>
+            <circle cx="9" cy="9" r="2" fill="none" stroke="rgba(99,180,255,0.6)" stroke-width="1"/>
+            <circle cx="9" cy="9" r="1" fill="#63b4ff"/>
+          </svg>
+        </div>
+        <div>
+          <div class="logo-name">OpenCall</div>
+          <div class="logo-ver">OCP v1.0</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="header-user-info" style="font-size:12px;color:var(--text-secondary);font-family:'DM Mono',monospace;letter-spacing:0.3px"></span>
+        <a id="link-change" href="#" style="font-size:10px;color:var(--blue);opacity:0.7;text-decoration:none">change</a>
+        <div id="status-pill" class="status-pill pill-online">Online</div>
+      </div>
+    </header>
+
     <input type="tel" id="inp-dial" style="display:none">
     <span style="display:none" id="lbl-mynum"></span>
     <span style="display:none" id="lbl-ocpaddr"></span>
-
-    <div id="dialer-user-bar" style="display:flex;align-items:center;justify-content:space-between;padding:0 0 10px">
-      <span id="header-user-info" style="font-size:12px;color:var(--text-secondary);font-family:'DM Mono',monospace;letter-spacing:0.3px"></span>
-      <a id="link-change" href="#" style="font-size:10px;color:var(--blue);opacity:0.7;text-decoration:none">change</a>
-    </div>
 
     <div class="card">
       <div class="card-label">Your identity</div>
@@ -517,34 +530,18 @@ input::placeholder { color: var(--text-muted); }
       <div class="btn-call" id="btn-call" title="Call">&#9742;</div>
       <div class="btn-aux" id="btn-sms-invite" title="Send SMS invite">&#9993;</div>
     </div>
-  </div>
 
-  <!-- ══════════════ MISSED CALL ══════════════ -->
-  <div class="screen hidden" id="scr-missed">
-    <div class="missed-call-page">
-      <div class="missed-icon">📞</div>
-      <h2>You have a missed call</h2>
-      <p>Someone tried to reach you on OpenCall</p>
-      <p class="missed-number">From:<span id="missed-from">Unknown caller</span></p>
-
-      <div class="missed-info">
-        OpenCall is free worldwide calling — no app needed.
-        Just tap the button below to answer.
+    <div class="status-footer">
+      <div>
+        <span id="conn-status" class="sf-indicator sf-off"></span>
+        <span class="sf-indicator sf-off" id="sf-dot"></span>
+        <span class="sf-text" id="sf-text">Connecting...</span>
       </div>
-
-      <button class="answer-btn" id="answer-missed-btn" onclick="answerMissedCall()">
-        📞 Answer Call
-      </button>
-
-      <div id="missed-status"></div>
-
-      <div class="missed-sub">
-        This call is completely free · End-to-end encrypted
-      </div>
+      <span class="sf-text" id="sf-right">DHT: checking</span>
     </div>
-  </div>
 
-</div><!-- /#app -->
+  </div>
+</div>
 
 <!-- ══════════════ INCOMING CALL OVERLAY ══════════════ -->
 <div id="overlay-incoming-call"
@@ -663,6 +660,35 @@ input::placeholder { color: var(--text-muted); }
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ══════════════ MISSED CALL OVERLAY ══════════════ -->
+<div id="overlay-missed-call"
+     style="display:none;position:fixed;inset:0;
+            background:var(--bg-deep);z-index:100;
+            overflow-y:auto;">
+  <div class="ring-3" aria-hidden="true"></div>
+  <div class="ring-4" aria-hidden="true"></div>
+  <div class="pulse-node" aria-hidden="true"></div>
+  <div class="app-container" style="padding-top:60px;">
+    <div class="missed-call-page">
+      <div class="missed-icon">📞</div>
+      <h2>You have a missed call</h2>
+      <p>Someone tried to reach you on OpenCall</p>
+      <p class="missed-number">From: <span id="missed-from">Unknown caller</span></p>
+      <div class="missed-info">
+        OpenCall is free worldwide calling — no app needed.
+        Just tap the button below to answer.
+      </div>
+      <button class="answer-btn" id="answer-missed-btn" onclick="answerMissedCall()">
+        📞 Answer Call
+      </button>
+      <div id="missed-status"></div>
+      <div class="missed-sub">
+        This call is completely free · End-to-end encrypted
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1288,6 +1314,7 @@ let audioCtx      = null;
 let ringInterval  = null;
 let ringbackCtx   = null;
 let ringbackInt   = null;
+let lastHandledCallId = null;
 
 // ── Country / platform data ────────────────────────────────
 const COUNTRY_DATA = {
@@ -1444,6 +1471,16 @@ function appendDigit(d) {
   pressKey(d);
   syncDialDisplay();
 }
+function showDialHint(msg, isError) {
+  const el = document.getElementById('dial-hint');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = isError ? '#ff6b6b' : '';
+  if (isError) setTimeout(() => {
+    el.textContent = 'Enter number to call';
+    el.style.color = '';
+  }, 3000);
+}
 function copyOCPAddress() {
   const addr = (document.getElementById('ocp-address-display')?.textContent
     || document.getElementById('ocp-addr-dialer')?.textContent || '').trim();
@@ -1461,8 +1498,11 @@ document.getElementById('btn-call')?.addEventListener('click', doCall);
 
 // ── screen router ──────────────────────────────────────────
 function show(id) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
-  document.getElementById('scr-'+id).classList.remove('hidden');
+  if (id === 'register' || id === 'dialer') {
+    showScreen(id);
+  } else if (id === 'missed') {
+    document.getElementById('overlay-missed-call').style.display = 'block';
+  }
 }
 
 // ── toast ──────────────────────────────────────────────────
@@ -1653,6 +1693,12 @@ async function onMessage(msg) {
       break;
 
     case 'answer_link_ready': {
+      const cid = msg.callId || msg.id;
+      if (cid && cid === lastHandledCallId) {
+        console.log('[OCP] Duplicate answer_link_ready ignored:', cid);
+        break;
+      }
+      lastHandledCallId = cid;
       stopRingback();
       document.getElementById('call-status-detail').textContent = 'Share link to connect';
       document.getElementById('caller-name-display').textContent = msg.to;
@@ -2921,14 +2967,16 @@ function openPlatformLink(platform, number) {
 // ── dialer actions ─────────────────────────────────────────
 function pressKey(d) {
   const inp = document.getElementById('inp-dial');
-  if (inp.value.length < 15) inp.value += d;
+  if (!inp.value) inp.value = '+';
+  if (inp.value.length < 16) inp.value += d;
   showCountrySelector(inp.value);
 }
 function doDelete() {
   const inp = document.getElementById('inp-dial');
+  if (!inp.value || inp.value === '+') return;
   inp.value = inp.value.slice(0, -1);
   document.getElementById('invite-panel')?.remove();
-  if (!inp.value) {
+  if (!inp.value || inp.value === '+') {
     document.getElementById('country-selector')?.remove();
     window._selectedCountry = null;
   } else {
@@ -2937,7 +2985,18 @@ function doDelete() {
 }
 async function doCall() {
   const to = document.getElementById('inp-dial').value.trim();
-  if (!to || to.length < 7) return toast('Enter a valid number');
+  if (!to || to === '+') {
+    showDialHint('Enter a number to call', true);
+    return;
+  }
+  if (!to.startsWith('+')) {
+    showDialHint('Add country code: +91, +1, +44...', true);
+    return;
+  }
+  if (to.length < 8) {
+    showDialHint('Number too short', true);
+    return;
+  }
   if (!ws || ws.readyState !== 1) return toast('Not connected to server');
 
   // Step 1: Check if number is registered in OCP via DHT
@@ -3009,7 +3068,7 @@ function endCall() {
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
   if (callWith) clearRatchetSession(callWith);
   callId = callWith = callMode = pendingCall = null;
-  document.getElementById('inp-dial').value = '';
+  document.getElementById('inp-dial').value = '+';
   syncDialDisplay();
   show('dialer');
 }
@@ -3153,8 +3212,7 @@ async function wsSend(obj) {
 
 // ── keyboard ───────────────────────────────────────────────
 document.addEventListener('keydown', e => {
-  const active = document.querySelector('.screen:not(.hidden)');
-  if (!active || active.id !== 'scr-dialer') return;
+  if (document.getElementById('screen-dialer').style.display === 'none') return;
   if ('0123456789*#'.includes(e.key)) pressKey(e.key);
   if (e.key==='Backspace') doDelete();
   if (e.key==='Enter') doCall();
@@ -3224,8 +3282,14 @@ function copyRegOCPAddress() {
 }
 
 function showScreen(name) {
-  if (name === 'register') show('register');
-  else if (name === 'dialer') show('dialer');
+  document.getElementById('screen-register').style.display =
+    name === 'register' ? 'block' : 'none';
+  document.getElementById('screen-dialer').style.display =
+    name === 'dialer' ? 'block' : 'none';
+  if (name === 'dialer') {
+    const inp = document.getElementById('inp-dial');
+    if (inp && !inp.value) { inp.value = '+'; syncDialDisplay(); }
+  }
 }
 
 function updateHeaderInfo(name, number) {
@@ -3288,6 +3352,11 @@ document.getElementById('btn-claim')?.addEventListener('click', () => {
     toast('Please enter your name and number');
     return;
   }
+  if (!number.startsWith('+')) {
+    toast('Number must include country code (e.g. +91…)');
+    document.getElementById('input-number')?.focus();
+    return;
+  }
   localStorage.setItem('user_name',   name);
   localStorage.setItem('user_number', number);
   localStorage.setItem('server_url',  server);
@@ -3309,6 +3378,25 @@ document.getElementById('link-change')?.addEventListener('click', e => {
   if (nameEl) nameEl.value = localStorage.getItem('user_name')   || '';
   if (numEl)  numEl.value  = localStorage.getItem('user_number') || '';
   if (srvEl)  srvEl.value  = localStorage.getItem('server_url')  || 'wss://opencall-server-pqfe.onrender.com';
+});
+
+// Fix 1 — registration number: warn if no country code
+document.getElementById('input-number')?.addEventListener('blur', function() {
+  const val = this.value.trim();
+  if (val && !val.startsWith('+')) {
+    this.style.borderColor = 'rgba(255,100,100,0.5)';
+    let hint = document.getElementById('number-hint');
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.id = 'number-hint';
+      hint.style.cssText = 'font-size:10px;color:#ff6b6b;margin-top:4px;';
+      this.parentNode.appendChild(hint);
+    }
+    hint.textContent = 'Add country code — e.g. +91 for India, +1 for USA/Canada';
+  } else {
+    this.style.borderColor = '';
+    document.getElementById('number-hint')?.remove();
+  }
 });
 
 initFlow();
@@ -3348,13 +3436,5 @@ function setDHTStatus(nodeCount) {
 }
 </script>
 
-<div class="status-footer">
-  <div>
-    <span id="conn-status" class="sf-indicator sf-off"></span>
-    <span class="sf-indicator sf-off" id="sf-dot"></span>
-    <span class="sf-text" id="sf-text">Connecting...</span>
-  </div>
-  <span class="sf-text" id="sf-right">DHT: checking</span>
-</div>
 </body>
 </html>
