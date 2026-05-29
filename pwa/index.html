@@ -1808,9 +1808,62 @@ async function onMessage(msg) {
       break;
     }
 
-    case 'sdp_offer':
+    case 'sdp_offer': {
+      if (callMode === 'relay' && msg.callId) {
+        // Relay call: B (relay) sends offer → A answers
+        console.log('[RELAY] Received SDP offer from relay B');
+
+        if (pc) { pc.close(); pc = null; }
+        pc = new RTCPeerConnection(RTC_CFG);
+
+        pc.onicecandidate = async e => {
+          if (e.candidate) {
+            await wsSend({ type: 'ice', callId: msg.callId, candidate: e.candidate.toJSON() });
+          }
+        };
+
+        pc.ontrack = e => {
+          console.log('[RELAY] Receiving audio from relay (C voice)');
+          const remoteAudio = document.getElementById('remote-audio');
+          if (remoteAudio) {
+            remoteAudio.srcObject = e.streams[0];
+            remoteAudio.play().catch(() => {});
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
+            toast('Connection lost');
+            endCall();
+          }
+        };
+
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        } catch(e) {
+          console.error('[RELAY] Microphone access denied:', e);
+          toast('Microphone access denied');
+          break;
+        }
+
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        await wsSend({
+          type:   'sdp_answer',
+          callId: msg.callId,
+          sdp:    { type: answer.type, sdp: answer.sdp }
+        });
+
+        console.log('[RELAY] SDP answer sent to relay B');
+        break;
+      }
+      // Direct/link call flow
       await handleOffer(msg.sdp, msg.from);
       break;
+    }
 
     case 'sdp_answer':
       if (pc) await pc.setRemoteDescription({ type:'answer', sdp:msg.sdp });
@@ -1818,7 +1871,11 @@ async function onMessage(msg) {
 
     case 'ice':
       if (pc && msg.candidate) {
-        try { await pc.addIceCandidate(msg.candidate); } catch {}
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        } catch(e) {
+          console.error('[ICE] Failed to add candidate:', e);
+        }
       }
       break;
 
@@ -1835,42 +1892,26 @@ async function onMessage(msg) {
     }
 
     case 'relay_found': {
-      console.log('[RELAY] Relay found in', msg.country);
-      showRelayConnecting(msg.country, msg.relay_mode);
-      callId = msg.callId || callId;
-      const cd = COUNTRY_DATA[msg.country];
-      const countryLabel = cd ? (cd.flag + ' ' + cd.name) : (msg.country || 'a relay');
-      if (msg.relay_mode === 'call') {
-        hideRelayPanel();
-        document.getElementById('call-status-detail').textContent =
-          'Connecting via ' + countryLabel + ' relay...';
-        const relayAddr = msg.relay || msg.relayOcp || '';
-        document.getElementById('call-route-info').textContent =
-          'via ' + countryLabel + ' relay' + (relayAddr ? ' · ' + relayAddr.slice(0, 12) + '…' : '');
-        await wsSend({ type: 'use_relay_call', callId });
-      } else if (msg.relay_mode === 'sms') {
-        hideRelayPanel();
-        showSMSWaitPanel('Sending SMS invite via ' + countryLabel + ' relay...');
-        await wsSend({ type: 'use_relay_sms', callId });
-      } else {
-        // relay_mode === 'both' — wire relay buttons in waiting panel
-        const rwTitle = document.getElementById('rw-title');
-        const rwSub   = document.getElementById('rw-sub');
-        if (rwTitle) rwTitle.textContent = 'Relay found — ' + countryLabel;
-        if (rwSub)   rwSub.textContent   = 'Choose how to reach them';
-        document.getElementById('btn-relay-sms').onclick  = () => useRelaySMS(callId);
-        document.getElementById('btn-relay-call').onclick = () => useRelayCall(callId);
-      }
+      console.log('[RELAY] Relay found in', msg.country, '— waiting for C to answer');
+      callId   = msg.callId || callId;
+      callMode = 'relay';
+      stopRingback();
+      document.getElementById('call-status-detail').textContent =
+        'Ringing via relay in ' + (msg.country || '...') + '...';
+      document.getElementById('call-route-info').textContent =
+        'via ' + (msg.country || 'relay') + ' relay';
+      showActiveCallOverlay();
+      startRingback();
       break;
     }
 
     case 'relay_connected': {
-      console.log('[RELAY] Call connected via relay');
+      console.log('[RELAY] C answered! Call is live.');
       stopRingback();
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'Connected via relay';
       document.getElementById('caller-avatar').classList.remove('ringing');
-      startTimer();
+      if (!timerInterval) startTimer();
       showActiveCallOverlay();
       break;
     }
@@ -3084,7 +3125,11 @@ async function doDecline() {
 
 // ── hangup ─────────────────────────────────────────────────
 async function doHangup() {
-  await wsSend({ type:'hangup', callId, with:callWith });
+  if (callMode === 'relay') {
+    await wsSend({ type: 'call.hangup', callId });
+  } else {
+    await wsSend({ type: 'hangup', callId, with: callWith });
+  }
   endCall();
 }
 function endCall() {

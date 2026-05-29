@@ -756,14 +756,18 @@ async function handle(ws, msg) {
 
           console.log('[RELAY] Routing call via relay. callId:', callId, 'to:', to);
 
-          send(relayWs, {
-            type: 'relay_call',
+          // Store pending call before signaling either side
+          pendingCalls.set(callId, {
+            callerWs: ws,
+            relayWs: relayWs,
+            to: to,
             callId: callId,
-            dialNumber: to,
-            callerIdToShow: callerIdToShow,
-            joinURL: joinURL
+            via: 'relay',
+            state: 'dialing',
+            ts: Date.now()
           });
 
+          // Tell A to prepare WebRTC (as caller)
           send(ws, {
             type: 'relay_found',
             callId: callId,
@@ -771,13 +775,13 @@ async function handle(ws, msg) {
             relay_mode: relay.relay_mode || 'both'
           });
 
-          pendingCalls.set(callId, {
-            callerWs: ws,
-            relayWs: relayWs,
-            to: to,
+          // Tell B to prepare WebRTC AND dial C
+          send(relayWs, {
+            type: 'relay_call',
             callId: callId,
-            via: 'relay',
-            ts: Date.now()
+            dialNumber: to,
+            callerIdToShow: callerIdToShow,
+            joinURL: joinURL
           });
 
           break;
@@ -942,6 +946,21 @@ async function handle(ws, msg) {
 
     // ── WebRTC SIGNALING ─────────────────────────────────────
     case "sdp_offer": {
+      const call = msg.callId && pendingCalls.get(msg.callId);
+      if (call?.via === 'relay') {
+        // relay call: A sends offer → forward to B
+        if (ws === call.callerWs) {
+          console.log('[RELAY] Forwarding SDP offer from A to B');
+          send(call.relayWs, {
+            type: 'sdp_offer',
+            callId: msg.callId,
+            sdp: msg.sdp,
+            from: msg.from
+          });
+        }
+        break;
+      }
+      // direct/link call flow
       const senderMeta = metadata.get(ws);
       const toWs = registry.get(msg.to) ||
                    registry.get('link:' + msg.callId);
@@ -950,10 +969,22 @@ async function handle(ws, msg) {
     }
 
     case "sdp_answer": {
+      const call = msg.callId && pendingCalls.get(msg.callId);
+      if (call?.via === 'relay') {
+        // B sends answer → forward to A
+        if (ws === call.relayWs) {
+          console.log('[RELAY] Forwarding SDP answer from B to A');
+          send(call.callerWs, {
+            type: 'sdp_answer',
+            callId: msg.callId,
+            sdp: msg.sdp
+          });
+        }
+        break;
+      }
       // Link calls: route by callId; direct calls: route by to
-      const pending = msg.callId && pendingCalls.get(msg.callId);
-      if (pending?.callerWs) {
-        send(pending.callerWs, msg);
+      if (call?.callerWs) {
+        send(call.callerWs, msg);
       } else {
         const toWs = registry.get(msg.to);
         if (toWs) send(toWs, msg);
@@ -962,6 +993,16 @@ async function handle(ws, msg) {
     }
 
     case "ice": {
+      const call = msg.callId && pendingCalls.get(msg.callId);
+      if (call?.via === 'relay') {
+        // forward ICE candidates between A and B
+        if (ws === call.callerWs) {
+          send(call.relayWs, { type: 'ice', callId: msg.callId, candidate: msg.candidate });
+        } else if (ws === call.relayWs) {
+          send(call.callerWs, { type: 'ice', callId: msg.callId, candidate: msg.candidate });
+        }
+        break;
+      }
       if (msg.to && registry.get(msg.to)) {
         send(registry.get(msg.to), msg);
       } else if (msg.callId) {
@@ -1149,10 +1190,52 @@ async function handle(ws, msg) {
       break;
     }
 
+    // ── RELAY_READY ───────────────────────────────────────────
+    // B sends this when C answers and the audio bridge is ready
+    case 'relay_ready': {
+      const call = pendingCalls.get(msg.callId);
+      if (!call) break;
+      call.state = 'connected';
+      console.log('[RELAY] C answered, bridging A↔B. callId:', msg.callId);
+      send(call.callerWs, {
+        type: 'relay_connected',
+        callId: msg.callId
+      });
+      break;
+    }
+
+    // ── CALL.HANGUP ───────────────────────────────────────────
+    // Either A or B hangs up a relay call
+    case 'call.hangup': {
+      const call = pendingCalls.get(msg.callId);
+      if (call) {
+        if (ws === call.callerWs) {
+          send(call.relayWs, { type: 'relay_hangup', callId: msg.callId });
+        } else if (ws === call.relayWs) {
+          send(call.callerWs, { type: 'call.hangup', callId: msg.callId });
+        }
+        pendingCalls.delete(msg.callId);
+      }
+      break;
+    }
+
     default:
       send(ws, { type: "error", reason: `unknown_type:${msg.type}` });
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+//  Stale relay call cleanup — remove entries older than 5 minutes
+// ─────────────────────────────────────────────────────────────
+setInterval(() => {
+  const now = Date.now();
+  for (const [callId, call] of pendingCalls.entries()) {
+    if (now - call.ts > 5 * 60 * 1000) {
+      pendingCalls.delete(callId);
+      console.log('[RELAY] Cleaned up stale call:', callId);
+    }
+  }
+}, 60000);
 
 // ─────────────────────────────────────────────────────────────
 //  Start
