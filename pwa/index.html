@@ -536,8 +536,30 @@ input::placeholder { color: var(--text-muted); }
         <span id="conn-status" class="sf-indicator sf-off"></span>
         <span class="sf-indicator sf-off" id="sf-dot"></span>
         <span class="sf-text" id="sf-text">Connecting...</span>
+        <span id="debug-toggle" onclick="toggleDebug()"
+              style="font-size:9px;color:rgba(99,180,255,0.3);cursor:pointer;
+                     padding:2px 6px;border:1px solid rgba(99,180,255,0.1);
+                     border-radius:4px;margin-left:8px;">debug</span>
       </div>
       <span class="sf-text" id="sf-right">DHT: checking</span>
+    </div>
+
+    <div id="debug-panel" style="
+      position:fixed;bottom:60px;left:0;right:0;
+      max-height:180px;overflow-y:auto;
+      background:rgba(3,7,13,0.95);
+      border-top:1px solid rgba(99,180,255,0.1);
+      padding:8px 14px;
+      font-family:monospace;font-size:10px;
+      color:rgba(99,180,255,0.6);
+      display:none;
+      z-index:50;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+        <span style="color:rgba(99,180,255,0.4);letter-spacing:0.5px;">DEBUG LOG</span>
+        <span onclick="document.getElementById('debug-panel').style.display='none'"
+              style="cursor:pointer;color:rgba(255,100,100,0.6);">✕</span>
+      </div>
+      <div id="debug-log"></div>
     </div>
 
   </div>
@@ -696,6 +718,35 @@ input::placeholder { color: var(--text-muted); }
 <audio id="remote-audio" autoplay playsinline></audio>
 
 <script>
+// ── On-screen debug panel helpers ─────────────────────────
+function debugLog(type, msg, data) {
+  const el = document.getElementById('debug-log');
+  if (!el) return;
+  const colors = { relay:'#1d9e75', webrtc:'#f5a623', server:'#c8dff5', error:'#ff6b6b', ice:'#888' };
+  const line = document.createElement('div');
+  line.style.cssText = `color:${colors[type]||'#63b4ff'};margin-bottom:2px;
+    border-bottom:1px solid rgba(255,255,255,0.03);padding-bottom:2px`;
+  const dataStr = data ? ' ' + JSON.stringify(data).slice(0, 80) : '';
+  line.textContent = `[${type.toUpperCase()}] ${msg}${dataStr}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  while (el.children.length > 50) el.removeChild(el.firstChild);
+}
+function toggleDebug() {
+  const p = document.getElementById('debug-panel');
+  if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+// ── Colored console + debug-panel logger ──────────────────
+const LOG = {
+  ocp:   (msg, data) => { console.log(`%c[OCP] ${msg}`,    'color:#63b4ff;font-weight:bold', data??''); debugLog('server', msg, data); },
+  relay: (msg, data) => { console.log(`%c[RELAY] ${msg}`,  'color:#1d9e75;font-weight:bold', data??''); debugLog('relay',  msg, data); },
+  webrtc:(msg, data) => { console.log(`%c[WEBRTC] ${msg}`, 'color:#f5a623;font-weight:bold', data??''); debugLog('webrtc', msg, data); },
+  srv:   (msg, data) => { console.log(`%c[SERVER] ${msg}`, 'color:#c8dff5;font-weight:bold', data??''); debugLog('server', msg, data); },
+  err:   (msg, data) => { console.error(`[ERROR] ${msg}`,                                    data??''); debugLog('error',  msg, data); },
+  ice:   (msg, data) => { console.log(`%c[ICE] ${msg}`,    'color:#888;font-style:italic',   data??''); debugLog('ice',    msg, data); },
+};
+
 // ── Wake lock — keep page awake while call is pending ─────
 let _wakeLock = null;
 async function requestWakeLock() {
@@ -1569,6 +1620,8 @@ async function initSignalServer(server, name, number) {
   }
 
   ws.onopen = async () => {
+    LOG.srv('Connected to signal server ✅');
+    LOG.srv('Sending registration...', { name, number, ocpAddress: myIdentity?.ocp_address });
     setConn('on');
     setConnectionStatus('online');
     await wsSend({
@@ -1581,7 +1634,8 @@ async function initSignalServer(server, name, number) {
   ws.onmessage = e => {
     try { onMessage(JSON.parse(e.data)); } catch {}
   };
-  ws.onclose = () => {
+  ws.onclose = (e) => {
+    LOG.err('Signal server disconnected ❌', { code: e.code, reason: e.reason });
     setConn('off');
     setConnectionStatus('offline');
     toast('Disconnected');
@@ -1628,10 +1682,11 @@ function doLogout() {
 
 // ── message handler ────────────────────────────────────────
 async function onMessage(msg) {
-  console.log('[←]', msg.type, msg);
+  LOG.srv('← Received', { type: msg.type, ...msg });
   switch(msg.type) {
 
     case 'registered':
+      LOG.ocp('✅ Registered with signal server', msg);
       document.getElementById('lbl-mynum').textContent = msg.number;
       if (myIdentity) {
         document.getElementById('lbl-ocpaddr').textContent = myIdentity.ocp_address.slice(0, 16) + '…';
@@ -1721,6 +1776,7 @@ async function onMessage(msg) {
       break;
 
     case 'answer_link_ready': {
+      LOG.relay('📎 No relay available — showing invite link', { callId: msg.callId, link: msg.link });
       const cid = msg.callId || msg.id;
       if (cid && cid === lastHandledCallId) {
         console.log('[OCP] Duplicate answer_link_ready ignored:', cid);
@@ -1809,21 +1865,47 @@ async function onMessage(msg) {
     }
 
     case 'sdp_offer': {
+      LOG.webrtc('📨 SDP offer received', { callId: msg.callId, sdpLength: msg.sdp?.sdp?.length, from: msg.from });
       if (callMode === 'relay' && msg.callId) {
         // Relay call: B (relay) sends offer → A answers
-        console.log('[RELAY] Received SDP offer from relay B');
+        LOG.webrtc('📨 SDP offer received from relay B', { callId: msg.callId, sdpLength: msg.sdp?.sdp?.length });
+        LOG.webrtc('Creating PeerConnection and sending answer...');
 
         if (pc) { pc.close(); pc = null; }
         pc = new RTCPeerConnection(RTC_CFG);
+        LOG.webrtc('PeerConnection created', { iceServers: RTC_CFG.iceServers.length });
 
         pc.onicecandidate = async e => {
           if (e.candidate) {
+            LOG.ice('Sending ICE candidate to relay B');
             await wsSend({ type: 'ice', callId: msg.callId, candidate: e.candidate.toJSON() });
+          } else {
+            LOG.ice('ICE gathering complete');
           }
         };
 
+        pc.oniceconnectionstatechange = () => {
+          LOG.webrtc('ICE connection state: ' + pc.iceConnectionState);
+          if (pc.iceConnectionState === 'connected') {
+            LOG.webrtc('✅ ICE CONNECTED — audio tunnel established');
+          }
+          if (pc.iceConnectionState === 'failed') {
+            LOG.err('❌ ICE FAILED — audio tunnel could not be established');
+            LOG.err('Possible cause: NAT/firewall blocking WebRTC');
+          }
+          if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
+            toast('Connection lost');
+            endCall();
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          LOG.webrtc('PeerConnection state: ' + pc.connectionState);
+        };
+
         pc.ontrack = e => {
-          console.log('[RELAY] Receiving audio from relay (C voice)');
+          LOG.webrtc('✅ AUDIO TRACK RECEIVED from relay (this is C speaking)');
+          LOG.webrtc('Stream tracks: ' + (e.streams[0]?.getTracks()?.length ?? 0));
           const remoteAudio = document.getElementById('remote-audio');
           if (remoteAudio) {
             remoteAudio.srcObject = e.streams[0];
@@ -1831,25 +1913,21 @@ async function onMessage(msg) {
           }
         };
 
-        pc.oniceconnectionstatechange = () => {
-          if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
-            toast('Connection lost');
-            endCall();
-          }
-        };
-
         try {
           localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
           localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+          LOG.webrtc('Microphone acquired, tracks added to PeerConnection');
         } catch(e) {
-          console.error('[RELAY] Microphone access denied:', e);
+          LOG.err('Microphone access denied', { error: e.message });
           toast('Microphone access denied');
           break;
         }
 
         await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        LOG.webrtc('Remote description (B\'s offer) set');
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
+        LOG.webrtc('Local description (A\'s answer) set');
 
         await wsSend({
           type:   'sdp_answer',
@@ -1857,7 +1935,7 @@ async function onMessage(msg) {
           sdp:    { type: answer.type, sdp: answer.sdp }
         });
 
-        console.log('[RELAY] SDP answer sent to relay B');
+        LOG.webrtc('SDP answer sent to relay B ✅');
         break;
       }
       // Direct/link call flow
@@ -1866,15 +1944,17 @@ async function onMessage(msg) {
     }
 
     case 'sdp_answer':
+      LOG.webrtc('📨 SDP answer received', { callId: msg.callId });
       if (pc) await pc.setRemoteDescription({ type:'answer', sdp:msg.sdp });
       break;
 
     case 'ice':
+      LOG.ice('ICE candidate received from relay');
       if (pc && msg.candidate) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
         } catch(e) {
-          console.error('[ICE] Failed to add candidate:', e);
+          LOG.err('Failed to add ICE candidate', { error: e.message });
         }
       }
       break;
@@ -1892,7 +1972,8 @@ async function onMessage(msg) {
     }
 
     case 'relay_found': {
-      console.log('[RELAY] Relay found in', msg.country, '— waiting for C to answer');
+      LOG.relay('✅ Relay found!', { country: msg.country, relay_mode: msg.relay_mode, callId: msg.callId });
+      LOG.relay('Waiting for relay to dial C and C to answer...');
       callId   = msg.callId || callId;
       callMode = 'relay';
       stopRingback();
@@ -1906,7 +1987,8 @@ async function onMessage(msg) {
     }
 
     case 'relay_connected': {
-      console.log('[RELAY] C answered! Call is live.');
+      LOG.relay('✅ C ANSWERED — call is live!', { callId: msg.callId });
+      LOG.relay('Starting call timer and audio...');
       stopRingback();
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'Connected via relay';
@@ -1945,7 +2027,27 @@ async function onMessage(msg) {
       resetCallUI();
       break;
 
+    case 'relay_error':
+      LOG.err('❌ Relay reported error', { callId: msg.callId, reason: msg.reason });
+      LOG.err('Reason meanings:', {
+        'no_call_permission': 'Relay phone has not granted CALL_PHONE permission',
+        'permission_denied':  'Android denied the call at runtime',
+        'no_permission':      'Relay has no permission to make calls'
+      });
+      toast('Relay error: ' + (msg.reason || 'unknown'));
+      showInviteBanner(callWith);
+      break;
+
     case 'error':
+      LOG.err('Server error', msg);
+      LOG.err('Reason:', msg.reason);
+      if (msg.reason === 'not_registered') {
+        LOG.err('Fix: The number you are calling is not registered on OCP');
+        LOG.err('The server will find a relay instead');
+      }
+      if (msg.reason === 'invalid_number') {
+        LOG.err('Fix: Add country code to the number e.g. +91 +1 +44');
+      }
       toast('Error: ' + msg.reason);
       break;
   }
@@ -3093,6 +3195,9 @@ async function doCall() {
   }
 
   callWith = to;
+  LOG.relay('🔔 Call initiated to: ' + to);
+  LOG.relay('Sending call to signal server...');
+  LOG.relay('Server will check: 1) Is callee on OCP? 2) Is relay available?');
   showCallingScreen(to);
   setConnectionStatus('routing');
 
@@ -3125,6 +3230,8 @@ async function doDecline() {
 
 // ── hangup ─────────────────────────────────────────────────
 async function doHangup() {
+  LOG.relay('📴 Hangup triggered by user');
+  LOG.relay('Cleaning up WebRTC and resetting state...');
   if (callMode === 'relay') {
     await wsSend({ type: 'call.hangup', callId });
   } else {
@@ -3292,8 +3399,8 @@ async function wsSend(obj) {
   }
 
   const payload = JSON.stringify(message);
+  LOG.srv('→ Sending', { type: obj.type, ...obj });
   ws.send(payload);
-  console.log('[→]', obj.type, message);
 }
 
 // ── keyboard ───────────────────────────────────────────────
