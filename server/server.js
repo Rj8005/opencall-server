@@ -21,6 +21,7 @@ const PORT = process.env.PORT || 8080;
 const registry  = new Map(); // "+14161234567" → WebSocket
 const metadata  = new Map(); // WebSocket       → { number, name, registeredAt }
 const relays    = new Map(); // relayId         → { ws, areaCode, country }
+const relayRegistry = new Map(); // key: WebSocket, value: { country, relay_mode, ocp_address, number, capacity }
 const callLog          = new Map(); // callId          → { from, to, startedAt }
 const pushSubscriptions = new Map(); // number           → push subscription
 const webPush           = null;      // using native fetch for push
@@ -196,13 +197,21 @@ async function verifySignature(msg) {
   }
 }
 
-function findRelay(targetNumber) {
-  if (relays.size === 0) return null;
-  const prefix = targetNumber.slice(0, 5); // e.g. "+1416"
-  for (const [, relay] of relays) {
-    if (relay.areaCode && relay.areaCode === prefix) return relay;
+function findRelay(targetE164, excludeWs) {
+  const targetCountry = detectCountry(targetE164);
+  console.log('[RELAY] Looking for relay in country:', targetCountry);
+  console.log('[RELAY] Total relays registered:', relayRegistry.size);
+
+  for (const [relayWs, relay] of relayRegistry.entries()) {
+    if (relayWs === excludeWs) continue;
+    if (relayWs.readyState !== 1) continue; // not open
+    if (relay.country === targetCountry) {
+      console.log('[RELAY] Found relay:', relay.ocp_address, 'in', targetCountry);
+      return { ws: relayWs, relay };
+    }
   }
-  return relays.values().next().value;
+  console.log('[RELAY] No relay found in', targetCountry);
+  return null;
 }
 
 function findBestRelay(targetNumber, country) {
@@ -535,6 +544,16 @@ const server = http.createServer((req, res) => {
       numbers: [...registry.keys()]
     }));
 
+  } else if (req.url === '/relays') {
+    const list = [...relayRegistry.values()].map(r => ({
+      country: r.country,
+      relay_mode: r.relay_mode,
+      ocp_address: r.ocp_address?.slice(0, 20) + '...',
+      registeredAt: new Date(r.registeredAt).toISOString()
+    }));
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ relays: list, count: list.length }));
+
   } else {
     res.writeHead(404);
     res.end(JSON.stringify({ error: "not found" }));
@@ -586,6 +605,8 @@ wss.on("connection", (ws, req) => {
     for (const [id, relay] of relays) {
       if (relay.ws === ws) { relays.delete(id); break; }
     }
+    relayRegistry.delete(ws);
+    console.log('[RELAY] Relay disconnected. Remaining:', relayRegistry.size);
   });
 
   ws.on("error", (err) => log("!", "ws error:", err.message));
@@ -647,6 +668,21 @@ async function handle(ws, msg) {
 
       relays.set(relayId, { ws, areaCode, country, relay_mode: msg.relay_mode || 'both', registeredAt: Date.now() });
       metadata.set(ws, { relayId, areaCode, country, relay_mode: msg.relay_mode || 'both' });
+
+      console.log('[RELAY] New relay registered:', {
+        country: msg.country,
+        relay_mode: msg.relay_mode,
+        ocp_address: msg.ocp_address,
+        number: msg.number
+      });
+      relayRegistry.set(ws, {
+        country: msg.country || detectCountry(msg.number || ''),
+        relay_mode: msg.relay_mode || 'both',
+        ocp_address: msg.ocp_address || '',
+        number: normalizeNumber(msg.number || ''),
+        capacity: msg.capacity || 3,
+        registeredAt: Date.now()
+      });
 
       send(ws, { type: "relay_registered", relayId });
       log("✓", "relay registered", relayId, country, areaCode);
@@ -710,25 +746,41 @@ async function handle(ws, msg) {
         log('🌍', 'Call to', to, '| Country:', callerCountry || 'unknown',
             msg.country ? '(client hint)' : '(auto-detected)');
 
-        // Priority 1: OCP relay in DHT
-        const relay = findBestRelay(to, callerCountry);
-        if (relay) {
-          const relayWs = registry.get(relay.relayId);
-          if (relayWs) {
-            const callerIdToShow = gatewayNumbers[detectCountry(to)] || '+10000000001';
-            send(relayWs, {
-              type:           'relay_call',
-              callId,
-              dialNumber:     to,
-              callerIdToShow: callerIdToShow,
-              joinURL:        'https://opencall.net/join/' + callId,
-              callerOcp:      callerMeta.ocpAddress || null
-            });
-            send(ws, { type: 'ringing', callId, to, mode: 'relay' });
-            callLog.set(callId, { from: callerMeta.number, to, startedAt: Date.now(), mode: 'relay', relayWs });
-            log("☎", `relay call ${callerMeta.number} → ${to} via relay ${relay.relayId} (${callId})`);
-            break;
-          }
+        // Priority 1: OCP relay via relayRegistry
+        const relayResult = findRelay(to, null);
+        if (relayResult) {
+          const { ws: relayWs, relay } = relayResult;
+          const country = detectCountry(to);
+          const callerIdToShow = gatewayNumbers[country] || '+10000000001';
+          const joinURL = 'https://opencall-server.vercel.app/answer?call=' + callId;
+
+          console.log('[RELAY] Routing call via relay. callId:', callId, 'to:', to);
+
+          send(relayWs, {
+            type: 'relay_call',
+            callId: callId,
+            dialNumber: to,
+            callerIdToShow: callerIdToShow,
+            joinURL: joinURL
+          });
+
+          send(ws, {
+            type: 'relay_found',
+            callId: callId,
+            country: country,
+            relay_mode: relay.relay_mode || 'both'
+          });
+
+          pendingCalls.set(callId, {
+            callerWs: ws,
+            relayWs: relayWs,
+            to: to,
+            callId: callId,
+            via: 'relay',
+            ts: Date.now()
+          });
+
+          break;
         }
 
         // Priority 2: OCP SIM bank
@@ -747,6 +799,7 @@ async function handle(ws, msg) {
         }
 
         // Priority 3: Answer link fallback
+        console.log('[RELAY] No relay found — generating answer link');
         const callerName   = callerMeta?.name   || callerMeta?.number || 'Caller';
         const callerNumber = callerMeta?.number || '';
         const link = generateAnswerLink(callId, callerName, callerNumber);

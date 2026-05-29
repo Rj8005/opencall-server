@@ -1481,6 +1481,34 @@ function showDialHint(msg, isError) {
     el.style.color = '';
   }, 3000);
 }
+function showCallingScreen(number) {
+  const hintEl = document.getElementById('dial-hint');
+  if (hintEl) {
+    hintEl.textContent = 'Calling ' + number + '...';
+    hintEl.style.color = 'var(--blue)';
+  }
+  document.getElementById('caller-name-display').textContent = number;
+  document.getElementById('caller-initial').textContent = (number || '?')[0].toUpperCase();
+  document.getElementById('call-status-detail').textContent = 'Connecting...';
+  document.getElementById('call-route-info').textContent = 'routing...';
+  document.getElementById('call-timer').textContent = '0:00';
+  const waitPanel = document.getElementById('relay-waiting-panel');
+  const callUi    = document.getElementById('call-screen-ui');
+  if (waitPanel) waitPanel.style.display = 'none';
+  if (callUi)    callUi.style.display    = '';
+  showActiveCallOverlay();
+  startRingback();
+}
+
+function showRelayConnecting(country, relayMode) {
+  const statusEl = document.getElementById('dial-hint');
+  if (statusEl) {
+    statusEl.textContent = 'Relay found in ' + country + ' — connecting...';
+    statusEl.style.color = 'var(--green)';
+  }
+  setConnectionStatus('routing');
+}
+
 function copyOCPAddress() {
   const addr = (document.getElementById('ocp-address-display')?.textContent
     || document.getElementById('ocp-addr-dialer')?.textContent || '').trim();
@@ -1807,6 +1835,9 @@ async function onMessage(msg) {
     }
 
     case 'relay_found': {
+      console.log('[RELAY] Relay found in', msg.country);
+      showRelayConnecting(msg.country, msg.relay_mode);
+      callId = msg.callId || callId;
       const cd = COUNTRY_DATA[msg.country];
       const countryLabel = cd ? (cd.flag + ' ' + cd.name) : (msg.country || 'a relay');
       if (msg.relay_mode === 'call') {
@@ -1830,6 +1861,17 @@ async function onMessage(msg) {
         document.getElementById('btn-relay-sms').onclick  = () => useRelaySMS(callId);
         document.getElementById('btn-relay-call').onclick = () => useRelayCall(callId);
       }
+      break;
+    }
+
+    case 'relay_connected': {
+      console.log('[RELAY] Call connected via relay');
+      stopRingback();
+      setConnectionStatus('calling');
+      document.getElementById('call-status-detail').textContent = 'Connected via relay';
+      document.getElementById('caller-avatar').classList.remove('ringing');
+      startTimer();
+      showActiveCallOverlay();
       break;
     }
 
@@ -2999,26 +3041,25 @@ async function doCall() {
   }
   if (!ws || ws.readyState !== 1) return toast('Not connected to server');
 
-  // Step 1: Check if number is registered in OCP via DHT
+  // DHT lookup: hint-only — does NOT gate routing (server decides relay vs invite)
   if (dhtReady && to.startsWith('+')) {
-    console.log('[DHT] Looking up', to, 'in DHT...');
-    const ocpAddr = await dhtLookupPhone(to);
-    if (ocpAddr) {
-      console.log('[DHT] Found OCP address for', to, ':', ocpAddr);
-      document.getElementById('invite-panel')?.remove();
-      toast('Routing via OCP network...');
-    } else {
-      console.log('[DHT] Not in DHT — showing invite banner');
-      showInviteBanner(to);
-      return;
-    }
+    dhtLookupPhone(to).then(ocpAddr => {
+      if (ocpAddr) {
+        console.log('[DHT] OCP user found:', to);
+        showDialHint('OCP user — direct connection', false);
+      }
+    });
   }
 
-  // Step 2: Initialise ratchet session
+  callWith = to;
+  showCallingScreen(to);
+  setConnectionStatus('routing');
+
+  // Initialise ratchet session
   await initRatchetSession(to);
 
-  // Step 3: Route call via signal server (DHT routing in Phase 3 end)
-  await wsSend({ type:'call', to, country: window._selectedCountry || null });
+  // Send call to signal server — server decides relay or answer link
+  await wsSend({ type: 'call', to, country: window._selectedCountry || null });
 }
 
 // ── answer / decline ───────────────────────────────────────
