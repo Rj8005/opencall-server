@@ -13,6 +13,10 @@ const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 8080;
 
+console.log('[SERVER] OCP Signal Server starting...');
+console.log('[SERVER] Version: relay-fix-v2');
+console.log('[SERVER] Time:', new Date().toISOString());
+
 // ─────────────────────────────────────────────────────────────
 //  Registry — this IS your phone network
 //  A hashmap that maps phone numbers to live WebSocket connections
