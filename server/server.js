@@ -671,31 +671,6 @@ async function handle(ws, msg) {
     return;
   }
 
-  // ── AUDIO FORWARDING (high-frequency — no logging) ───────────
-  if (msg.type === 'relay_audio') {
-    const call = pendingCalls.get(msg.callId);
-    if (call && call.callerWs?.readyState === 1) {
-      call.callerWs.send(JSON.stringify({
-        type:   'relay_audio',
-        callId: msg.callId,
-        audio:  msg.audio
-      }));
-    }
-    return;
-  }
-
-  if (msg.type === 'caller_audio') {
-    const call = pendingCalls.get(msg.callId);
-    if (call && call.relayWs?.readyState === 1) {
-      call.relayWs.send(JSON.stringify({
-        type:   'caller_audio',
-        callId: msg.callId,
-        audio:  msg.audio
-      }));
-    }
-    return;
-  }
-
   // ── EARLY-RETURN RELAY HANDLERS ──────────────────────────────
   // Placed before switch so field-name variants (callId/call_id/id) are
   // handled correctly regardless of which the APK sends.
@@ -729,22 +704,31 @@ async function handle(ws, msg) {
     call.state       = 'connected';
     call.connectedAt = Date.now();
     if (call.timeout) clearTimeout(call.timeout);
-    // Tell A the call is live
+    console.log('[RELAY] C answered — starting WebRTC between A and B');
+    // Tell A: start WebRTC as OFFERER
     try {
       if (call.callerWs?.readyState === 1) {
-        call.callerWs.send(JSON.stringify({ type: 'relay_connected', callId }));
-        console.log('[RELAY_READY] ✅ relay_connected sent to A');
+        call.callerWs.send(JSON.stringify({
+          type:   'relay_connected',
+          callId,
+          role:   'caller'   // A creates offer
+        }));
+        console.log('[RELAY_READY] ✅ relay_connected sent to A (role: caller)');
       } else {
         console.log('[RELAY_READY] ❌ callerWs not open:', call.callerWs?.readyState);
       }
     } catch(e) {
       console.log('[RELAY_READY] ❌ send error:', e.message);
     }
-    // Tell B to start WebRTC offer toward A (B bridges GSM audio silently)
+    // Tell B: wait for offer as ANSWERER
     try {
       if (call.relayWs?.readyState === 1) {
-        call.relayWs.send(JSON.stringify({ type: 'start_webrtc', callId }));
-        console.log('[RELAY_READY] ✅ start_webrtc sent to B');
+        call.relayWs.send(JSON.stringify({
+          type:   'start_webrtc',
+          callId,
+          role:   'relay'    // B answers
+        }));
+        console.log('[RELAY_READY] ✅ start_webrtc sent to B (role: relay)');
       }
     } catch(e) {
       console.log('[RELAY_READY] ❌ start_webrtc send error:', e.message);
