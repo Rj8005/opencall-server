@@ -818,6 +818,18 @@ async function handle(ws, msg) {
 
       send(ws, { type: "relay_registered", relayId });
       log("✓", "relay registered", relayId, country, areaCode);
+
+      // Check if there's a connected call waiting for this relay to come back
+      if (msg.ocp_address) {
+        for (const [callId, call] of pendingCalls.entries()) {
+          if (call.state === 'connected' && call.relayOcpAddress === msg.ocp_address) {
+            console.log('[RELAY] Relay reconnected — restoring call:', callId);
+            call.relayWs = ws;
+            send(ws, { type: 'start_webrtc', callId, role: 'relay' });
+          }
+        }
+      }
+
       break;
     }
 
@@ -895,6 +907,7 @@ async function handle(ws, msg) {
           pendingCalls.set(callId, {
             callerWs: ws,
             relayWs: relayWs,
+            relayOcpAddress: relay.ocp_address || '',
             to: to,
             callId: callId,
             via: 'relay',
