@@ -1233,16 +1233,65 @@ async function handle(ws, msg) {
     }
 
     // ── RELAY_READY ───────────────────────────────────────────
-    // B sends this when C answers and the audio bridge is ready
+    // B sends this when C (GSM phone) answers and audio bridge is live.
+    // C has no browser — bridging is AudioRecord/AudioTrack in RelayService.
+    // Server's job: tell A the call is live, then tell B to open WebRTC to A.
     case 'relay_ready': {
       const call = pendingCalls.get(msg.callId);
-      if (!call) break;
-      call.state = 'connected';
-      console.log('[RELAY] C answered, bridging A↔B. callId:', msg.callId);
-      send(call.callerWs, {
-        type: 'relay_connected',
-        callId: msg.callId
-      });
+      if (!call) {
+        console.log('[RELAY] relay_ready for unknown callId:', msg.callId);
+        break;
+      }
+
+      call.state       = 'connected';
+      call.connectedAt = Date.now();
+
+      console.log('[RELAY] ✅ C answered! Notifying A. callId:', msg.callId);
+
+      if (call.timeout) clearTimeout(call.timeout);
+
+      // 1. Tell A the call is live
+      try {
+        send(call.callerWs, {
+          type:    'relay_connected',
+          callId:  msg.callId,
+          message: 'Call connected via relay'
+        });
+        console.log('[RELAY] relay_connected sent to A');
+      } catch(e) {
+        console.error('[RELAY] Failed to notify A:', e.message);
+      }
+
+      // 2. Tell B to start WebRTC offer toward A
+      //    B bridges GSM audio (AudioRecord → WebRTC) silently in background
+      try {
+        send(call.relayWs, {
+          type:   'start_webrtc',
+          callId: msg.callId
+        });
+        console.log('[RELAY] start_webrtc sent to B');
+      } catch(e) {
+        console.error('[RELAY] Failed to send start_webrtc to B:', e.message);
+      }
+
+      break;
+    }
+
+    // ── RELAY_CALL_ENDED ──────────────────────────────────────
+    // B sends this when C hangs up the GSM call
+    case 'relay_call_ended': {
+      const call = pendingCalls.get(msg.callId);
+      if (call) {
+        console.log('[RELAY] C hung up. Notifying A. callId:', msg.callId);
+        try {
+          send(call.callerWs, {
+            type:   'call.hangup',
+            callId: msg.callId,
+            reason: 'callee_ended'
+          });
+        } catch(e) {}
+        pendingCalls.delete(msg.callId);
+      }
       break;
     }
 
