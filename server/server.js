@@ -659,10 +659,67 @@ wss.on("connection", (ws, req) => {
 // ─────────────────────────────────────────────────────────────
 async function handle(ws, msg) {
   log("↓", msg.type, JSON.stringify(msg).slice(0, 120));
+  console.log('[MSG IN]', JSON.stringify(msg).slice(0, 200));
 
   const sigValid = await verifySignature(msg);
   if (!sigValid) {
     log('!', 'invalid signature from', msg.from);
+    return;
+  }
+
+  // ── EARLY-RETURN RELAY HANDLERS ──────────────────────────────
+  // Placed before switch so field-name variants (callId/call_id/id) are
+  // handled correctly regardless of which the APK sends.
+
+  if (msg.type === 'relay_ringing') {
+    const callId = msg.callId || msg.call_id || msg.id;
+    const call   = pendingCalls.get(callId);
+    console.log('[RELAY_RINGING] callId:', callId, 'call found:', !!call);
+    if (call && call.callerWs?.readyState === 1) {
+      call.callerWs.send(JSON.stringify({ type: 'relay_ringing', callId }));
+      console.log('[RELAY_RINGING] ✅ forwarded to A');
+    }
+    return;
+  }
+
+  if (msg.type === 'relay_ready') {
+    const callId = msg.callId || msg.call_id || msg.id;
+    console.log('[RELAY_READY] received. callId:', callId);
+    console.log('[RELAY_READY] pendingCalls size:', pendingCalls.size);
+    console.log('[RELAY_READY] pendingCalls keys:', [...pendingCalls.keys()]);
+    const call = pendingCalls.get(callId);
+    console.log('[RELAY_READY] call found:', !!call);
+    if (call) {
+      console.log('[RELAY_READY] callerWs open:', call.callerWs?.readyState === 1);
+      console.log('[RELAY_READY] state:', call.state);
+    }
+    if (!call) {
+      console.log('[RELAY_READY] ❌ no pending call found for:', callId);
+      return;
+    }
+    call.state       = 'connected';
+    call.connectedAt = Date.now();
+    if (call.timeout) clearTimeout(call.timeout);
+    // Tell A the call is live
+    try {
+      if (call.callerWs?.readyState === 1) {
+        call.callerWs.send(JSON.stringify({ type: 'relay_connected', callId }));
+        console.log('[RELAY_READY] ✅ relay_connected sent to A');
+      } else {
+        console.log('[RELAY_READY] ❌ callerWs not open:', call.callerWs?.readyState);
+      }
+    } catch(e) {
+      console.log('[RELAY_READY] ❌ send error:', e.message);
+    }
+    // Tell B to start WebRTC offer toward A (B bridges GSM audio silently)
+    try {
+      if (call.relayWs?.readyState === 1) {
+        call.relayWs.send(JSON.stringify({ type: 'start_webrtc', callId }));
+        console.log('[RELAY_READY] ✅ start_webrtc sent to B');
+      }
+    } catch(e) {
+      console.log('[RELAY_READY] ❌ start_webrtc send error:', e.message);
+    }
     return;
   }
 
@@ -799,6 +856,9 @@ async function handle(ws, msg) {
           console.log('[RELAY] Routing call via relay. callId:', callId, 'to:', to);
 
           // Store pending call before signaling either side
+          console.log('[RELAY] Storing pendingCall. callId:', callId);
+          console.log('[RELAY] caller ready:', ws?.readyState === 1);
+          console.log('[RELAY] relay ready:', relayWs?.readyState === 1);
           pendingCalls.set(callId, {
             callerWs: ws,
             relayWs: relayWs,
@@ -808,6 +868,7 @@ async function handle(ws, msg) {
             state: 'dialing',
             ts: Date.now()
           });
+          console.log('[RELAY] pendingCalls size after store:', pendingCalls.size);
 
           // Tell A to prepare WebRTC (as caller)
           send(ws, {
@@ -1232,67 +1293,7 @@ async function handle(ws, msg) {
       break;
     }
 
-    // ── RELAY_RINGING ─────────────────────────────────────────
-    // B sends this when C's GSM phone is ringing
-    case 'relay_ringing': {
-      const call = pendingCalls.get(msg.callId);
-      if (call) {
-        console.log('[RELAY] C phone is ringing. callId:', msg.callId);
-        try {
-          send(call.callerWs, {
-            type:   'relay_ringing',
-            callId: msg.callId
-          });
-        } catch(e) {}
-      }
-      break;
-    }
-
-    // ── RELAY_READY ───────────────────────────────────────────
-    // B sends this when C (GSM phone) answers and audio bridge is live.
-    // C has no browser — bridging is AudioRecord/AudioTrack in RelayService.
-    // Server's job: tell A the call is live, then tell B to open WebRTC to A.
-    case 'relay_ready': {
-      const call = pendingCalls.get(msg.callId);
-      if (!call) {
-        console.log('[RELAY] relay_ready for unknown callId:', msg.callId);
-        break;
-      }
-
-      call.state       = 'connected';
-      call.connectedAt = Date.now();
-
-      console.log('[RELAY] ✅ C answered! Notifying A. callId:', msg.callId);
-
-      if (call.timeout) clearTimeout(call.timeout);
-
-      // 1. Tell A the call is live
-      try {
-        send(call.callerWs, {
-          type:    'relay_connected',
-          callId:  msg.callId,
-          message: 'Call connected via relay'
-        });
-        console.log('[RELAY] relay_connected sent to A');
-      } catch(e) {
-        console.error('[RELAY] Failed to notify A:', e.message);
-      }
-
-      // 2. Tell B to start WebRTC offer toward A
-      //    B bridges GSM audio (AudioRecord → WebRTC) silently in background
-      try {
-        send(call.relayWs, {
-          type:   'start_webrtc',
-          callId: msg.callId
-        });
-        console.log('[RELAY] start_webrtc sent to B');
-      } catch(e) {
-        console.error('[RELAY] Failed to send start_webrtc to B:', e.message);
-      }
-
-      break;
-    }
-
+    // relay_ringing and relay_ready are handled before the switch (early-return)
     // ── RELAY_CALL_ENDED ──────────────────────────────────────
     // B sends this when C hangs up the GSM call
     case 'relay_call_ended': {
