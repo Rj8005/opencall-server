@@ -1370,6 +1370,7 @@ let relayTimeout         = null;
 let currentDialedNumber  = '';
 let audioContext         = null;
 let relayCallActive      = false;
+let audioFrameCount      = 0;
 let micStream            = null;
 let audioSendInterval    = null;
 
@@ -2058,11 +2059,35 @@ async function onMessage(msg) {
       initAudioContext();
       LOG.relay('🔊 Audio playback ready — you will hear C through relay B');
       startMicCapture(msg.callId || callId);
+
+      const hint = document.getElementById('dial-hint');
+      if (hint) {
+        hint.textContent = '🔊 Call live — speak now';
+        hint.style.color = 'var(--green)';
+      }
+
+      // Show audio level meter
+      audioFrameCount = 0;
+      setInterval(() => {
+        if (relayCallActive) {
+          const fps = audioFrameCount;
+          audioFrameCount = 0;
+          if (hint) {
+            hint.textContent = fps > 0
+              ? '🔊 Receiving audio: ' + fps + ' fps'
+              : '⚠️ No audio received';
+          }
+        }
+      }, 1000);
+
       break;
     }
 
     case 'relay_audio': {
-      if (relayCallActive) playRelayAudio(msg.audio);
+      if (relayCallActive) {
+        audioFrameCount++;
+        playRelayAudio(msg.audio);
+      }
       break;
     }
 
@@ -3362,20 +3387,47 @@ function initAudioContext() {
 function playRelayAudio(base64Audio) {
   try {
     initAudioContext();
+
     const binary = atob(base64Audio);
-    const bytes  = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const pcm16   = new Int16Array(bytes.buffer);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    const pcm16 = new Int16Array(bytes.buffer);
+
+    // Check if audio is silence
+    const maxVal = Math.max(...Array.from(pcm16).map(Math.abs));
+    if (maxVal < 10) {
+      // Silent frame — skip (don't play silence)
+      return;
+    }
+
     const float32 = new Float32Array(pcm16.length);
-    for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 32768.0;
+    for (let i = 0; i < pcm16.length; i++) {
+      // Boost volume 3x
+      float32[i] = Math.max(-1, Math.min(1, (pcm16[i] / 32768.0) * 3.0));
+    }
+
     const buffer = audioContext.createBuffer(1, float32.length, 8000);
     buffer.getChannelData(0).set(float32);
+
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
-    source.connect(audioContext.destination);
+
+    // Add gain node for volume control
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = 2.0;
+
+    source.connect(gainNode);
+    gainNode.connect(audioContext.destination);
     source.start();
+
   } catch(e) {
-    console.error('[AUDIO] playback error:', e.message);
+    // Only log errors occasionally to avoid console spam
+    if (Math.random() < 0.01) {
+      console.error('[AUDIO] playback error:', e.message);
+    }
   }
 }
 
