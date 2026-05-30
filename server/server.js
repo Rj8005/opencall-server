@@ -584,10 +584,55 @@ wss.on("connection", (ws, req) => {
     handle(ws, msg);
   });
 
-  ws.on("close", () => {
+  ws.on('close', (code, reason) => {
     const meta = metadata.get(ws);
+    const isRelay = relayRegistry.has(ws);
+
+    if (isRelay) {
+      const relay = relayRegistry.get(ws);
+      console.log('[RELAY] Relay disconnected:', relay?.country, code);
+      relayRegistry.delete(ws);
+      metadata.delete(ws);
+      for (const [id, r] of relays) {
+        if (r.ws === ws) { relays.delete(id); break; }
+      }
+
+      // Find any pending call this relay was handling
+      for (const [callId, call] of pendingCalls.entries()) {
+        if (call.relayWs === ws) {
+          console.log('[RELAY] Active call lost relay — notifying caller:', callId);
+          // Tell caller A the relay died — do NOT kill A's connection
+          try {
+            if (call.callerWs?.readyState === 1) {
+              send(call.callerWs, {
+                type: 'relay_error',
+                callId: callId,
+                reason: 'relay_disconnected',
+                message: 'Relay disconnected — generating invite link instead'
+              });
+              // Fall back to answer link
+              const joinURL = 'https://opencall-server.vercel.app/answer?call=' + callId;
+              if (!sentAnswerLinks.has(callId)) {
+                sentAnswerLinks.add(callId);
+                setTimeout(() => sentAnswerLinks.delete(callId), 60000);
+                send(call.callerWs, {
+                  type: 'answer_link_ready',
+                  callId: callId,
+                  link: joinURL
+                });
+              }
+            }
+          } catch(e) {
+            console.error('[RELAY] Error notifying caller of relay death:', e.message);
+          }
+          pendingCalls.delete(callId);
+        }
+      }
+      return;
+    }
+
+    // Normal user disconnect
     if (meta?.number) {
-      // notify and clean up any active call involving this number
       for (const [callId, call] of callLog) {
         if (call.from === meta.number || call.to === meta.number) {
           const otherNumber = call.from === meta.number ? call.to : call.from;
@@ -600,13 +645,10 @@ wss.on("connection", (ws, req) => {
       registry.delete(meta.number);
       log("←", "unregistered", meta.number);
     }
-    metadata.delete(ws);
-    // remove from relays if it was one
-    for (const [id, relay] of relays) {
-      if (relay.ws === ws) { relays.delete(id); break; }
+    if (meta) {
+      console.log('[SERVER] User disconnected:', meta.number);
+      metadata.delete(ws);
     }
-    relayRegistry.delete(ws);
-    console.log('[RELAY] Relay disconnected. Remaining:', relayRegistry.size);
   });
 
   ws.on("error", (err) => log("!", "ws error:", err.message));

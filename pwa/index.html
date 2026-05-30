@@ -1366,6 +1366,8 @@ let ringInterval  = null;
 let ringbackCtx   = null;
 let ringbackInt   = null;
 let lastHandledCallId = null;
+let relayTimeout         = null;
+let currentDialedNumber  = '';
 
 // ── Country / platform data ────────────────────────────────
 const COUNTRY_DATA = {
@@ -1558,6 +1560,24 @@ function showRelayConnecting(country, relayMode) {
     statusEl.style.color = 'var(--green)';
   }
   setConnectionStatus('routing');
+}
+
+function showRelayFallback(number) {
+  LOG.relay('Showing invite fallback for: ' + number);
+  stopRingback();
+  const sharePanel = document.getElementById('relay-waiting-panel')
+    || document.getElementById('share-panel')
+    || document.getElementById('screen-share');
+  if (sharePanel) {
+    sharePanel.style.display = 'block';
+  }
+  setConnectionStatus('online');
+  const pill = document.getElementById('status-pill');
+  if (pill) {
+    pill.textContent = 'Online';
+    pill.className   = 'status-pill pill-online';
+  }
+  if (number) showInviteBanner(number);
 }
 
 function copyOCPAddress() {
@@ -1983,10 +2003,22 @@ async function onMessage(msg) {
         'via ' + (msg.country || 'relay') + ' relay';
       showActiveCallOverlay();
       startRingback();
+
+      // Safety timeout — if nothing happens in 20s show invite fallback
+      clearTimeout(relayTimeout);
+      relayTimeout = setTimeout(() => {
+        LOG.err('⏱️ Relay timeout — no response in 20 seconds');
+        LOG.err('Possible causes:');
+        LOG.err('  1. Relay APK crashed (check permissions)');
+        LOG.err('  2. C did not answer');
+        LOG.err('  3. WebRTC setup failed on relay side');
+        showRelayFallback(currentDialedNumber);
+      }, 20000);
       break;
     }
 
     case 'relay_connected': {
+      clearTimeout(relayTimeout);
       LOG.relay('✅ C ANSWERED — call is live!', { callId: msg.callId });
       LOG.relay('Starting call timer and audio...');
       stopRingback();
@@ -2027,16 +2059,29 @@ async function onMessage(msg) {
       resetCallUI();
       break;
 
-    case 'relay_error':
-      LOG.err('❌ Relay reported error', { callId: msg.callId, reason: msg.reason });
-      LOG.err('Reason meanings:', {
-        'no_call_permission': 'Relay phone has not granted CALL_PHONE permission',
-        'permission_denied':  'Android denied the call at runtime',
-        'no_permission':      'Relay has no permission to make calls'
-      });
-      toast('Relay error: ' + (msg.reason || 'unknown'));
-      showInviteBanner(callWith);
+    case 'relay_error': {
+      clearTimeout(relayTimeout);
+      LOG.err('❌ Relay error: ' + msg.reason, msg);
+
+      const reasons = {
+        'no_call_permission': 'Relay phone needs CALL_PHONE permission',
+        'relay_disconnected': 'Relay disconnected unexpectedly',
+        'permission_denied':  'Relay Android permission denied',
+        'crash':              'Relay app crashed: ' + msg.reason
+      };
+
+      const explanation = reasons[msg.reason] || msg.reason;
+      LOG.err('What happened: ' + explanation);
+
+      const hint = document.getElementById('dial-hint');
+      if (hint) {
+        hint.textContent = '⚠️ Relay unavailable — use invite link below';
+        hint.style.color = '#ff6b6b';
+      }
+
+      showRelayFallback(currentDialedNumber);
       break;
+    }
 
     case 'error':
       LOG.err('Server error', msg);
@@ -3195,6 +3240,7 @@ async function doCall() {
   }
 
   callWith = to;
+  currentDialedNumber = to;
   LOG.relay('🔔 Call initiated to: ' + to);
   LOG.relay('Sending call to signal server...');
   LOG.relay('Server will check: 1) Is callee on OCP? 2) Is relay available?');
