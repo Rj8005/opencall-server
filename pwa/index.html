@@ -2166,22 +2166,30 @@ async function onMessage(msg) {
       clearTimeout(relayTimeout);
       LOG.err('❌ Relay error: ' + msg.reason, msg);
 
-      const reasons = {
-        'no_call_permission': 'Relay phone needs CALL_PHONE permission',
-        'relay_disconnected': 'Relay disconnected unexpectedly',
-        'permission_denied':  'Relay Android permission denied',
-        'crash':              'Relay app crashed: ' + msg.reason
-      };
-
-      const explanation = reasons[msg.reason] || msg.reason;
-      LOG.err('What happened: ' + explanation);
-
-      const hint = document.getElementById('dial-hint');
-      if (hint) {
-        hint.textContent = '⚠️ Relay unavailable — use invite link below';
-        hint.style.color = '#ff6b6b';
+      // If WebRTC is already connected, ignore relay_error —
+      // the call is still live even if the relay WS briefly dropped
+      if (peerConnection &&
+          peerConnection.iceConnectionState === 'connected') {
+        LOG.relay('⚠️ Relay error but WebRTC still connected — ignoring');
+        break;
       }
 
+      // If ICE is still in progress, wait 3 s before giving up
+      if (peerConnection &&
+          (peerConnection.iceConnectionState === 'checking' ||
+           peerConnection.iceConnectionState === 'new')) {
+        LOG.relay('⚠️ Relay error during ICE — waiting 3s before fallback');
+        setTimeout(() => {
+          if (peerConnection?.iceConnectionState !== 'connected') {
+            LOG.err('ICE did not connect in time — showing fallback');
+            showRelayFallback(currentDialedNumber);
+          }
+        }, 3000);
+        break;
+      }
+
+      // WebRTC not started — show fallback immediately
+      LOG.err('What happened: ' + (msg.reason || 'unknown'));
       showRelayFallback(currentDialedNumber);
       break;
     }
