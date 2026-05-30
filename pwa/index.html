@@ -1350,7 +1350,8 @@ async function subscribePush() {
 
 // ── state ──────────────────────────────────────────────────
 let ws            = null;
-let pc            = null;       // RTCPeerConnection
+let pc            = null;       // RTCPeerConnection (direct/link calls)
+let peerConnection = null;      // RTCPeerConnection (relay WebRTC)
 let localStream   = null;
 let myNumber      = null;
 let myName        = null;
@@ -1368,7 +1369,6 @@ let ringbackInt   = null;
 let lastHandledCallId = null;
 let relayTimeout         = null;
 let currentDialedNumber  = '';
-let audioContext         = null;
 let relayCallActive      = false;
 let micStream            = null;
 let audioSendInterval    = null;
@@ -1967,21 +1967,31 @@ async function onMessage(msg) {
       break;
     }
 
-    case 'sdp_answer':
-      LOG.webrtc('📨 SDP answer received', { callId: msg.callId });
-      if (pc) await pc.setRemoteDescription({ type:'answer', sdp:msg.sdp });
-      break;
-
-    case 'ice':
-      LOG.ice('ICE candidate received from relay');
-      if (pc && msg.candidate) {
+    case 'sdp_answer': {
+      if (peerConnection) {
+        LOG.webrtc('SDP answer received from relay B');
         try {
-          await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          LOG.webrtc('✅ Remote description set');
         } catch(e) {
-          LOG.err('Failed to add ICE candidate', { error: e.message });
+          LOG.err('setRemoteDescription failed: ' + e.message);
         }
+      } else if (pc) {
+        LOG.webrtc('📨 SDP answer received', { callId: msg.callId });
+        await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
       }
       break;
+    }
+
+    case 'ice': {
+      const conn = peerConnection || pc;
+      if (conn && msg.candidate) {
+        try {
+          await conn.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        } catch(e) {}
+      }
+      break;
+    }
 
     case 'call_keepalive': {
       const statusEl = document.getElementById('rw-sub');
@@ -2039,17 +2049,15 @@ async function onMessage(msg) {
     }
 
     case 'relay_connected': {
-      console.log('[RELAY] ✅ relay_connected received! C answered!');
       clearTimeout(relayTimeout);
-      LOG.relay('✅ C ANSWERED — call is LIVE!');
-      LOG.relay('Audio bridge establishing via relay B...');
-      stopRingback();
+      LOG.relay('✅ C answered! Starting WebRTC with relay B...');
+
       relayCallActive = true;
-      initAudioContext();
+      stopRingback();
 
       const hint = document.getElementById('dial-hint');
       if (hint) {
-        hint.textContent = '🔊 Call live — speak now';
+        hint.textContent = '🔊 Connecting audio...';
         hint.style.color = 'var(--green)';
       }
 
@@ -2058,34 +2066,70 @@ async function onMessage(msg) {
       setConnectionStatus('calling');
       showActiveCallOverlay();
       if (!timerInterval) startTimer();
-      LOG.relay('🔊 Audio playback ready — you will hear C through relay B');
-      startMicCapture(msg.callId || callId);
 
-      // Audio frame counter — uses hint reference from above
-      let audioFrameCount = 0;
-      setInterval(() => {
-        if (relayCallActive) {
-          const fps = audioFrameCount;
-          audioFrameCount = 0;
-          if (hint) {
-            hint.textContent = fps > 0
-              ? '🔊 Receiving audio: ' + fps + ' fps'
-              : '⚠️ No audio received';
-          }
+      // Create peer connection — A is the offerer
+      if (peerConnection) { peerConnection.close(); peerConnection = null; }
+      peerConnection = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      });
+
+      // ICE candidates → server → B
+      peerConnection.onicecandidate = (e) => {
+        if (e.candidate) {
+          LOG.ice('Sending ICE to relay B');
+          wsSend({ type: 'ice', callId, candidate: e.candidate.toJSON() });
         }
-      }, 1000);
+      };
 
-      // Store audioFrameCount reference for relay_audio case
-      window._audioFrameCount = () => audioFrameCount++;
+      peerConnection.oniceconnectionstatechange = () => {
+        LOG.webrtc('ICE state: ' + peerConnection.iceConnectionState);
+        if (peerConnection.iceConnectionState === 'connected') {
+          LOG.webrtc('✅ WebRTC connected to relay B!');
+          if (hint) hint.textContent = '🔊 Call live';
+        }
+      };
 
-      break;
-    }
+      // B's audio (C's voice) arrives here
+      peerConnection.ontrack = (e) => {
+        LOG.webrtc('✅ Audio track from relay B (C voice)');
+        let audio = document.getElementById('relay-audio');
+        if (!audio) {
+          audio = document.createElement('audio');
+          audio.id = 'relay-audio';
+          audio.autoplay = true;
+          document.body.appendChild(audio);
+        }
+        audio.srcObject = e.streams[0];
+        if (hint) hint.textContent = '🔊 Call live — audio connected';
+      };
 
-    case 'relay_audio': {
-      if (relayCallActive) {
-        if (window._audioFrameCount) window._audioFrameCount();
-        playRelayAudio(msg.audio);
+      // Add A's microphone
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 }
+        });
+        micStream = stream;
+        stream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, stream);
+          LOG.webrtc('Mic track added to peer connection');
+        });
+      } catch(e) {
+        LOG.err('Mic access failed: ' + e.message);
       }
+
+      // Create offer → send to B via server
+      try {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        wsSend({ type: 'sdp_offer', callId, sdp: { type: offer.type, sdp: offer.sdp } });
+        LOG.webrtc('SDP offer sent to relay B');
+      } catch(e) {
+        LOG.err('createOffer failed: ' + e.message);
+      }
+
       break;
     }
 
@@ -3363,6 +3407,7 @@ function endCall() {
   document.getElementById('country-selector')?.remove();
   window._selectedCountry = null;
   if (pc) { pc.close(); pc = null; }
+  if (peerConnection) { peerConnection.close(); peerConnection = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
   if (callWith) clearRatchetSession(callWith);
   relayCallActive = false;
@@ -3372,89 +3417,6 @@ function endCall() {
   document.getElementById('inp-dial').value = '+';
   syncDialDisplay();
   show('dialer');
-}
-
-// ── Relay PCM audio bridge ─────────────────────────────────
-function initAudioContext() {
-  if (!audioContext) {
-    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
-  }
-  if (audioContext.state === 'suspended') audioContext.resume();
-}
-
-function playRelayAudio(base64Audio) {
-  try {
-    initAudioContext();
-
-    const binary = atob(base64Audio);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-
-    const pcm16 = new Int16Array(bytes.buffer);
-
-    // Check if audio is silence
-    const maxVal = Math.max(...Array.from(pcm16).map(Math.abs));
-    if (maxVal < 10) {
-      // Silent frame — skip (don't play silence)
-      return;
-    }
-
-    const float32 = new Float32Array(pcm16.length);
-    for (let i = 0; i < pcm16.length; i++) {
-      // Boost volume 3x
-      float32[i] = Math.max(-1, Math.min(1, (pcm16[i] / 32768.0) * 3.0));
-    }
-
-    const buffer = audioContext.createBuffer(1, float32.length, 8000);
-    buffer.getChannelData(0).set(float32);
-
-    const source = audioContext.createBufferSource();
-    source.buffer = buffer;
-
-    // Add gain node for volume control
-    const gainNode = audioContext.createGain();
-    gainNode.gain.value = 2.0;
-
-    source.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    source.start();
-
-  } catch(e) {
-    // Only log errors occasionally to avoid console spam
-    if (Math.random() < 0.01) {
-      console.error('[AUDIO] playback error:', e.message);
-    }
-  }
-}
-
-async function startMicCapture(cId) {
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { sampleRate: 8000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-    });
-    const micContext = new AudioContext({ sampleRate: 8000 });
-    const source     = micContext.createMediaStreamSource(micStream);
-    const processor  = micContext.createScriptProcessor(1024, 1, 1);
-    processor.onaudioprocess = (e) => {
-      if (!relayCallActive) return;
-      const float32 = e.inputBuffer.getChannelData(0);
-      const pcm16   = new Int16Array(float32.length);
-      for (let i = 0; i < float32.length; i++) {
-        pcm16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
-      }
-      const bytes  = new Uint8Array(pcm16.buffer);
-      let binary   = '';
-      bytes.forEach(b => binary += String.fromCharCode(b));
-      wsSend({ type: 'caller_audio', callId: cId, audio: btoa(binary) });
-    };
-    source.connect(processor);
-    processor.connect(micContext.destination);
-    LOG.relay('🎙️ Mic capture started — sending your voice to relay B');
-  } catch(e) {
-    LOG.err('Mic capture failed: ' + e.message);
-  }
 }
 
 // ── WebRTC ─────────────────────────────────────────────────
