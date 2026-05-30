@@ -1232,6 +1232,22 @@ async function handle(ws, msg) {
       break;
     }
 
+    // ── RELAY_RINGING ─────────────────────────────────────────
+    // B sends this when C's GSM phone is ringing
+    case 'relay_ringing': {
+      const call = pendingCalls.get(msg.callId);
+      if (call) {
+        console.log('[RELAY] C phone is ringing. callId:', msg.callId);
+        try {
+          send(call.callerWs, {
+            type:   'relay_ringing',
+            callId: msg.callId
+          });
+        } catch(e) {}
+      }
+      break;
+    }
+
     // ── RELAY_READY ───────────────────────────────────────────
     // B sends this when C (GSM phone) answers and audio bridge is live.
     // C has no browser — bridging is AudioRecord/AudioTrack in RelayService.

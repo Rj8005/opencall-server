@@ -2017,16 +2017,37 @@ async function onMessage(msg) {
       break;
     }
 
+    case 'relay_ringing': {
+      clearTimeout(relayTimeout);
+      LOG.relay('🔔 C\'s phone is ringing!');
+      const hint = document.getElementById('dial-hint');
+      if (hint) {
+        hint.textContent = '🔔 Ringing...';
+        hint.style.color = 'var(--blue)';
+      }
+      // Give C 45 s to answer before falling back
+      relayTimeout = setTimeout(() => {
+        LOG.err('⏱️ C did not answer after 45 seconds');
+        showRelayFallback(currentDialedNumber);
+      }, 45000);
+      break;
+    }
+
     case 'relay_connected': {
       clearTimeout(relayTimeout);
-      LOG.relay('✅ C ANSWERED — call is live!', { callId: msg.callId });
-      LOG.relay('Starting call timer and audio...');
+      LOG.relay('✅ C ANSWERED — call is LIVE!');
+      LOG.relay('Audio bridge establishing via relay B...');
       stopRingback();
-      setConnectionStatus('calling');
+      const hint = document.getElementById('dial-hint');
+      if (hint) {
+        hint.textContent = '✅ Connected — establishing audio...';
+        hint.style.color = 'var(--green)';
+      }
       document.getElementById('call-status-detail').textContent = 'Connected via relay';
       document.getElementById('caller-avatar').classList.remove('ringing');
-      if (!timerInterval) startTimer();
+      setConnectionStatus('calling');
       showActiveCallOverlay();
+      if (!timerInterval) startTimer();
       break;
     }
 
