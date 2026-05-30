@@ -1370,7 +1370,6 @@ let relayTimeout         = null;
 let currentDialedNumber  = '';
 let audioContext         = null;
 let relayCallActive      = false;
-let audioFrameCount      = 0;
 let micStream            = null;
 let audioSendInterval    = null;
 
@@ -2045,20 +2044,8 @@ async function onMessage(msg) {
       LOG.relay('✅ C ANSWERED — call is LIVE!');
       LOG.relay('Audio bridge establishing via relay B...');
       stopRingback();
-      const hint = document.getElementById('dial-hint');
-      if (hint) {
-        hint.textContent = '✅ Connected — establishing audio...';
-        hint.style.color = 'var(--green)';
-      }
-      document.getElementById('call-status-detail').textContent = 'Connected via relay';
-      document.getElementById('caller-avatar').classList.remove('ringing');
-      setConnectionStatus('calling');
-      showActiveCallOverlay();
-      if (!timerInterval) startTimer();
       relayCallActive = true;
       initAudioContext();
-      LOG.relay('🔊 Audio playback ready — you will hear C through relay B');
-      startMicCapture(msg.callId || callId);
 
       const hint = document.getElementById('dial-hint');
       if (hint) {
@@ -2066,8 +2053,16 @@ async function onMessage(msg) {
         hint.style.color = 'var(--green)';
       }
 
-      // Show audio level meter
-      audioFrameCount = 0;
+      document.getElementById('call-status-detail').textContent = 'Connected via relay';
+      document.getElementById('caller-avatar').classList.remove('ringing');
+      setConnectionStatus('calling');
+      showActiveCallOverlay();
+      if (!timerInterval) startTimer();
+      LOG.relay('🔊 Audio playback ready — you will hear C through relay B');
+      startMicCapture(msg.callId || callId);
+
+      // Audio frame counter — uses hint reference from above
+      let audioFrameCount = 0;
       setInterval(() => {
         if (relayCallActive) {
           const fps = audioFrameCount;
@@ -2080,12 +2075,15 @@ async function onMessage(msg) {
         }
       }, 1000);
 
+      // Store audioFrameCount reference for relay_audio case
+      window._audioFrameCount = () => audioFrameCount++;
+
       break;
     }
 
     case 'relay_audio': {
       if (relayCallActive) {
-        audioFrameCount++;
+        if (window._audioFrameCount) window._audioFrameCount();
         playRelayAudio(msg.audio);
       }
       break;
