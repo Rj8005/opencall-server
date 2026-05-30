@@ -1495,25 +1495,25 @@ const CHANNEL_CONFIG = {
   missed_call: { label:'missed call notify', emoji:'📞', color:'#34A853' }
 };
 
-// ── WebRTC config — Google free STUN ──────────────────────
+// ── WebRTC config — STUN + TURN for mobile NAT traversal ──
 const RTC_CFG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     {
-      urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478',
-      username: 'ocp',
-      credential: 'opencall2026'
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
     },
     {
-      urls: 'turn:ocp-node.onrender.com:3478',
-      username: 'ocp',
-      credential: 'opencall2026'
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
     },
     {
-      urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478',
-      username: 'ocp',
-      credential: 'opencall2026'
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
     }
   ]
 };
@@ -2069,12 +2069,7 @@ async function onMessage(msg) {
 
       // Create peer connection — A is the offerer
       if (peerConnection) { peerConnection.close(); peerConnection = null; }
-      peerConnection = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]
-      });
+      peerConnection = new RTCPeerConnection(RTC_CFG);
 
       // ICE candidates → server → B
       peerConnection.onicecandidate = (e) => {
