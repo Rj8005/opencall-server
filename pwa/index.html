@@ -1702,7 +1702,7 @@ function doLogout() {
 
 // ── message handler ────────────────────────────────────────
 async function onMessage(msg) {
-  LOG.srv('← Received', { type: msg.type, ...msg });
+  console.log('[SERVER] ← Received:', msg.type, JSON.stringify(msg).slice(0, 300));
   switch(msg.type) {
 
     case 'registered':
@@ -2018,6 +2018,7 @@ async function onMessage(msg) {
     }
 
     case 'relay_ringing': {
+      console.log('[RELAY] 🔔 relay_ringing received! C phone is ringing');
       clearTimeout(relayTimeout);
       LOG.relay('🔔 C\'s phone is ringing!');
       const hint = document.getElementById('dial-hint');
@@ -2034,6 +2035,7 @@ async function onMessage(msg) {
     }
 
     case 'relay_connected': {
+      console.log('[RELAY] ✅ relay_connected received! C answered!');
       clearTimeout(relayTimeout);
       LOG.relay('✅ C ANSWERED — call is LIVE!');
       LOG.relay('Audio bridge establishing via relay B...');
