@@ -671,6 +671,31 @@ async function handle(ws, msg) {
     return;
   }
 
+  // ── AUDIO FORWARDING (high-frequency — no logging) ───────────
+  if (msg.type === 'relay_audio') {
+    const call = pendingCalls.get(msg.callId);
+    if (call && call.callerWs?.readyState === 1) {
+      call.callerWs.send(JSON.stringify({
+        type:   'relay_audio',
+        callId: msg.callId,
+        audio:  msg.audio
+      }));
+    }
+    return;
+  }
+
+  if (msg.type === 'caller_audio') {
+    const call = pendingCalls.get(msg.callId);
+    if (call && call.relayWs?.readyState === 1) {
+      call.relayWs.send(JSON.stringify({
+        type:   'caller_audio',
+        callId: msg.callId,
+        audio:  msg.audio
+      }));
+    }
+    return;
+  }
+
   // ── EARLY-RETURN RELAY HANDLERS ──────────────────────────────
   // Placed before switch so field-name variants (callId/call_id/id) are
   // handled correctly regardless of which the APK sends.

@@ -1368,6 +1368,10 @@ let ringbackInt   = null;
 let lastHandledCallId = null;
 let relayTimeout         = null;
 let currentDialedNumber  = '';
+let audioContext         = null;
+let relayCallActive      = false;
+let micStream            = null;
+let audioSendInterval    = null;
 
 // ── Country / platform data ────────────────────────────────
 const COUNTRY_DATA = {
@@ -2050,6 +2054,15 @@ async function onMessage(msg) {
       setConnectionStatus('calling');
       showActiveCallOverlay();
       if (!timerInterval) startTimer();
+      relayCallActive = true;
+      initAudioContext();
+      LOG.relay('🔊 Audio playback ready — you will hear C through relay B');
+      startMicCapture(msg.callId || callId);
+      break;
+    }
+
+    case 'relay_audio': {
+      if (relayCallActive) playRelayAudio(msg.audio);
       break;
     }
 
@@ -3329,10 +3342,69 @@ function endCall() {
   if (pc) { pc.close(); pc = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
   if (callWith) clearRatchetSession(callWith);
+  relayCallActive = false;
+  micStream?.getTracks()?.forEach(t => t.stop());
+  micStream = null;
   callId = callWith = callMode = pendingCall = null;
   document.getElementById('inp-dial').value = '+';
   syncDialDisplay();
   show('dialer');
+}
+
+// ── Relay PCM audio bridge ─────────────────────────────────
+function initAudioContext() {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+  }
+  if (audioContext.state === 'suspended') audioContext.resume();
+}
+
+function playRelayAudio(base64Audio) {
+  try {
+    initAudioContext();
+    const binary = atob(base64Audio);
+    const bytes  = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const pcm16   = new Int16Array(bytes.buffer);
+    const float32 = new Float32Array(pcm16.length);
+    for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 32768.0;
+    const buffer = audioContext.createBuffer(1, float32.length, 8000);
+    buffer.getChannelData(0).set(float32);
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioContext.destination);
+    source.start();
+  } catch(e) {
+    console.error('[AUDIO] playback error:', e.message);
+  }
+}
+
+async function startMicCapture(cId) {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: 8000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+    });
+    const micContext = new AudioContext({ sampleRate: 8000 });
+    const source     = micContext.createMediaStreamSource(micStream);
+    const processor  = micContext.createScriptProcessor(1024, 1, 1);
+    processor.onaudioprocess = (e) => {
+      if (!relayCallActive) return;
+      const float32 = e.inputBuffer.getChannelData(0);
+      const pcm16   = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        pcm16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
+      }
+      const bytes  = new Uint8Array(pcm16.buffer);
+      let binary   = '';
+      bytes.forEach(b => binary += String.fromCharCode(b));
+      wsSend({ type: 'caller_audio', callId: cId, audio: btoa(binary) });
+    };
+    source.connect(processor);
+    processor.connect(micContext.destination);
+    LOG.relay('🎙️ Mic capture started — sending your voice to relay B');
+  } catch(e) {
+    LOG.err('Mic capture failed: ' + e.message);
+  }
 }
 
 // ── WebRTC ─────────────────────────────────────────────────
