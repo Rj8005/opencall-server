@@ -594,41 +594,61 @@ wss.on("connection", (ws, req) => {
 
     if (isRelay) {
       const relay = relayRegistry.get(ws);
-      console.log('[RELAY] Relay disconnected:', relay?.country, code);
       relayRegistry.delete(ws);
       metadata.delete(ws);
+      console.log('[RELAY] Relay WS closed:', relay?.country, code, reason);
       for (const [id, r] of relays) {
         if (r.ws === ws) { relays.delete(id); break; }
       }
 
-      // Find any pending call this relay was handling
       for (const [callId, call] of pendingCalls.entries()) {
-        if (call.relayWs === ws) {
-          console.log('[RELAY] Active call lost relay — notifying caller:', callId);
-          // Tell caller A the relay died — do NOT kill A's connection
+        if (call.relayWs !== ws) continue;
+
+        if (call.state === 'connected') {
+          // WebRTC negotiation is underway — give relay 5 s to reconnect
+          console.log('[RELAY] Active call lost relay WS — waiting 5s...');
+          setTimeout(() => {
+            const stillActive = pendingCalls.get(callId);
+            if (stillActive && stillActive.relayWs === ws) {
+              console.log('[RELAY] Relay did not reconnect — ending call');
+              try {
+                if (call.callerWs?.readyState === 1) {
+                  call.callerWs.send(JSON.stringify({
+                    type: 'relay_error',
+                    callId,
+                    reason: 'relay_disconnected',
+                    message: 'Relay disconnected'
+                  }));
+                }
+              } catch(e) {}
+              pendingCalls.delete(callId);
+            } else {
+              console.log('[RELAY] Call still active — relay recovered');
+            }
+          }, 5000);
+        } else {
+          // Not yet connected — fail immediately and offer fallback link
+          console.log('[RELAY] Pre-call relay disconnect — failing immediately');
           try {
             if (call.callerWs?.readyState === 1) {
-              send(call.callerWs, {
-                type: 'relay_error',
-                callId: callId,
-                reason: 'relay_disconnected',
-                message: 'Relay disconnected — generating invite link instead'
-              });
-              // Fall back to answer link
               const joinURL = 'https://opencall-server.vercel.app/answer?call=' + callId;
+              call.callerWs.send(JSON.stringify({
+                type: 'relay_error',
+                callId,
+                reason: 'relay_disconnected',
+                message: 'Relay disconnected before call connected'
+              }));
               if (!sentAnswerLinks.has(callId)) {
                 sentAnswerLinks.add(callId);
                 setTimeout(() => sentAnswerLinks.delete(callId), 60000);
-                send(call.callerWs, {
+                call.callerWs.send(JSON.stringify({
                   type: 'answer_link_ready',
-                  callId: callId,
+                  callId,
                   link: joinURL
-                });
+                }));
               }
             }
-          } catch(e) {
-            console.error('[RELAY] Error notifying caller of relay death:', e.message);
-          }
+          } catch(e) {}
           pendingCalls.delete(callId);
         }
       }
