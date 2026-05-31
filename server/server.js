@@ -478,6 +478,41 @@ const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
 
+  // ── CORS preflight for /relay-log ────────────────────────────
+  if (req.method === 'OPTIONS' && req.url === '/relay-log') {
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+
+  // ── Relay WebView remote log ingestion ────────────────────────
+  if (req.method === 'POST' && req.url === '/relay-log') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    let body = '';
+    req.on('data', d => body += d);
+    req.on('end', () => {
+      try {
+        const entry = JSON.parse(body);
+        const prefix = { ok: '✅', err: '❌', warn: '⚠️', info: '📋' }[entry.type] || '📋';
+        console.log(
+          '[RELAY-LOG]', prefix,
+          entry.t ? entry.t.slice(11, 19) : '',
+          entry.msg || '',
+          entry.callId ? '| call:' + entry.callId.slice(-6) : ''
+        );
+      } catch(e) {
+        console.log('[RELAY-LOG] parse error:', body.slice(0, 100));
+      }
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok');
+    });
+    return;
+  }
+
   if (req.url.startsWith("/call-info")) {
     const callId  = new URL('http://x' + req.url).searchParams.get('call');
     const pending = pendingCalls.get(callId);
