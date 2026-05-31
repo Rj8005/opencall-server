@@ -724,6 +724,17 @@ wss.on("connection", (ws, req) => {
 //  Message handler — every message type
 // ─────────────────────────────────────────────────────────────
 async function handle(ws, msg) {
+  if (msg.type === 'ping') {
+    try {
+      ws.send(JSON.stringify({ type: 'pong', t: Date.now() }));
+    } catch(e) {}
+    return; // don't log, too frequent
+  }
+
+  if (msg.type === 'pong') {
+    return; // ignore pong
+  }
+
   log("↓", msg.type, JSON.stringify(msg).slice(0, 120));
   console.log('[MSG IN]', JSON.stringify(msg).slice(0, 200));
 
@@ -1479,6 +1490,23 @@ setInterval(() => {
     }
   }
 }, 60000);
+
+// ─────────────────────────────────────────────────────────────
+//  Keep all WebSocket connections alive on Render free tier
+// ─────────────────────────────────────────────────────────────
+setInterval(() => {
+  const allClients = [
+    ...metadata.keys(),
+    ...relayRegistry.keys()
+  ];
+  for (const client of allClients) {
+    try {
+      if (client.readyState === 1) {
+        client.ping(); // WebSocket protocol ping
+      }
+    } catch(e) {}
+  }
+}, 15000); // every 15 seconds
 
 // ─────────────────────────────────────────────────────────────
 //  Start

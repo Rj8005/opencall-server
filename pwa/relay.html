@@ -93,6 +93,15 @@ function connect() {
     log('✅ WebSocket connected to signal server', 'ok');
     log('  url: ' + serverUrl, 'info');
     document.getElementById('status').textContent = '🟢 Connected';
+
+    // START KEEPALIVE — prevents Render proxy from closing WS
+    if (window._keepaliveInterval) clearInterval(window._keepaliveInterval);
+    window._keepaliveInterval = setInterval(() => {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 2000); // every 2 seconds
+
     send({
       type: 'register_relay',
       country: relayCountry,
@@ -104,6 +113,11 @@ function connect() {
   };
 
   ws.onclose = (e) => {
+    // Stop keepalive
+    if (window._keepaliveInterval) {
+      clearInterval(window._keepaliveInterval);
+      window._keepaliveInterval = null;
+    }
     log('❌ WebSocket closed', 'err');
     log('  code: ' + e.code + ' reason: ' + (e.reason || 'none'), 'err');
     log('Reconnecting in 3 seconds...', 'warn');
