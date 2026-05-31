@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCP Relay</title>
+<style>
+  body { background: #060a10; color: #63b4ff; font-family: monospace;
+         padding: 20px; font-size: 12px; }
+  #log { margin-top: 20px; }
+  .ok  { color: #1d9e75; }
+  .err { color: #ff6b6b; }
+  .info{ color: #63b4ff; }
+</style>
+</head>
+<body>
+<div id="status">Initializing...</div>
+<div id="log"></div>
+
+<audio id="remote-audio" autoplay playsinline></audio>
+
+<script>
+const log = (msg, type='info') => {
+  console.log('[RELAY] ' + msg);
+  const el = document.getElementById('log');
+  const d = document.createElement('div');
+  d.className = type;
+  d.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+  // Also notify Android via interface
+  if (window.AndroidRelay) {
+    window.AndroidRelay.onLog(msg);
+  }
+};
+
+let ws = null;
+let pc = null;
+let micStream = null;
+let currentCallId = null;
+let serverUrl = 'wss://opencall-server-pqfe.onrender.com';
+let relayMode = 'both';
+let relayCountry = 'IN';
+let relayNumber = '';
+let ocpAddress = 'relay_' + Date.now();
+
+// Called by Android to initialize
+function initRelay(server, country, number, mode) {
+  serverUrl = server || serverUrl;
+  relayCountry = country || 'IN';
+  relayNumber = number || '';
+  relayMode = mode || 'both';
+  ocpAddress = 'relay_' + Date.now() + '_' + country;
+  log('Init: ' + country + ' ' + number, 'ok');
+  connect();
+}
+
+function connect() {
+  log('Connecting to ' + serverUrl);
+  ws = new WebSocket(serverUrl);
+
+  ws.onopen = () => {
+    log('Connected to server ✅', 'ok');
+    document.getElementById('status').textContent = '🟢 Connected';
+    // Register as relay
+    send({
+      type: 'register_relay',
+      country: relayCountry,
+      relay_mode: relayMode,
+      ocp_address: ocpAddress,
+      number: relayNumber,
+      capacity: 3
+    });
+  };
+
+  ws.onclose = (e) => {
+    log('Disconnected: ' + e.code, 'err');
+    document.getElementById('status').textContent = '🔴 Disconnected';
+    // Reconnect after 3 seconds
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = (e) => {
+    log('WS error', 'err');
+  };
+
+  ws.onmessage = async (e) => {
+    const msg = JSON.parse(e.data);
+    log('← ' + msg.type);
+
+    switch(msg.type) {
+      case 'relay_registered':
+        log('✅ Registered as relay', 'ok');
+        document.getElementById('status').textContent = '✅ Relay active';
+        if (window.AndroidRelay) window.AndroidRelay.onRegistered();
+        break;
+
+      case 'relay_call':
+        currentCallId = msg.callId;
+        log('📞 relay_call: ' + msg.dialNumber, 'ok');
+        // Tell Android to dial the number
+        if (window.AndroidRelay) {
+          window.AndroidRelay.onRelayCall(
+            msg.dialNumber,
+            msg.callId,
+            msg.callerIdToShow || ''
+          );
+        }
+        break;
+
+      case 'relay_sms':
+        log('💬 relay_sms: ' + msg.targetNumber);
+        if (window.AndroidRelay) {
+          window.AndroidRelay.onRelaySMS(
+            msg.targetNumber,
+            msg.joinURL,
+            msg.callId
+          );
+        }
+        break;
+
+      case 'start_webrtc':
+        currentCallId = msg.callId;
+        log('🎙️ start_webrtc — setting up peer connection', 'ok');
+        await setupPeerConnection(msg.callId);
+        break;
+
+      case 'sdp_offer':
+        log('📨 SDP offer received');
+        await handleOffer(msg);
+        break;
+
+      case 'ice':
+        if (pc && msg.candidate) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          } catch(e) { log('ICE add failed: ' + e.message, 'err'); }
+        }
+        break;
+
+      case 'relay_hangup':
+        log('📴 Hangup from server');
+        cleanup();
+        if (window.AndroidRelay) window.AndroidRelay.onHangup();
+        break;
+    }
+  };
+}
+
+async function setupPeerConnection(callId) {
+  try {
+    pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ]
+    });
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        send({ type: 'ice', callId, candidate: e.candidate.toJSON() });
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      log('ICE: ' + pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected') {
+        log('✅ WebRTC connected — audio bridge live!', 'ok');
+        document.getElementById('status').textContent = '✅ Call bridging';
+        if (window.AndroidRelay) window.AndroidRelay.onWebRTCConnected();
+      }
+      if (pc.iceConnectionState === 'failed') {
+        log('❌ ICE failed — trying restart', 'err');
+        pc.restartIce();
+      }
+    };
+
+    pc.ontrack = (e) => {
+      log('✅ Audio track from A received', 'ok');
+      const audio = document.getElementById('remote-audio');
+      audio.srcObject = e.streams[0];
+    };
+
+    // Add microphone — captures what's near the mic
+    // With Android in call, this captures GSM audio acoustically
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          sampleRate: 16000
+        }
+      });
+      micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
+      log('✅ Mic added to peer connection', 'ok');
+    } catch(e) {
+      log('❌ Mic failed: ' + e.message, 'err');
+    }
+
+    log('Peer connection ready — waiting for offer');
+
+  } catch(e) {
+    log('setupPeerConnection crash: ' + e.message, 'err');
+  }
+}
+
+async function handleOffer(msg) {
+  try {
+    if (!pc) {
+      log('No PC yet — setting up first');
+      await setupPeerConnection(msg.callId);
+    }
+
+    await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    log('Remote SDP set ✅');
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    log('Local SDP set ✅');
+
+    send({
+      type: 'sdp_answer',
+      callId: msg.callId,
+      sdp: { type: answer.type, sdp: answer.sdp }
+    });
+    log('✅ SDP answer sent', 'ok');
+
+  } catch(e) {
+    log('handleOffer crash: ' + e.message, 'err');
+    console.error(e);
+  }
+}
+
+function cleanup() {
+  try {
+    pc?.close(); pc = null;
+    micStream?.getTracks().forEach(t => t.stop());
+    micStream = null;
+    currentCallId = null;
+    log('Cleaned up');
+  } catch(e) {}
+}
+
+// Called by Android when GSM call connects (C answered)
+function onGSMConnected(callId) {
+  log('GSM connected — sending relay_ready', 'ok');
+  send({ type: 'relay_ready', callId, status: 'connected' });
+}
+
+// Called by Android when GSM call ends
+function onGSMEnded(callId) {
+  log('GSM ended — sending relay_call_ended');
+  send({ type: 'relay_call_ended', callId });
+  cleanup();
+}
+
+// Called by Android when SMS sent
+function onSMSSent(callId, status) {
+  send({ type: 'sms_sent', callId, status });
+}
+
+function send(obj) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify(obj));
+    log('→ ' + obj.type);
+  }
+}
+</script>
+</body>
+</html>
