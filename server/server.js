@@ -13,9 +13,10 @@ const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 8080;
 
-console.log('[SERVER] OCP Signal Server starting...');
-console.log('[SERVER] Version: relay-fix-v2');
-console.log('[SERVER] Time:', new Date().toISOString());
+console.log('[SERVER] =============================');
+console.log('[SERVER] OCP Signal Server v2.1 RELAY-FIX');
+console.log('[SERVER] Started:', new Date().toISOString());
+console.log('[SERVER] =============================');
 
 // ─────────────────────────────────────────────────────────────
 //  Registry — this IS your phone network
@@ -30,6 +31,7 @@ const callLog          = new Map(); // callId          → { from, to, startedAt
 const pushSubscriptions = new Map(); // number           → push subscription
 const webPush           = null;      // using native fetch for push
 const pendingCalls      = new Map(); // callId           → { from, to, link, callerWs, ... }
+const wsToRelay         = new Map(); // ws               → relay ocp_address
 const sentAnswerLinks   = new Set(); // callId           → de-duplicate answer_link_ready
 const pendingUSSD       = new Map(); // callee           → { callId, from, channel }
 const simBankRegistry   = new Map(); // country          → WebSocket
@@ -615,16 +617,15 @@ wss.on("connection", (ws, req) => {
     time:    Date.now()
   });
 
-  ws.on("message", async (data) => {
+  ws.on('message', async (data) => {
     try {
-      let msg;
-      try { msg = JSON.parse(data); }
-      catch { return send(ws, { type: "error", reason: "invalid_json" }); }
+      const raw = data.toString();
+      const msg = JSON.parse(raw);
       await handle(ws, msg);
     } catch(e) {
-      console.error('[SERVER] Unhandled message error:', e.message);
-      console.error('[SERVER] Message was:', data.toString().slice(0, 100));
-      // NEVER rethrow — never kill socket on message error
+      console.error('[SERVER] ❌ Message handler crash:', e.message);
+      console.error('[SERVER] Data was:', data.toString().slice(0,200));
+      // NEVER rethrow — never kill socket
     }
   });
 
@@ -635,6 +636,7 @@ wss.on("connection", (ws, req) => {
     if (isRelay) {
       const relay = relayRegistry.get(ws);
       relayRegistry.delete(ws);
+      wsToRelay.delete(ws);
       metadata.delete(ws);
       console.log('[RELAY] Relay WS closed:', relay?.country, code, reason);
       for (const [id, r] of relays) {
@@ -796,6 +798,73 @@ async function handle(ws, msg) {
     return;
   }
 
+  if (msg.type === 'sdp_offer') {
+    try {
+      console.log('[SDP_OFFER] received. callId:', msg.callId);
+      const call = pendingCalls.get(msg.callId);
+      console.log('[SDP_OFFER] call found:', !!call);
+      console.log('[SDP_OFFER] ws === callerWs:', ws === call?.callerWs);
+      console.log('[SDP_OFFER] ws === relayWs:', ws === call?.relayWs);
+      console.log('[SDP_OFFER] relayWs readyState:', call?.relayWs?.readyState);
+
+      if (!call) {
+        console.log('[SDP_OFFER] no call — ignoring');
+        return;
+      }
+
+      if (ws !== call.callerWs) {
+        // Maybe relay ws reference changed — try by ocp_address
+        const wsOcp = wsToRelay.get(ws);
+        const callRelayOcp = wsToRelay.get(call.relayWs);
+        console.log('[SDP_OFFER] ws ocp:', wsOcp, 'call relay ocp:', callRelayOcp);
+        if (wsOcp && wsOcp === callRelayOcp) {
+          call.relayWs = ws;
+          console.log('[SDP_OFFER] Updated relay ws reference');
+        }
+      }
+
+      if (ws === call.callerWs) {
+        // A sending offer to B
+        if (call.relayWs?.readyState === 1) {
+          call.relayWs.send(JSON.stringify(msg));
+          console.log('[SDP_OFFER] ✅ forwarded A→B');
+        } else {
+          console.log('[SDP_OFFER] ❌ relayWs not open:', call.relayWs?.readyState);
+        }
+      } else {
+        console.log('[SDP_OFFER] sender not recognized as caller');
+      }
+    } catch(e) {
+      console.error('[SDP_OFFER] ERROR:', e.message);
+    }
+    return;
+  }
+
+  if (msg.type === 'ice') {
+    try {
+      const call = pendingCalls.get(msg.callId);
+      if (!call) return;
+
+      if (ws === call.callerWs) {
+        if (call.relayWs?.readyState === 1) {
+          call.relayWs.send(JSON.stringify(msg));
+        } else {
+          console.log('[ICE] ❌ relayWs not open for A→B forward');
+        }
+      } else if (ws === call.relayWs) {
+        if (call.callerWs?.readyState === 1) {
+          call.callerWs.send(JSON.stringify(msg));
+        } else {
+          console.log('[ICE] ❌ callerWs not open for B→A forward');
+        }
+      }
+      // silently ignore unknown senders
+    } catch(e) {
+      console.error('[ICE] ERROR:', e.message);
+    }
+    return;
+  }
+
   switch (msg.type) {
 
     // ── REGISTER ─────────────────────────────────────────────
@@ -855,6 +924,7 @@ async function handle(ws, msg) {
         capacity: msg.capacity || 3,
         registeredAt: Date.now()
       });
+      wsToRelay.set(ws, msg.ocp_address || '');
 
       send(ws, { type: "relay_registered", relayId });
       log("✓", "relay registered", relayId, country, areaCode);
@@ -960,6 +1030,13 @@ async function handle(ws, msg) {
             ts: Date.now()
           });
           console.log('[RELAY] pendingCalls size after store:', pendingCalls.size);
+          console.log('[RELAY] pendingCall stored:', {
+            callId,
+            callerWsOpen: ws?.readyState === 1,
+            relayWsOpen: relayWs?.readyState === 1,
+            callerWsId: ws?._socket?.remotePort,
+            relayWsId: relayWs?._socket?.remotePort
+          });
 
           // Tell A to prepare WebRTC (as caller)
           send(ws, {
@@ -1139,42 +1216,6 @@ async function handle(ws, msg) {
     }
 
     // ── WebRTC SIGNALING ─────────────────────────────────────
-    case "sdp_offer": {
-      try {
-        const call = msg.callId && pendingCalls.get(msg.callId);
-        if (call?.via === 'relay') {
-          let targetWs = null;
-          if (ws === call.callerWs) {
-            targetWs = call.relayWs;
-            console.log('[SDP] forwarding sdp_offer A→B');
-          } else if (ws === call.relayWs) {
-            targetWs = call.callerWs;
-            console.log('[SDP] forwarding sdp_offer B→A');
-          } else {
-            console.log('[SDP] unknown sender for sdp_offer — ignoring');
-            break;
-          }
-          if (targetWs?.readyState === 1) {
-            targetWs.send(JSON.stringify({
-              type: 'sdp_offer', callId: msg.callId, sdp: msg.sdp, from: msg.from
-            }));
-            console.log('[SDP] sdp_offer forwarded successfully');
-          } else {
-            console.log('[SDP] target not open:', targetWs?.readyState);
-          }
-          break;
-        }
-        // direct/link call flow
-        const senderMeta = metadata.get(ws);
-        const toWs = registry.get(msg.to) || registry.get('link:' + msg.callId);
-        if (toWs) send(toWs, { ...msg, from: senderMeta?.number || msg.from || 'unknown' });
-      } catch(e) {
-        console.error('[SDP] sdp_offer handler error:', e.message);
-        // DO NOT rethrow — never kill socket on SDP error
-      }
-      break;
-    }
-
     case "sdp_answer": {
       try {
         const call = msg.callId && pendingCalls.get(msg.callId);
@@ -1210,47 +1251,6 @@ async function handle(ws, msg) {
       } catch(e) {
         console.error('[SDP] sdp_answer handler error:', e.message);
         // DO NOT rethrow — never kill socket on SDP error
-      }
-      break;
-    }
-
-    case "ice": {
-      try {
-        const call = msg.callId && pendingCalls.get(msg.callId);
-        if (call?.via === 'relay') {
-          let targetWs = null;
-          if (ws === call.callerWs) {
-            targetWs = call.relayWs;
-            console.log('[ICE] A→B callId:', msg.callId?.slice(-6));
-          } else if (ws === call.relayWs) {
-            targetWs = call.callerWs;
-            console.log('[ICE] B→A callId:', msg.callId?.slice(-6));
-          } else {
-            console.log('[ICE] unknown sender — ignoring');
-            break;
-          }
-          if (targetWs?.readyState === 1) {
-            targetWs.send(JSON.stringify({ type: 'ice', callId: msg.callId, candidate: msg.candidate }));
-          } else {
-            console.log('[ICE] target not open:', targetWs?.readyState);
-          }
-          break;
-        }
-        // direct/link call flow
-        if (msg.to && registry.get(msg.to)) {
-          send(registry.get(msg.to), msg);
-        } else if (msg.callId) {
-          const linkWs  = registry.get('link:' + msg.callId);
-          const pending = pendingCalls.get(msg.callId);
-          if (linkWs && msg.to !== 'link:' + msg.callId) {
-            send(linkWs, msg);
-          } else if (pending?.callerWs) {
-            send(pending.callerWs, msg);
-          }
-        }
-      } catch(e) {
-        console.error('[ICE] Handler error:', e.message);
-        // DO NOT rethrow — never kill socket on ICE error
       }
       break;
     }
