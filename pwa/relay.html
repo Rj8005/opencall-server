@@ -8,9 +8,11 @@
   body { background: #060a10; color: #63b4ff; font-family: monospace;
          padding: 20px; font-size: 12px; }
   #log { margin-top: 20px; }
-  .ok  { color: #1d9e75; }
-  .err { color: #ff6b6b; }
-  .info{ color: #63b4ff; }
+  .log-line      { margin: 1px 0; }
+  .log-line.ok   { color: #1d9e75; }
+  .log-line.err  { color: #ff6b6b; }
+  .log-line.info { color: #63b4ff; }
+  .log-line.warn { color: #f0a500; }
 </style>
 </head>
 <body>
@@ -20,17 +22,40 @@
 <audio id="remote-audio" autoplay playsinline></audio>
 
 <script>
+// CHANGE 1 — log with on-screen display, remote POST, and Android bridge
 const log = (msg, type='info') => {
-  console.log('[RELAY] ' + msg);
+  console.log('[RELAY-' + type.toUpperCase() + '] ' + msg);
+
+  // On-screen log
   const el = document.getElementById('log');
-  const d = document.createElement('div');
-  d.className = type;
-  d.textContent = new Date().toLocaleTimeString() + ' ' + msg;
-  el.appendChild(d);
-  el.scrollTop = el.scrollHeight;
-  // Also notify Android via interface
+  if (el) {
+    const d = document.createElement('div');
+    d.className = 'log-line ' + type;
+    const time = new Date().toLocaleTimeString('en', {hour12: false});
+    d.textContent = time + '  ' + msg;
+    el.appendChild(d);
+    el.scrollTop = el.scrollHeight;
+    while (el.children.length > 100) el.removeChild(el.firstChild);
+  }
+
+  // Remote log to server
+  try {
+    fetch('https://opencall-server-pqfe.onrender.com/relay-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        t: new Date().toISOString(),
+        type: type,
+        msg: msg,
+        callId: currentCallId || null,
+        ua: navigator.userAgent.slice(0, 50)
+      })
+    }).catch(() => {}); // never throw
+  } catch(e) {}
+
+  // Notify Android
   if (window.AndroidRelay) {
-    window.AndroidRelay.onLog(msg);
+    try { window.AndroidRelay.onLog('[' + type + '] ' + msg); } catch(e) {}
   }
 };
 
@@ -44,14 +69,18 @@ let relayCountry = 'IN';
 let relayNumber = '';
 let ocpAddress = 'relay_' + Date.now();
 
-// Called by Android to initialize
+// CHANGE 7 — initRelay with full logging
 function initRelay(server, country, number, mode) {
+  log('=== RELAY INIT ===', 'ok');
+  log('server: ' + server, 'info');
+  log('country: ' + country, 'info');
+  log('number: ' + number, 'info');
+  log('mode: ' + mode, 'info');
   serverUrl = server || serverUrl;
   relayCountry = country || 'IN';
   relayNumber = number || '';
   relayMode = mode || 'both';
   ocpAddress = 'relay_' + Date.now() + '_' + country;
-  log('Init: ' + country + ' ' + number, 'ok');
   connect();
 }
 
@@ -59,10 +88,11 @@ function connect() {
   log('Connecting to ' + serverUrl);
   ws = new WebSocket(serverUrl);
 
+  // CHANGE 6 — WebSocket connection logging
   ws.onopen = () => {
-    log('Connected to server ✅', 'ok');
+    log('✅ WebSocket connected to signal server', 'ok');
+    log('  url: ' + serverUrl, 'info');
     document.getElementById('status').textContent = '🟢 Connected';
-    // Register as relay
     send({
       type: 'register_relay',
       country: relayCountry,
@@ -74,14 +104,15 @@ function connect() {
   };
 
   ws.onclose = (e) => {
-    log('Disconnected: ' + e.code, 'err');
+    log('❌ WebSocket closed', 'err');
+    log('  code: ' + e.code + ' reason: ' + (e.reason || 'none'), 'err');
+    log('Reconnecting in 3 seconds...', 'warn');
     document.getElementById('status').textContent = '🔴 Disconnected';
-    // Reconnect after 3 seconds
     setTimeout(connect, 3000);
   };
 
   ws.onerror = (e) => {
-    log('WS error', 'err');
+    log('❌ WebSocket ERROR', 'err');
   };
 
   ws.onmessage = async (e) => {
@@ -89,16 +120,24 @@ function connect() {
     log('← ' + msg.type);
 
     switch(msg.type) {
+
+      // CHANGE 2 — verbose logging per case
       case 'relay_registered':
-        log('✅ Registered as relay', 'ok');
+        log('✅ Registered as relay node', 'ok');
+        log('  country: ' + relayCountry, 'ok');
+        log('  number: ' + relayNumber, 'ok');
+        log('  mode: ' + relayMode, 'ok');
+        log('  ocp: ' + ocpAddress, 'ok');
         document.getElementById('status').textContent = '✅ Relay active';
         if (window.AndroidRelay) window.AndroidRelay.onRegistered();
         break;
 
       case 'relay_call':
         currentCallId = msg.callId;
-        log('📞 relay_call: ' + msg.dialNumber, 'ok');
-        // Tell Android to dial the number
+        log('📞 relay_call received', 'ok');
+        log('  dialNumber: ' + msg.dialNumber, 'ok');
+        log('  callId: ' + msg.callId, 'ok');
+        log('  callerIdToShow: ' + (msg.callerIdToShow || 'none'), 'info');
         if (window.AndroidRelay) {
           window.AndroidRelay.onRelayCall(
             msg.dialNumber,
@@ -121,16 +160,19 @@ function connect() {
 
       case 'start_webrtc':
         currentCallId = msg.callId;
-        log('🎙️ start_webrtc — setting up peer connection', 'ok');
+        log('🎙️ start_webrtc received', 'ok');
+        log('  callId: ' + msg.callId, 'ok');
         await setupPeerConnection(msg.callId);
         break;
 
       case 'sdp_offer':
-        log('📨 SDP offer received');
+        log('📨 sdp_offer received', 'ok');
+        log('  sdp length: ' + (msg.sdp?.sdp?.length || 0), 'info');
         await handleOffer(msg);
         break;
 
       case 'ice':
+        log('🧊 ICE candidate received from A', 'info');
         if (pc && msg.candidate) {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
@@ -147,8 +189,10 @@ function connect() {
   };
 }
 
+// CHANGE 3 — verbose logging inside setupPeerConnection
 async function setupPeerConnection(callId) {
   try {
+    log('Creating RTCPeerConnection...', 'info');
     pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -170,15 +214,18 @@ async function setupPeerConnection(callId) {
         }
       ]
     });
+    log('✅ RTCPeerConnection created', 'ok');
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
+        log('🧊 Sending ICE candidate to A', 'info');
         send({ type: 'ice', callId, candidate: e.candidate.toJSON() });
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      log('ICE: ' + pc.iceConnectionState);
+      log('ICE state changed: ' + pc.iceConnectionState,
+        pc.iceConnectionState === 'connected' ? 'ok' : 'info');
       if (pc.iceConnectionState === 'connected') {
         log('✅ WebRTC connected — audio bridge live!', 'ok');
         document.getElementById('status').textContent = '✅ Call bridging';
@@ -191,7 +238,8 @@ async function setupPeerConnection(callId) {
     };
 
     pc.ontrack = (e) => {
-      log('✅ Audio track from A received', 'ok');
+      log('✅ Audio track received from A!', 'ok');
+      log('  stream id: ' + (e.streams[0]?.id || 'none'), 'info');
       const audio = document.getElementById('remote-audio');
       audio.srcObject = e.streams[0];
     };
@@ -207,10 +255,12 @@ async function setupPeerConnection(callId) {
           sampleRate: 16000
         }
       });
+      log('✅ Microphone access granted', 'ok');
+      log('  tracks: ' + micStream.getTracks().length, 'info');
       micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
-      log('✅ Mic added to peer connection', 'ok');
     } catch(e) {
-      log('❌ Mic failed: ' + e.message, 'err');
+      log('❌ Microphone FAILED: ' + e.message, 'err');
+      log('  This means relay cannot capture audio', 'err');
     }
 
     log('Peer connection ready — waiting for offer');
@@ -220,6 +270,7 @@ async function setupPeerConnection(callId) {
   }
 }
 
+// CHANGE 4 — verbose logging inside handleOffer
 async function handleOffer(msg) {
   try {
     if (!pc) {
@@ -227,50 +278,63 @@ async function handleOffer(msg) {
       await setupPeerConnection(msg.callId);
     }
 
+    log('handleOffer: setting remote description...', 'info');
     await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-    log('Remote SDP set ✅');
+    log('✅ Remote SDP set successfully', 'ok');
 
     const answer = await pc.createAnswer();
+    log('✅ Answer created', 'ok');
+
     await pc.setLocalDescription(answer);
-    log('Local SDP set ✅');
+    log('✅ Local SDP set', 'ok');
 
     send({
       type: 'sdp_answer',
       callId: msg.callId,
       sdp: { type: answer.type, sdp: answer.sdp }
     });
-    log('✅ SDP answer sent', 'ok');
+    log('✅ SDP answer sent to server', 'ok');
 
   } catch(e) {
-    log('handleOffer crash: ' + e.message, 'err');
+    log('❌ handleOffer CRASHED: ' + e.message, 'err');
+    log('  stack: ' + (e.stack || 'none').slice(0, 100), 'err');
     console.error(e);
   }
 }
 
+// CHANGE 8 — verbose cleanup
 function cleanup() {
+  log('🧹 cleanup() called', 'info');
   try {
-    pc?.close(); pc = null;
+    pc?.close();
+    log('PeerConnection closed', 'info');
+    pc = null;
+  } catch(e) { log('PC close error: ' + e.message, 'err'); }
+  try {
     micStream?.getTracks().forEach(t => t.stop());
+    log('Mic tracks stopped', 'info');
     micStream = null;
-    currentCallId = null;
-    log('Cleaned up');
-  } catch(e) {}
+  } catch(e) { log('Mic stop error: ' + e.message, 'err'); }
+  currentCallId = null;
+  log('✅ Cleanup complete', 'ok');
 }
 
-// Called by Android when GSM call connects (C answered)
+// CHANGE 5 — verbose GSM callbacks
 function onGSMConnected(callId) {
-  log('GSM connected — sending relay_ready', 'ok');
+  log('📞 onGSMConnected called. callId: ' + callId, 'ok');
+  log('Sending relay_ready to server...', 'info');
   send({ type: 'relay_ready', callId, status: 'connected' });
+  log('✅ relay_ready sent', 'ok');
 }
 
-// Called by Android when GSM call ends
 function onGSMEnded(callId) {
-  log('GSM ended — sending relay_call_ended');
+  log('📴 onGSMEnded called. callId: ' + callId, 'info');
   send({ type: 'relay_call_ended', callId });
+  log('relay_call_ended sent', 'info');
   cleanup();
+  log('Cleaned up', 'info');
 }
 
-// Called by Android when SMS sent
 function onSMSSent(callId, status) {
   send({ type: 'sms_sent', callId, status });
 }
