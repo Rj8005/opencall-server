@@ -95,15 +95,27 @@ function stopAggressivePing() {
   activePingInterval = null;
 }
 
-// FIX 4 — screen wake lock to prevent WebView suspension
+// FIX 4 — screen wake lock with auto re-acquire
+let wakeLock = null;
+
 async function requestWakeLock() {
   try {
     if ('wakeLock' in navigator) {
-      const wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock = await navigator.wakeLock.request('screen');
       log('🔒 Wake lock acquired', 'ok');
-      wakeLock.addEventListener('release', () => {
-        log('🔓 Wake lock released', 'warn');
+
+      wakeLock.addEventListener('release', async () => {
+        log('🔓 Wake lock released — re-acquiring...', 'warn');
+        if (currentCallId) {
+          try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            log('🔒 Wake lock re-acquired', 'ok');
+          } catch(e) {
+            log('Wake lock re-acquire failed: ' + e.message, 'warn');
+          }
+        }
       });
+
       return wakeLock;
     }
   } catch(e) {
@@ -160,9 +172,8 @@ function connect() {
   };
 
   ws.onclose = (e) => {
-    // FIX 1 — stop both ping intervals
+    // Stop normal ping only — aggressive ping keeps running so it fires on the new ws after reconnect
     if (normalPingInterval) { clearInterval(normalPingInterval); normalPingInterval = null; }
-    stopAggressivePing();
     log('❌ WebSocket closed', 'err');
     log('  code: ' + e.code + ' reason: ' + (e.reason || 'none'), 'err');
     log('Reconnecting in 3 seconds...', 'warn');
@@ -297,9 +308,6 @@ async function setupPeerConnection(callId) {
         pc.iceConnectionState === 'connected' ? 'ok' : 'info');
       if (pc.iceConnectionState === 'connected') {
         log('✅ WebRTC connected — audio bridge live!', 'ok');
-        stopAggressivePing();
-        startNormalPing();
-        log('🏓 Back to normal ping rate', 'info');
         document.getElementById('status').textContent = '✅ Call bridging';
         if (window.AndroidRelay) window.AndroidRelay.onWebRTCConnected();
       }
@@ -381,6 +389,10 @@ async function handleOffer(msg) {
 
 function cleanup() {
   log('🧹 cleanup() called', 'info');
+  if (wakeLock) {
+    try { wakeLock.release(); } catch(e) {}
+    wakeLock = null;
+  }
   stopAggressivePing();
   pendingIceCandidates = [];
   try {
