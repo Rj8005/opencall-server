@@ -762,6 +762,17 @@ async function releaseWakeLock() {
   } catch(e) {}
 }
 
+// Resume AudioContext and relay audio on any user interaction
+document.addEventListener('click', () => {
+  if (window._audioCtx && window._audioCtx.state === 'suspended') {
+    window._audioCtx.resume();
+  }
+  const audio = document.getElementById('relay-audio');
+  if (audio && audio.paused && audio.srcObject) {
+    audio.play().catch(() => {});
+  }
+}, { once: false });
+
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState === 'visible' && window._callPending) {
     await requestWakeLock();
@@ -2070,6 +2081,12 @@ async function onMessage(msg) {
       if (peerConnection) { peerConnection.close(); peerConnection = null; }
       peerConnection = new RTCPeerConnection(RTC_CFG);
 
+      // Ensure AudioContext is active before audio arrives
+      window._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (window._audioCtx.state === 'suspended') {
+        window._audioCtx.resume();
+      }
+
       // ICE candidates → server → B
       peerConnection.onicecandidate = (e) => {
         if (e.candidate) {
@@ -2109,16 +2126,54 @@ async function onMessage(msg) {
 
       // B's audio (C's voice) arrives here
       peerConnection.ontrack = (e) => {
-        LOG.webrtc('✅ Audio track from relay B (C voice)');
+        LOG.webrtc('✅ Audio track from relay B received');
+
         let audio = document.getElementById('relay-audio');
         if (!audio) {
           audio = document.createElement('audio');
           audio.id = 'relay-audio';
           audio.autoplay = true;
           audio.playsInline = true;
+          audio.setAttribute('playsinline', '');
+          audio.muted = false;
           document.body.appendChild(audio);
         }
+
         audio.srcObject = e.streams[0];
+
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.then(() => {
+            LOG.webrtc('✅ Audio playing — you should hear C now');
+          }).catch(err => {
+            LOG.err('Audio autoplay blocked: ' + err.message);
+            LOG.err('Fix: Adding play button...');
+
+            const existing = document.getElementById('tap-to-hear');
+            if (existing) existing.remove();
+
+            const btn = document.createElement('button');
+            btn.id = 'tap-to-hear';
+            btn.textContent = '🔊 Tap to hear call';
+            btn.style.cssText = [
+              'position:fixed', 'bottom:100px', 'left:50%',
+              'transform:translateX(-50%)',
+              'background:#1d9e75', 'color:white', 'border:none',
+              'border-radius:12px', 'padding:14px 28px',
+              'font-size:14px', 'font-weight:600', 'z-index:999',
+              'cursor:pointer',
+              'box-shadow:0 4px 20px rgba(29,158,117,0.4)'
+            ].join(';');
+            btn.onclick = () => {
+              audio.play().then(() => {
+                LOG.webrtc('✅ Audio playing after user tap');
+                btn.remove();
+              });
+            };
+            document.body.appendChild(btn);
+          });
+        }
+
         if (hint) hint.textContent = '🔊 Call live — audio connected';
       };
 
