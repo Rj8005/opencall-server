@@ -34,6 +34,10 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 20px;
+  --out:        #1d9e75;
+  --out-2:      rgba(29,158,117,0.18);
+  --amber:      #f5a623;
+  --red:        #ff6b6b;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -393,6 +397,108 @@ input::placeholder { color: var(--text-muted); }
 
 #screen-register { display: block; }
 #screen-dialer   { display: none; }
+
+/* ── SMS Chat overlay ── */
+#smsChat {
+  display: none;
+  position: fixed; inset: 0;
+  background: var(--bg-deep);
+  z-index: 200;
+  flex-direction: column;
+  overflow: hidden;
+}
+#smsChat.open { display: flex; }
+.chat-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  flex-shrink: 0;
+}
+.chat-back {
+  background: none; border: 1px solid var(--border);
+  border-radius: 8px; color: var(--blue);
+  font-size: 18px; cursor: pointer;
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; line-height: 1;
+}
+.chat-flag    { font-size: 24px; flex-shrink: 0; }
+.chat-peer    { flex: 1; min-width: 0; }
+.chat-num     { font-family: 'DM Mono', monospace; font-size: 14px;
+                font-weight: 600; color: var(--text-primary); }
+.chat-country { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+.msgs {
+  flex: 1; list-style: none; overflow-y: auto;
+  padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.sysmsg {
+  text-align: center; font-size: 9px; color: var(--text-muted);
+  letter-spacing: 0.6px; text-transform: uppercase;
+  padding: 4px 0 8px;
+}
+.bubble {
+  max-width: 78%; padding: 9px 12px; border-radius: 14px;
+  font-size: 13px; line-height: 1.45; word-break: break-word;
+  animation: fadein 0.18s ease;
+}
+.bubble.out {
+  align-self: flex-end;
+  background: var(--out-2); border: 1px solid var(--green-border);
+  color: var(--text-primary); border-bottom-right-radius: 4px;
+}
+.bubble.in {
+  align-self: flex-start;
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text-primary); border-bottom-left-radius: 4px;
+}
+.bubble .meta {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 4px; margin-top: 4px;
+}
+.bubble .ts { font-size: 9px; color: var(--text-muted); font-family: 'DM Mono', monospace; }
+.tick              { font-size: 11px; }
+.tick.st-sent      { color: var(--text-muted); }
+.tick.st-delivered { color: var(--blue); }
+.tick.st-failed    { color: var(--red); }
+.seglimit {
+  flex-shrink: 0; text-align: right;
+  font-size: 9px; color: var(--text-muted);
+  font-family: 'DM Mono', monospace;
+  padding: 2px 16px 4px; transition: color 0.2s;
+}
+.seglimit.warn { color: var(--amber); }
+.composer {
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 8px 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  flex-shrink: 0;
+}
+.field {
+  flex: 1; resize: none;
+  background: var(--bg-field); border: 1px solid var(--border);
+  border-radius: var(--radius-md); color: var(--text-primary);
+  font-family: 'DM Mono', monospace; font-size: 13px;
+  padding: 10px 12px; outline: none; line-height: 1.4;
+  max-height: 120px; overflow-y: auto; transition: border-color 0.2s;
+}
+.field:focus       { border-color: var(--blue-border); }
+.field::placeholder{ color: var(--text-muted); }
+.send {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--green-dim); border: 1px solid var(--green-border);
+  color: var(--green); font-size: 18px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: background 0.2s;
+}
+.send:hover    { background: rgba(29,158,117,0.25); }
+.send:disabled { opacity: 0.4; cursor: default; }
 </style>
 </head>
 <body>
@@ -713,6 +819,33 @@ input::placeholder { color: var(--text-muted); }
     </div>
   </div>
 </div>
+
+<!-- ══════════════ SMS CHAT OVERLAY ══════════════ -->
+<section id="smsChat">
+  <div class="ring-3" aria-hidden="true"></div>
+  <div class="ring-4" aria-hidden="true"></div>
+
+  <div class="chat-head">
+    <button class="chat-back" id="chatBack" title="Back">&#8592;</button>
+    <span id="hFlag" class="chat-flag"></span>
+    <div class="chat-peer">
+      <div id="hNum" class="chat-num"></div>
+      <div id="hCountry" class="chat-country"></div>
+    </div>
+    <div style="font-size:9px;color:var(--text-muted);letter-spacing:0.5px;text-transform:uppercase;flex-shrink:0">SMS relay</div>
+  </div>
+
+  <ul id="msgs" class="msgs">
+    <li class="sysmsg">Today</li>
+  </ul>
+
+  <div class="seglimit" id="seglimit">160 / 1 seg</div>
+
+  <div class="composer">
+    <textarea id="smsInput" class="field" placeholder="Message…" rows="1" maxlength="1530"></textarea>
+    <button id="smsSend" class="send" title="Send">&#8593;</button>
+  </div>
+</section>
 
 <div id="toast"></div>
 <audio id="remote-audio" autoplay playsinline></audio>
@@ -2277,6 +2410,35 @@ async function onMessage(msg) {
       break;
     }
 
+    case 'sms_status': {
+      setStatus(msg.msgId, msg.status);
+      break;
+    }
+
+    case 'sms_in': {
+      const inMsgId = 'msg_' + Date.now();
+      if (smsChatVisible() && activeSmsThread && msg.threadId === activeSmsThread.threadId) {
+        addSmsBubble('in', msg.text, inMsgId);
+        const storedT = smsThreadsStore.find(t => t.threadId === msg.threadId);
+        if (storedT) {
+          storedT.messages.push({ dir: 'in', text: msg.text, msgId: inMsgId });
+          saveThreadsStore();
+        }
+      } else {
+        showSmsBadge(msg.from, msg.text);
+        let storedT = smsThreadsStore.find(t => t.threadId === msg.threadId);
+        if (!storedT) {
+          const cc = detectCountry(msg.from || '');
+          storedT = { threadId: msg.threadId, to: msg.from, country: cc,
+                      flag: flagFor(cc), countryName: nameFor(cc), messages: [] };
+          smsThreadsStore.push(storedT);
+        }
+        storedT.messages.push({ dir: 'in', text: msg.text, msgId: inMsgId });
+        saveThreadsStore();
+      }
+      break;
+    }
+
     case 'error':
       LOG.err('Server error', msg);
       LOG.err('Reason:', msg.reason);
@@ -3173,12 +3335,25 @@ async function showInviteBanner(to) {
         </button>
         <div id="textbelt-status"></div>
       </div>
+      <button class="relay-btn relay-btn-sms msg-instead-btn"
+              style="margin-top:8px;font-size:12px">
+        💬 Message instead (SMS relay)
+      </button>
     `;
 
     const anchor = document.getElementById('country-selector') || document.querySelector('.num-display');
     if (anchor) anchor.parentNode.insertBefore(panel, anchor.nextSibling);
 
     renderChannelButtons(to, inviteUrl);
+
+    const msgInsteadBtn = panel.querySelector('.msg-instead-btn');
+    if (msgInsteadBtn) {
+      msgInsteadBtn.onclick = () => {
+        const cc = detectCountry(to);
+        openSmsChat({ threadId: 'sms_' + to, to, country: cc,
+                      flag: flagFor(cc), countryName: nameFor(cc) });
+      };
+    }
 
     // China: also offer WeChat QR
     if (countryCode === 'CN') setTimeout(invShowWeChatQR, 100);
@@ -3890,6 +4065,199 @@ function setDHTStatus(nodeCount) {
   document.getElementById('sf-right').textContent =
     'DHT: ' + nodeCount + ' nodes';
 }
+
+// ── SMS Chat ──────────────────────────────────────────────────
+let activeSmsThread = null;
+
+function flagFor(cc) { return (COUNTRY_DATA[cc] || {}).flag || '🌍'; }
+function nameFor(cc) { return (COUNTRY_DATA[cc] || {}).name || 'International'; }
+
+function openSmsChat(thread) {
+  activeSmsThread = thread;
+  document.getElementById('hNum').textContent     = thread.to;
+  document.getElementById('hFlag').textContent    = thread.flag;
+  document.getElementById('hCountry').textContent = thread.countryName;
+
+  // Restore persisted messages
+  const msgs = document.getElementById('msgs');
+  msgs.innerHTML = '<li class="sysmsg">Today</li>';
+  const storedT = findOrCreateStoredThread(thread);
+  storedT.messages.forEach(m => addSmsBubble(m.dir, m.text, m.msgId, m.status));
+
+  // Clear unread badge
+  const smsBtn = document.getElementById('btn-sms-invite');
+  if (smsBtn) { delete smsBtn.dataset.unread; smsBtn.querySelector('.sms-unread-dot')?.remove(); }
+
+  document.getElementById('smsChat').classList.add('open');
+  document.getElementById('smsInput').focus();
+}
+
+document.getElementById('chatBack').onclick = function() {
+  document.getElementById('smsChat').classList.remove('open');
+  activeSmsThread = null;
+  show('dialer');
+};
+
+(function wireSmsComposer() {
+  const input = document.getElementById('smsInput');
+  const send  = document.getElementById('smsSend');
+  const seg   = document.getElementById('seglimit');
+
+  function updateSeg() {
+    const len  = input.value.length;
+    const segs = len === 0 ? 1 : Math.ceil(len / 160);
+    const rem  = segs * 160 - len;
+    seg.textContent = rem + ' / ' + segs + ' seg' + (segs > 1 ? 's' : '');
+    seg.classList.toggle('warn', rem < 20);
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  }
+
+  input.addEventListener('input', updateSeg);
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSms(); }
+  });
+  send.addEventListener('click', sendSms);
+})();
+
+function sendSms() {
+  const input = document.getElementById('smsInput');
+  const text  = input.value.trim();
+  if (!text || !activeSmsThread) return;
+
+  const msgId = 'msg_' + Date.now();
+  addSmsBubble('out', text, msgId, 'sent');
+  input.value = '';
+  input.style.height = 'auto';
+  document.getElementById('seglimit').textContent = '160 / 1 seg';
+
+  const storedT = findOrCreateStoredThread(activeSmsThread);
+  storedT.messages.push({ dir: 'out', text, msgId, status: 'sent' });
+  saveThreadsStore();
+
+  if (!ws || ws.readyState !== 1) {
+    setStatus(msgId, 'failed');
+    addSmsSystem('Not connected — message not sent');
+    return;
+  }
+  ws.send(JSON.stringify({
+    type:     'sms_send',
+    to:       activeSmsThread.to,
+    text,
+    country:  activeSmsThread.country,
+    threadId: activeSmsThread.threadId,
+    msgId
+  }));
+}
+
+function addSmsBubble(dir, text, msgId, status) {
+  const msgs = document.getElementById('msgs');
+  const li   = document.createElement('li');
+  li.className = 'bubble ' + dir;
+  const d  = new Date();
+  const ts = d.getHours().toString().padStart(2,'0') + ':' +
+             d.getMinutes().toString().padStart(2,'0');
+  if (!msgId) msgId = 'msg_' + Date.now();
+  const st       = status || 'sent';
+  const tickText = st === 'delivered' ? '✓✓' : (st === 'failed' || st === 'no_relay' || st === 'busy') ? '✗' : '✓';
+  const tickHtml = dir === 'out'
+    ? `<span class="tick st-${st}" id="tick_${msgId}">${tickText}</span>`
+    : '';
+  li.innerHTML = escHtml(text) +
+    `<div class="meta"><span class="ts">${ts}</span>${tickHtml}</div>`;
+  li.dataset.msgId = msgId;
+  msgs.appendChild(li);
+  msgs.scrollTop = msgs.scrollHeight;
+  return { li, msgId };
+}
+
+function addSmsSystem(text) {
+  const msgs = document.getElementById('msgs');
+  if (!msgs) return;
+  const li = document.createElement('li');
+  li.className = 'sysmsg';
+  li.textContent = text;
+  msgs.appendChild(li);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+          .replace(/\n/g,'<br>');
+}
+
+// ── SMS thread store (localStorage) ──────────────────────────
+let smsThreadsStore = [];
+
+function loadThreadsStore() {
+  try {
+    const raw = localStorage.getItem('ocp_sms_threads');
+    smsThreadsStore = raw ? JSON.parse(raw) : [];
+  } catch(e) {
+    smsThreadsStore = [];
+  }
+}
+
+function saveThreadsStore() {
+  try {
+    localStorage.setItem('ocp_sms_threads', JSON.stringify(smsThreadsStore));
+  } catch(e) {}
+}
+
+function findOrCreateStoredThread(thread) {
+  let stored = smsThreadsStore.find(t => t.threadId === thread.threadId);
+  if (!stored) {
+    stored = { threadId: thread.threadId, to: thread.to, country: thread.country,
+               flag: thread.flag, countryName: thread.countryName, messages: [] };
+    smsThreadsStore.push(stored);
+  }
+  return stored;
+}
+
+// ── SMS UI helpers ────────────────────────────────────────────
+function smsChatVisible() {
+  return document.getElementById('smsChat').classList.contains('open');
+}
+
+function setStatus(msgId, status) {
+  const tick = document.getElementById('tick_' + msgId);
+  if (tick) {
+    const isFail = status === 'failed' || status === 'no_relay' || status === 'busy';
+    tick.className   = 'tick st-' + (isFail ? 'failed' : status);
+    tick.textContent = status === 'delivered' ? '✓✓' : isFail ? '✗' : '✓';
+  }
+  if (status === 'no_relay') addSmsSystem('No SMS relay available for this number');
+  if (status === 'busy')     addSmsSystem('Relay busy — try again shortly');
+  // Persist updated status
+  if (activeSmsThread) {
+    const stored = smsThreadsStore.find(t => t.threadId === activeSmsThread.threadId);
+    if (stored) {
+      const m = stored.messages.find(m => m.msgId === msgId);
+      if (m) { m.status = status; saveThreadsStore(); }
+    }
+  }
+}
+
+function showSmsBadge(from, text) {
+  const preview = text.length > 50 ? text.slice(0, 50) + '…' : text;
+  toast('💬 ' + from + ': ' + preview, 6000);
+  const btn = document.getElementById('btn-sms-invite');
+  if (btn) {
+    btn.dataset.unread = (+btn.dataset.unread || 0) + 1;
+    if (!btn.querySelector('.sms-unread-dot')) {
+      const dot = document.createElement('span');
+      dot.className = 'sms-unread-dot';
+      dot.style.cssText = `position:absolute;top:-3px;right:-3px;
+        width:9px;height:9px;border-radius:50%;
+        background:var(--amber);pointer-events:none;
+        border:1px solid var(--bg-deep);`;
+      btn.style.position = 'relative';
+      btn.appendChild(dot);
+    }
+  }
+}
+
+loadThreadsStore();
 </script>
 
 </body>
