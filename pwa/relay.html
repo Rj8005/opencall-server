@@ -266,6 +266,7 @@ function connect() {
 async function setupPeerConnection(callId) {
   try {
     log('Creating RTCPeerConnection...', 'info');
+
     pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -287,23 +288,14 @@ async function setupPeerConnection(callId) {
         }
       ]
     });
-    log('✅ RTCPeerConnection created', 'ok');
 
-    // FIX 5 — buffer ICE candidates when WS is not ready
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        const iceMsg = { type: 'ice', callId, candidate: e.candidate.toJSON() };
-        if (ws && ws.readyState === 1) {
-          ws.send(JSON.stringify(iceMsg));
-          log('🧊 Sending ICE candidate to A', 'info');
-        } else {
-          pendingIceCandidates.push(iceMsg);
-          log('🧊 ICE buffered (WS not ready)', 'warn');
-        }
+        send({ type: 'ice', callId, candidate: e.candidate.toJSON() });
+        log('🧊 Sending ICE candidate to A', 'info');
       }
     };
 
-    // FIX 3 — stop aggressive ping once ICE connects; add disconnected handler
     pc.oniceconnectionstatechange = () => {
       log('ICE state changed: ' + pc.iceConnectionState,
         pc.iceConnectionState === 'connected' ? 'ok' : 'info');
@@ -317,7 +309,7 @@ async function setupPeerConnection(callId) {
         pc.restartIce();
       }
       if (pc.iceConnectionState === 'disconnected') {
-        log('⚠️ ICE disconnected — attempting restart', 'warn');
+        log('⚠️ ICE disconnected — restarting', 'warn');
         setTimeout(() => {
           if (pc && pc.iceConnectionState === 'disconnected') {
             pc.restartIce();
@@ -326,53 +318,52 @@ async function setupPeerConnection(callId) {
       }
     };
 
+    // When A's audio arrives at B — play through device so GSM mic picks it up
     pc.ontrack = (e) => {
-      log('✅ Audio track from A received', 'ok');
+      log('✅ Audio track from A received!', 'ok');
       log('  stream id: ' + (e.streams[0]?.id || 'none'), 'info');
 
       const audio = document.getElementById('remote-audio');
       audio.srcObject = e.streams[0];
+      audio.volume = 1.0;
 
-      audio.play().then(() => {
-        log('✅ A audio playing through device', 'ok');
-      }).catch(err => {
-        log('Audio play error: ' + err.message, 'err');
-        setTimeout(() => {
-          audio.play().catch(e => log('Retry failed: ' + e.message, 'err'));
-        }, 500);
-      });
-
-      // Notify Android to set audio routing for bridge
-      // Android sets speakerphone so GSM mic can pick up A's voice
-      if (window.AndroidRelay) {
-        try { window.AndroidRelay.onAudioTrackReceived(); } catch(e) {
-          // onAudioTrackReceived not yet in this APK version — fall back
-          try { window.AndroidRelay.onWebRTCConnected(); } catch(e2) {}
-        }
-      }
+      const playAttempt = () => {
+        audio.play().then(() => {
+          log('✅ A audio playing — C will hear A via speakerphone', 'ok');
+          if (window.AndroidRelay) {
+            try { window.AndroidRelay.onAudioStarted(); } catch(e) {}
+          }
+        }).catch(err => {
+          log('Play blocked: ' + err.message + ' — retrying', 'warn');
+          setTimeout(playAttempt, 300);
+        });
+      };
+      playAttempt();
     };
 
+    // Add microphone — captures C's GSM voice via speakerphone
     try {
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
+          channelCount: 1,
           sampleRate: 16000
         }
       });
+      micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
       log('✅ Microphone access granted', 'ok');
       log('  tracks: ' + micStream.getTracks().length, 'info');
-      micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
     } catch(e) {
       log('❌ Microphone FAILED: ' + e.message, 'err');
-      log('  This means relay cannot capture audio', 'err');
     }
 
-    log('Peer connection ready — waiting for offer');
+    log('Peer connection ready — waiting for offer', 'info');
 
   } catch(e) {
     log('setupPeerConnection crash: ' + e.message, 'err');
+    console.error(e);
   }
 }
 
