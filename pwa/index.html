@@ -2006,43 +2006,47 @@ async function onMessage(msg) {
     }
 
     case 'relay_found': {
-      LOG.relay('✅ Relay found!', { country: msg.country, relay_mode: msg.relay_mode, callId: msg.callId });
+      clearTimeout(relayTimeout);
+      LOG.relay('✅ Relay found!', msg);
       LOG.relay('Waiting for relay to dial C and C to answer...');
       callId   = msg.callId || callId;
       callMode = 'relay';
-      stopRingback();
-      document.getElementById('call-status-detail').textContent =
-        'Ringing via relay in ' + (msg.country || '...') + '...';
-      document.getElementById('call-route-info').textContent =
-        'via ' + (msg.country || 'relay') + ' relay';
-      showActiveCallOverlay();
-      startRingback();
 
-      // Safety timeout — if nothing happens in 20s show invite fallback
-      clearTimeout(relayTimeout);
+      const hint = document.getElementById('dial-hint');
+      if (hint) {
+        hint.textContent = '📡 Relay found in ' + msg.country + ' — dialing...';
+        hint.style.color = 'var(--blue)';
+      }
+
+      const pill = document.getElementById('status-pill');
+      if (pill) {
+        pill.textContent = 'Routing';
+        pill.className = 'status-pill pill-routing';
+      }
+
       relayTimeout = setTimeout(() => {
-        LOG.err('⏱️ Relay timeout — no response in 20 seconds');
+        LOG.err('⏱️ Relay timeout — no response in 45 seconds');
         LOG.err('Possible causes:');
-        LOG.err('  1. Relay APK crashed (check permissions)');
+        LOG.err('  1. Relay APK not running');
         LOG.err('  2. C did not answer');
-        LOG.err('  3. WebRTC setup failed on relay side');
+        LOG.err('  3. No relay in this country');
         showRelayFallback(currentDialedNumber);
-      }, 20000);
+      }, 45000);
       break;
     }
 
     case 'relay_ringing': {
-      console.log('[RELAY] 🔔 relay_ringing received! C phone is ringing');
+      LOG.relay('🔔 C phone is ringing!');
       clearTimeout(relayTimeout);
-      LOG.relay('🔔 C\'s phone is ringing!');
+
       const hint = document.getElementById('dial-hint');
       if (hint) {
         hint.textContent = '🔔 Ringing...';
         hint.style.color = 'var(--blue)';
       }
-      // Give C 45 s to answer before falling back
+
       relayTimeout = setTimeout(() => {
-        LOG.err('⏱️ C did not answer after 45 seconds');
+        LOG.err('C did not answer in 45 seconds');
         showRelayFallback(currentDialedNumber);
       }, 45000);
       break;
@@ -2050,22 +2054,17 @@ async function onMessage(msg) {
 
     case 'relay_connected': {
       clearTimeout(relayTimeout);
-      LOG.relay('✅ C answered! Starting WebRTC with relay B...');
+      relayTimeout = null;
+      LOG.relay('✅ C answered! Starting WebRTC...');
 
       relayCallActive = true;
       stopRingback();
 
       const hint = document.getElementById('dial-hint');
       if (hint) {
-        hint.textContent = '🔊 Connecting audio...';
+        hint.textContent = '🔗 Connecting audio...';
         hint.style.color = 'var(--green)';
       }
-
-      document.getElementById('call-status-detail').textContent = 'Connected via relay';
-      document.getElementById('caller-avatar').classList.remove('ringing');
-      setConnectionStatus('calling');
-      showActiveCallOverlay();
-      if (!timerInterval) startTimer();
 
       // Create peer connection — A is the offerer
       if (peerConnection) { peerConnection.close(); peerConnection = null; }
@@ -2080,10 +2079,31 @@ async function onMessage(msg) {
       };
 
       peerConnection.oniceconnectionstatechange = () => {
-        LOG.webrtc('ICE state: ' + peerConnection.iceConnectionState);
-        if (peerConnection.iceConnectionState === 'connected') {
+        const state = peerConnection.iceConnectionState;
+        LOG.webrtc('ICE state: ' + state);
+        if (state === 'connected' || state === 'completed') {
           LOG.webrtc('✅ WebRTC connected to relay B!');
-          if (hint) hint.textContent = '🔊 Call live';
+          if (hint) {
+            hint.textContent = '🔊 Call live';
+            hint.style.color = 'var(--green)';
+          }
+          document.getElementById('call-status-detail').textContent = 'Connected via relay';
+          document.getElementById('caller-avatar').classList.remove('ringing');
+          setConnectionStatus('calling');
+          showActiveCallOverlay();
+          if (!timerInterval) startTimer();
+        }
+        if (state === 'failed') {
+          LOG.err('ICE failed — restarting');
+          peerConnection.restartIce();
+        }
+        if (state === 'disconnected') {
+          LOG.webrtc('ICE disconnected — attempting restart in 2s');
+          setTimeout(() => {
+            if (peerConnection?.iceConnectionState === 'disconnected') {
+              peerConnection.restartIce();
+            }
+          }, 2000);
         }
       };
 
@@ -2095,6 +2115,7 @@ async function onMessage(msg) {
           audio = document.createElement('audio');
           audio.id = 'relay-audio';
           audio.autoplay = true;
+          audio.playsInline = true;
           document.body.appendChild(audio);
         }
         audio.srcObject = e.streams[0];
@@ -2103,16 +2124,15 @@ async function onMessage(msg) {
 
       // Add A's microphone
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        micStream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 }
         });
-        micStream = stream;
-        stream.getTracks().forEach(track => {
-          peerConnection.addTrack(track, stream);
-          LOG.webrtc('Mic track added to peer connection');
+        micStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, micStream);
+          LOG.webrtc('Mic track added');
         });
       } catch(e) {
-        LOG.err('Mic access failed: ' + e.message);
+        LOG.err('Mic failed: ' + e.message);
       }
 
       // Create offer → send to B via server
@@ -2158,32 +2178,32 @@ async function onMessage(msg) {
       break;
 
     case 'relay_error': {
-      clearTimeout(relayTimeout);
-      LOG.err('❌ Relay error: ' + msg.reason, msg);
+      LOG.err('relay_error received: ' + msg.reason);
 
-      // If WebRTC is already connected, ignore relay_error —
-      // the call is still live even if the relay WS briefly dropped
-      if (peerConnection &&
-          peerConnection.iceConnectionState === 'connected') {
-        LOG.relay('⚠️ Relay error but WebRTC still connected — ignoring');
-        break;
+      // If WebRTC is already connected — ignore relay_error
+      if (peerConnection) {
+        const iceState = peerConnection.iceConnectionState;
+        LOG.relay('Current ICE state: ' + iceState);
+        if (iceState === 'connected' || iceState === 'completed') {
+          LOG.relay('⚠️ relay_error ignored — WebRTC still connected');
+          break;
+        }
+        // ICE is checking or new — give it more time
+        if (iceState === 'checking' || iceState === 'new') {
+          LOG.relay('⚠️ relay_error during ICE — waiting 10s before fallback');
+          clearTimeout(relayTimeout);
+          relayTimeout = setTimeout(() => {
+            if (peerConnection?.iceConnectionState !== 'connected' &&
+                peerConnection?.iceConnectionState !== 'completed') {
+              LOG.err('ICE did not connect — showing fallback');
+              showRelayFallback(currentDialedNumber);
+            }
+          }, 10000);
+          break;
+        }
       }
 
-      // If ICE is still in progress, wait 3 s before giving up
-      if (peerConnection &&
-          (peerConnection.iceConnectionState === 'checking' ||
-           peerConnection.iceConnectionState === 'new')) {
-        LOG.relay('⚠️ Relay error during ICE — waiting 3s before fallback');
-        setTimeout(() => {
-          if (peerConnection?.iceConnectionState !== 'connected') {
-            LOG.err('ICE did not connect in time — showing fallback');
-            showRelayFallback(currentDialedNumber);
-          }
-        }, 3000);
-        break;
-      }
-
-      // WebRTC not started — show fallback immediately
+      // WebRTC not started — show fallback
       LOG.err('What happened: ' + (msg.reason || 'unknown'));
       showRelayFallback(currentDialedNumber);
       break;
@@ -3382,13 +3402,30 @@ async function doDecline() {
 
 // ── hangup ─────────────────────────────────────────────────
 async function doHangup() {
-  LOG.relay('📴 Hangup triggered by user');
-  LOG.relay('Cleaning up WebRTC and resetting state...');
+  clearTimeout(relayTimeout);
+  relayTimeout = null;
+  relayCallActive = false;
+
+  try {
+    peerConnection?.close();
+    peerConnection = null;
+  } catch(e) {}
+
+  try {
+    micStream?.getTracks()?.forEach(t => t.stop());
+    micStream = null;
+  } catch(e) {}
+
+  const audio = document.getElementById('relay-audio');
+  if (audio) audio.srcObject = null;
+
   if (callMode === 'relay') {
     await wsSend({ type: 'call.hangup', callId });
   } else {
     await wsSend({ type: 'hangup', callId, with: callWith });
   }
+
+  LOG.relay('📴 Call ended — cleaned up');
   endCall();
 }
 function endCall() {
