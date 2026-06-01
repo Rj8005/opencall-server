@@ -608,6 +608,7 @@ const wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws, req) => {
   const ip = req.socket.remoteAddress;
+  ws._ocpId = Math.random().toString(36).slice(2);
   log("→", "new connection from", ip);
 
   // send welcome
@@ -647,12 +648,14 @@ wss.on("connection", (ws, req) => {
         if (call.relayWs !== ws) continue;
 
         if (call.state === 'connected') {
-          // WebRTC negotiation is underway — give relay 5 s to reconnect
-          console.log('[RELAY] Active call lost relay WS — waiting 5s...');
+          // Give relay 10 s to reconnect before ending the call
+          const callStateAtClose = call.state;
+          const iceStateAtClose  = call.iceState || 'unknown';
+          console.log('[RELAY] Active call lost relay WS — waiting 10s... iceState:', iceStateAtClose);
           setTimeout(() => {
-            const stillActive = pendingCalls.get(callId);
-            if (stillActive && stillActive.relayWs === ws) {
-              console.log('[RELAY] Relay did not reconnect — ending call');
+            const stillThere = pendingCalls.get(callId);
+            if (stillThere && stillThere.relayWs === ws) {
+              console.log('[RELAY] Grace expired. state:', callStateAtClose, 'iceState:', iceStateAtClose);
               try {
                 if (call.callerWs?.readyState === 1) {
                   call.callerWs.send(JSON.stringify({
@@ -667,7 +670,7 @@ wss.on("connection", (ws, req) => {
             } else {
               console.log('[RELAY] Call still active — relay recovered');
             }
-          }, 5000);
+          }, 10000);
         } else {
           // Not yet connected — fail immediately and offer fallback link
           console.log('[RELAY] Pre-call relay disconnect — failing immediately');
@@ -719,6 +722,25 @@ wss.on("connection", (ws, req) => {
 
   ws.on("error", (err) => log("!", "ws error:", err.message));
 });
+
+// ─────────────────────────────────────────────────────────────
+//  Role resolver — identifies whether a ws is caller or relay
+//  for a given pending call, using three fallback strategies so
+//  a ws object reference change never silently drops a message.
+// ─────────────────────────────────────────────────────────────
+function getCallRole(ws, call) {
+  if (!call) return null;
+  // Fast path: direct reference match
+  if (ws === call.callerWs) return 'caller';
+  if (ws === call.relayWs)  return 'relay';
+  // Fallback 1: match by ocp_address (survives ws reconnect)
+  const wsOcp = wsToRelay.get(ws);
+  if (wsOcp && wsOcp === call.relayOcpAddress) return 'relay';
+  // Fallback 2: match by _ocpId assigned at connection time
+  if (ws._ocpId && ws._ocpId === call.relayWsId)  return 'relay';
+  if (ws._ocpId && ws._ocpId === call.callerWsId) return 'caller';
+  return null;
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Message handler — every message type
@@ -775,6 +797,7 @@ async function handle(ws, msg) {
       return;
     }
     call.state       = 'connected';
+    call.iceState    = 'negotiating';
     call.connectedAt = Date.now();
     if (call.timeout) clearTimeout(call.timeout);
     console.log('[RELAY] C answered — starting WebRTC between A and B');
@@ -811,43 +834,40 @@ async function handle(ws, msg) {
 
   if (msg.type === 'sdp_offer') {
     try {
-      console.log('[SDP_OFFER] received. callId:', msg.callId);
       const call = pendingCalls.get(msg.callId);
-      console.log('[SDP_OFFER] call found:', !!call);
-      console.log('[SDP_OFFER] ws === callerWs:', ws === call?.callerWs);
-      console.log('[SDP_OFFER] ws === relayWs:', ws === call?.relayWs);
-      console.log('[SDP_OFFER] relayWs readyState:', call?.relayWs?.readyState);
-
-      if (!call) {
-        console.log('[SDP_OFFER] no call — ignoring');
-        return;
-      }
-
-      if (ws !== call.callerWs) {
-        // Maybe relay ws reference changed — try by ocp_address
-        const wsOcp = wsToRelay.get(ws);
-        const callRelayOcp = wsToRelay.get(call.relayWs);
-        console.log('[SDP_OFFER] ws ocp:', wsOcp, 'call relay ocp:', callRelayOcp);
-        if (wsOcp && wsOcp === callRelayOcp) {
-          call.relayWs = ws;
-          console.log('[SDP_OFFER] Updated relay ws reference');
-        }
-      }
-
-      if (ws === call.callerWs) {
-        // A sending offer to B
+      if (!call) { return; }
+      const role = getCallRole(ws, call);
+      console.log('[SDP_OFFER] role:', role, 'callId:', msg.callId?.slice(-6));
+      if (role === 'caller') {
         if (call.relayWs?.readyState === 1) {
           call.relayWs.send(JSON.stringify(msg));
-          console.log('[SDP_OFFER] ✅ forwarded A→B');
+          console.log('[SDP_OFFER] ✅ A→B forwarded');
         } else {
           console.log('[SDP_OFFER] ❌ relayWs not open:', call.relayWs?.readyState);
         }
       } else {
-        console.log('[SDP_OFFER] sender not recognized as caller');
+        console.log('[SDP_OFFER] unexpected role:', role, '— ignoring');
       }
-    } catch(e) {
-      console.error('[SDP_OFFER] ERROR:', e.message);
-    }
+    } catch(e) { console.error('[SDP_OFFER]', e.message); }
+    return;
+  }
+
+  if (msg.type === 'sdp_answer') {
+    try {
+      const call = pendingCalls.get(msg.callId);
+      if (!call) { return; }
+      const role = getCallRole(ws, call);
+      console.log('[SDP_ANSWER] role:', role, 'callId:', msg.callId?.slice(-6));
+      if (role === 'relay') {
+        call.relayWs = ws;  // refresh reference on every message from relay
+        if (call.callerWs?.readyState === 1) {
+          call.callerWs.send(JSON.stringify(msg));
+          console.log('[SDP_ANSWER] ✅ B→A forwarded');
+        }
+      } else {
+        console.log('[SDP_ANSWER] unexpected role:', role, '— ignoring');
+      }
+    } catch(e) { console.error('[SDP_ANSWER]', e.message); }
     return;
   }
 
@@ -855,24 +875,25 @@ async function handle(ws, msg) {
     try {
       const call = pendingCalls.get(msg.callId);
       if (!call) return;
-
-      if (ws === call.callerWs) {
+      const role = getCallRole(ws, call);
+      if (role === 'caller') {
         if (call.relayWs?.readyState === 1) {
           call.relayWs.send(JSON.stringify(msg));
         } else {
-          console.log('[ICE] ❌ relayWs not open for A→B forward');
+          console.log('[ICE] ❌ relayWs not open, readyState:', call.relayWs?.readyState);
         }
-      } else if (ws === call.relayWs) {
+      } else if (role === 'relay') {
+        call.relayWs = ws;  // refresh reference on every message from relay
+        call.iceState = 'exchanging';
         if (call.callerWs?.readyState === 1) {
           call.callerWs.send(JSON.stringify(msg));
         } else {
           console.log('[ICE] ❌ callerWs not open for B→A forward');
         }
+      } else {
+        console.log('[ICE] unknown role for ws, callId:', msg.callId?.slice(-6));
       }
-      // silently ignore unknown senders
-    } catch(e) {
-      console.error('[ICE] ERROR:', e.message);
-    }
+    } catch(e) { console.error('[ICE]', e.message); }
     return;
   }
 
@@ -940,18 +961,19 @@ async function handle(ws, msg) {
       send(ws, { type: "relay_registered", relayId });
       log("✓", "relay registered", relayId, country, areaCode);
 
-      // CRITICAL: update any pending calls that reference this relay's ocp_address.
-      // Covers both pre-connected and connected states so ws identity checks
-      // in ICE/SDP handlers always see the current socket.
+      // Update any pending calls that match this relay's ocp_address.
+      // Handles reconnect: new ws object, same relay identity.
       if (msg.ocp_address) {
         for (const [callId, call] of pendingCalls.entries()) {
           if (call.relayOcpAddress === msg.ocp_address) {
-            console.log('[RELAY] Updating pending call ws after reconnect:', callId);
-            call.relayWs = ws;
-            if (call.state === 'connected') {
-              // Re-trigger WebRTC so B can restart negotiation on new socket
-              send(ws, { type: 'start_webrtc', callId, role: 'relay' });
-            }
+            console.log('[RELAY] Updating pending call ws after reconnect:', callId.slice(-6));
+            call.relayWs   = ws;
+            call.relayWsId = ws._ocpId;
+            // Re-send start_webrtc so B can restart negotiation on the new socket
+            try {
+              ws.send(JSON.stringify({ type: 'start_webrtc', callId, role: 'relay' }));
+              console.log('[RELAY] Re-sent start_webrtc after reconnect');
+            } catch(e) {}
           }
         }
       }
@@ -1032,7 +1054,9 @@ async function handle(ws, msg) {
           console.log('[RELAY] relay ready:', relayWs?.readyState === 1);
           pendingCalls.set(callId, {
             callerWs: ws,
+            callerWsId: ws._ocpId,
             relayWs: relayWs,
+            relayWsId: relayWs._ocpId,
             relayOcpAddress: relay.ocp_address || '',
             to: to,
             callId: callId,
@@ -1223,46 +1247,6 @@ async function handle(ws, msg) {
 
       callLog.delete(msg.callId);
       log("✗", "hangup:", msg.callId);
-      break;
-    }
-
-    // ── WebRTC SIGNALING ─────────────────────────────────────
-    case "sdp_answer": {
-      try {
-        const call = msg.callId && pendingCalls.get(msg.callId);
-        if (call?.via === 'relay') {
-          let targetWs = null;
-          if (ws === call.relayWs) {
-            targetWs = call.callerWs;
-            console.log('[SDP] forwarding sdp_answer B→A');
-          } else if (ws === call.callerWs) {
-            targetWs = call.relayWs;
-            console.log('[SDP] forwarding sdp_answer A→B');
-          } else {
-            console.log('[SDP] unknown sender for sdp_answer — ignoring');
-            break;
-          }
-          if (targetWs?.readyState === 1) {
-            targetWs.send(JSON.stringify({
-              type: 'sdp_answer', callId: msg.callId, sdp: msg.sdp
-            }));
-            console.log('[SDP] sdp_answer forwarded successfully');
-          } else {
-            console.log('[SDP] target not open:', targetWs?.readyState);
-          }
-          break;
-        }
-        // link/direct call flow
-        if (call?.callerWs) {
-          send(call.callerWs, msg);
-        } else {
-          const toWs = registry.get(msg.to);
-          if (toWs) send(toWs, msg);
-        }
-      } catch(e) {
-        console.error('[SDP] sdp_answer handler error:', e.message);
-        // DO NOT rethrow — never kill socket on SDP error
-      }
       break;
     }
 
