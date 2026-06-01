@@ -2127,6 +2127,7 @@ async function onMessage(msg) {
       // B's audio (C's voice) arrives here
       peerConnection.ontrack = (e) => {
         LOG.webrtc('✅ Audio track from relay B received');
+        const stream = e.streams[0];
 
         let audio = document.getElementById('relay-audio');
         if (!audio) {
@@ -2134,45 +2135,49 @@ async function onMessage(msg) {
           audio.id = 'relay-audio';
           audio.autoplay = true;
           audio.playsInline = true;
-          audio.setAttribute('playsinline', '');
-          audio.muted = false;
+          audio.controls = false;
           document.body.appendChild(audio);
         }
 
-        audio.srcObject = e.streams[0];
+        audio.srcObject = stream;
+        audio.volume = 1.0;
+        audio.muted = false;
 
-        const playPromise = audio.play();
-        if (playPromise !== undefined) {
-          playPromise.then(() => {
-            LOG.webrtc('✅ Audio playing — you should hear C now');
-          }).catch(err => {
-            LOG.err('Audio autoplay blocked: ' + err.message);
-            LOG.err('Fix: Adding play button...');
+        // Method 1: direct play
+        audio.play().then(() => {
+          LOG.webrtc('✅ Audio playing — you should hear C now');
+        }).catch(err => {
+          LOG.err('Direct play blocked: ' + err.message);
 
-            const existing = document.getElementById('tap-to-hear');
-            if (existing) existing.remove();
+          // Method 2: AudioContext route (bypasses autoplay policy)
+          try {
+            const ctx = new AudioContext();
+            const source = ctx.createMediaStreamSource(stream);
+            source.connect(ctx.destination);
+            ctx.resume().then(() => {
+              LOG.webrtc('✅ Audio via AudioContext — you should hear C');
+            });
+          } catch(err2) {
+            LOG.err('AudioContext also failed: ' + err2.message);
 
+            // Method 3: tap-to-hear button
+            document.getElementById('tap-to-hear-btn')?.remove();
             const btn = document.createElement('button');
-            btn.id = 'tap-to-hear';
+            btn.id = 'tap-to-hear-btn';
             btn.textContent = '🔊 Tap to hear call';
             btn.style.cssText = [
-              'position:fixed', 'bottom:100px', 'left:50%',
-              'transform:translateX(-50%)',
-              'background:#1d9e75', 'color:white', 'border:none',
-              'border-radius:12px', 'padding:14px 28px',
-              'font-size:14px', 'font-weight:600', 'z-index:999',
-              'cursor:pointer',
-              'box-shadow:0 4px 20px rgba(29,158,117,0.4)'
+              'position:fixed', 'top:50%', 'left:50%',
+              'transform:translate(-50%,-50%)',
+              'background:#1d9e75', 'color:white',
+              'border:none', 'border-radius:16px',
+              'padding:18px 32px', 'font-size:16px',
+              'font-weight:700', 'z-index:9999', 'cursor:pointer',
+              'box-shadow:0 8px 32px rgba(29,158,117,0.5)'
             ].join(';');
-            btn.onclick = () => {
-              audio.play().then(() => {
-                LOG.webrtc('✅ Audio playing after user tap');
-                btn.remove();
-              });
-            };
+            btn.onclick = () => { audio.play().catch(() => {}); btn.remove(); };
             document.body.appendChild(btn);
-          });
-        }
+          }
+        });
 
         if (hint) hint.textContent = '🔊 Call live — audio connected';
       };
