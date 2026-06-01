@@ -33,6 +33,7 @@ const webPush           = null;      // using native fetch for push
 const pendingCalls      = new Map(); // callId           → { from, to, link, callerWs, ... }
 const wsToRelay         = new Map(); // ws               → relay ocp_address
 const sentAnswerLinks   = new Set(); // callId           → de-duplicate answer_link_ready
+const smsThreads        = new Map(); // `${relayId}|${cNumber}` → { aWs, aOcp, cNumber, relayId, threadId, lastActive }
 const pendingUSSD       = new Map(); // callee           → { callId, from, channel }
 const simBankRegistry   = new Map(); // country          → WebSocket
 const telegramRegistry  = new Map(); // phone            → telegram chat ID
@@ -233,6 +234,16 @@ function findBestRelay(targetNumber, country) {
   }
   const [relayId, relay] = relays.entries().next().value;
   return { relayId, ...relay };
+}
+
+function findSmsCapableRelay(country) {
+  for (const [relayId, relay] of relays.entries()) {
+    if (relay.ws?.readyState !== 1) continue;
+    if (relay.country !== country) continue;
+    if (!relay.caps?.includes('sms')) continue;
+    return { relayId, ...relay };
+  }
+  return null;
 }
 
 function detectCountryFromNumber(number) {
@@ -640,8 +651,14 @@ wss.on("connection", (ws, req) => {
       wsToRelay.delete(ws);
       metadata.delete(ws);
       console.log('[RELAY] Relay WS closed:', relay?.country, code, reason);
+      let closedRelayId = null;
       for (const [id, r] of relays) {
-        if (r.ws === ws) { relays.delete(id); break; }
+        if (r.ws === ws) { relays.delete(id); closedRelayId = id; break; }
+      }
+      if (closedRelayId) {
+        for (const [key, thread] of smsThreads.entries()) {
+          if (thread.relayId === closedRelayId) smsThreads.delete(key);
+        }
       }
 
       for (const [callId, call] of pendingCalls.entries()) {
@@ -938,19 +955,22 @@ async function handle(ws, msg) {
       const relayId  = msg.relayId || `relay_${Math.random().toString(36).slice(2, 10)}`;
       const areaCode = msg.areaCode || null;   // e.g. "+1416"
       const country  = msg.country  || null;   // e.g. "CA"
+      const caps     = Array.isArray(msg.caps) ? msg.caps : [];
 
-      relays.set(relayId, { ws, areaCode, country, relay_mode: msg.relay_mode || 'both', registeredAt: Date.now() });
-      metadata.set(ws, { relayId, areaCode, country, relay_mode: msg.relay_mode || 'both' });
+      relays.set(relayId, { ws, areaCode, country, relay_mode: msg.relay_mode || 'both', caps, registeredAt: Date.now() });
+      metadata.set(ws, { relayId, areaCode, country, relay_mode: msg.relay_mode || 'both', caps });
 
       console.log('[RELAY] New relay registered:', {
         country: msg.country,
         relay_mode: msg.relay_mode,
+        caps,
         ocp_address: msg.ocp_address,
         number: msg.number
       });
       relayRegistry.set(ws, {
         country: msg.country || detectCountry(msg.number || ''),
         relay_mode: msg.relay_mode || 'both',
+        caps,
         ocp_address: msg.ocp_address || '',
         number: normalizeNumber(msg.number || ''),
         capacity: msg.capacity || 3,
@@ -1415,6 +1435,92 @@ async function handle(ws, msg) {
       break;
     }
 
+    // ── SMS_SEND ──────────────────────────────────────────────
+    // A → server: send an SMS to C via a relay in C's country
+    case 'sms_send': {
+      const to      = normalizeNumber(msg.to);
+      const country = msg.country || detectCountry(to);
+
+      if (!to) {
+        return send(ws, { type: 'sms_status', threadId: msg.threadId || null, status: 'error', error: 'invalid_number' });
+      }
+
+      const relayResult = findSmsCapableRelay(country);
+      if (!relayResult) {
+        return send(ws, { type: 'sms_status', threadId: msg.threadId || null, status: 'no_relay' });
+      }
+
+      const { relayId } = relayResult;
+      const threadKey   = `${relayId}|${to}`;
+      const existing    = smsThreads.get(threadKey);
+
+      // Busy lock: a different A is actively using this (relay, cNumber) pair
+      if (existing && existing.aWs !== ws && existing.aWs?.readyState === 1) {
+        return send(ws, { type: 'sms_status', threadId: msg.threadId || null, status: 'busy' });
+      }
+
+      // Reuse stable threadId if same A already has a thread, else create one
+      const threadId = (existing?.aWs === ws && existing.threadId)
+        ? existing.threadId
+        : `sms_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+      smsThreads.set(threadKey, {
+        aWs:        ws,
+        aOcp:       msg.from || null,
+        cNumber:    to,
+        relayId,
+        threadId,
+        lastActive: Date.now()
+      });
+
+      send(relayResult.ws, { type: 'relay_sms', to, text: msg.text, threadId });
+      log('💬', `sms_send → relay ${relayId} | ${to} | thread ${threadId}`);
+      break;
+    }
+
+    // ── RELAY_SMS_STATUS ──────────────────────────────────────
+    // B → server: delivery status for an outbound SMS; forward to A
+    case 'relay_sms_status': {
+      for (const [, thread] of smsThreads.entries()) {
+        if (thread.threadId !== msg.threadId) continue;
+        thread.lastActive = Date.now();
+        if (thread.aWs?.readyState === 1) {
+          send(thread.aWs, {
+            type:     'sms_status',
+            threadId: msg.threadId,
+            status:   msg.status,
+            ...(msg.error ? { error: msg.error } : {})
+          });
+        }
+        break;
+      }
+      log('💬', 'relay_sms_status:', msg.threadId, msg.status);
+      break;
+    }
+
+    // ── RELAY_SMS_IN ──────────────────────────────────────────
+    // B → server: inbound SMS from C; route to the A that owns the thread
+    case 'relay_sms_in': {
+      const from      = normalizeNumber(msg.from);
+      const threadKey = `${msg.relayId}|${from}`;
+      const thread    = smsThreads.get(threadKey);
+      if (!thread) {
+        log('!', 'relay_sms_in: unmatched inbound sms from', from, 'relayId', msg.relayId);
+        break;
+      }
+      thread.lastActive = Date.now();
+      if (thread.aWs?.readyState === 1) {
+        send(thread.aWs, {
+          type:     'sms_in',
+          from:     msg.from,
+          text:     msg.text,
+          threadId: thread.threadId
+        });
+      }
+      log('💬', 'relay_sms_in:', from, '→ thread', thread.threadId);
+      break;
+    }
+
     // ── CALL.INVITE ───────────────────────────────────────────
     // USSD Go bridge sends this when a user dials in and presses 1
     case 'call.invite': {
@@ -1471,6 +1577,12 @@ setInterval(() => {
     if (now - call.ts > 5 * 60 * 1000) {
       pendingCalls.delete(callId);
       console.log('[RELAY] Cleaned up stale call:', callId);
+    }
+  }
+  for (const [key, thread] of smsThreads.entries()) {
+    if (now - thread.lastActive > 30 * 60 * 1000) {
+      smsThreads.delete(key);
+      console.log('[SMS] Pruned idle thread:', key);
     }
   }
 }, 60000);
