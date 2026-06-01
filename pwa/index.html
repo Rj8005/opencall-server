@@ -1383,6 +1383,7 @@ let currentDialedNumber  = '';
 let relayCallActive      = false;
 let micStream            = null;
 let audioSendInterval    = null;
+let currentCallId        = null;
 
 // ── Country / platform data ────────────────────────────────
 const COUNTRY_DATA = {
@@ -2066,9 +2067,10 @@ async function onMessage(msg) {
     case 'relay_connected': {
       clearTimeout(relayTimeout);
       relayTimeout = null;
-      LOG.relay('✅ C answered! Starting WebRTC...');
 
+      LOG.relay('✅ C answered! Setting up WebRTC...');
       relayCallActive = true;
+      currentCallId = msg.callId;
       stopRingback();
 
       const hint = document.getElementById('dial-hint');
@@ -2077,45 +2079,62 @@ async function onMessage(msg) {
         hint.style.color = 'var(--green)';
       }
 
-      // Create peer connection — A is the offerer
+      // Create peer connection
       if (peerConnection) { peerConnection.close(); peerConnection = null; }
-      peerConnection = new RTCPeerConnection(RTC_CFG);
+      peerConnection = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
+        ]
+      });
 
-      // Ensure AudioContext is active before audio arrives
-      window._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      if (window._audioCtx.state === 'suspended') {
-        window._audioCtx.resume();
-      }
-
-      // ICE candidates → server → B
+      // ICE candidates → server → relay B
       peerConnection.onicecandidate = (e) => {
         if (e.candidate) {
           LOG.ice('Sending ICE to relay B');
-          wsSend({ type: 'ice', callId, candidate: e.candidate.toJSON() });
+          wsSend({
+            type: 'ice',
+            callId: currentCallId,
+            candidate: e.candidate.toJSON()
+          });
         }
       };
 
+      // ICE state changes
       peerConnection.oniceconnectionstatechange = () => {
         const state = peerConnection.iceConnectionState;
         LOG.webrtc('ICE state: ' + state);
         if (state === 'connected' || state === 'completed') {
           LOG.webrtc('✅ WebRTC connected to relay B!');
+          showActiveCallOverlay();
+          startTimer();
+          setConnectionStatus('calling');
           if (hint) {
             hint.textContent = '🔊 Call live';
             hint.style.color = 'var(--green)';
           }
-          document.getElementById('call-status-detail').textContent = 'Connected via relay';
-          document.getElementById('caller-avatar').classList.remove('ringing');
-          setConnectionStatus('calling');
-          showActiveCallOverlay();
-          if (!timerInterval) startTimer();
         }
         if (state === 'failed') {
           LOG.err('ICE failed — restarting');
           peerConnection.restartIce();
         }
         if (state === 'disconnected') {
-          LOG.webrtc('ICE disconnected — attempting restart in 2s');
+          LOG.webrtc('ICE disconnected — restarting in 2s');
           setTimeout(() => {
             if (peerConnection?.iceConnectionState === 'disconnected') {
               peerConnection.restartIce();
@@ -2124,10 +2143,9 @@ async function onMessage(msg) {
         }
       };
 
-      // B's audio (C's voice) arrives here
+      // C's voice arrives here via relay B's AudioRecord
       peerConnection.ontrack = (e) => {
-        LOG.webrtc('✅ Audio track from relay B received');
-        const stream = e.streams[0];
+        LOG.webrtc('✅ Audio track from relay B (C voice)');
 
         let audio = document.getElementById('relay-audio');
         if (!audio) {
@@ -2135,71 +2153,61 @@ async function onMessage(msg) {
           audio.id = 'relay-audio';
           audio.autoplay = true;
           audio.playsInline = true;
-          audio.controls = false;
           document.body.appendChild(audio);
         }
-
-        audio.srcObject = stream;
+        audio.srcObject = e.streams[0];
         audio.volume = 1.0;
-        audio.muted = false;
-
-        // Method 1: direct play
         audio.play().then(() => {
-          LOG.webrtc('✅ Audio playing — you should hear C now');
+          LOG.webrtc('✅ Audio playing — you hear C now');
         }).catch(err => {
-          LOG.err('Direct play blocked: ' + err.message);
-
-          // Method 2: AudioContext route (bypasses autoplay policy)
-          try {
-            const ctx = new AudioContext();
-            const source = ctx.createMediaStreamSource(stream);
-            source.connect(ctx.destination);
-            ctx.resume().then(() => {
-              LOG.webrtc('✅ Audio via AudioContext — you should hear C');
-            });
-          } catch(err2) {
-            LOG.err('AudioContext also failed: ' + err2.message);
-
-            // Method 3: tap-to-hear button
-            document.getElementById('tap-to-hear-btn')?.remove();
-            const btn = document.createElement('button');
-            btn.id = 'tap-to-hear-btn';
-            btn.textContent = '🔊 Tap to hear call';
-            btn.style.cssText = [
-              'position:fixed', 'top:50%', 'left:50%',
-              'transform:translate(-50%,-50%)',
-              'background:#1d9e75', 'color:white',
-              'border:none', 'border-radius:16px',
-              'padding:18px 32px', 'font-size:16px',
-              'font-weight:700', 'z-index:9999', 'cursor:pointer',
-              'box-shadow:0 8px 32px rgba(29,158,117,0.5)'
-            ].join(';');
-            btn.onclick = () => { audio.play().catch(() => {}); btn.remove(); };
-            document.body.appendChild(btn);
-          }
+          LOG.err('Autoplay blocked: ' + err.message);
+          const btn = document.createElement('button');
+          btn.textContent = '🔊 Tap to hear call';
+          btn.style.cssText = `
+            position:fixed;top:50%;left:50%;
+            transform:translate(-50%,-50%);
+            background:#1d9e75;color:white;
+            border:none;border-radius:16px;
+            padding:18px 32px;font-size:16px;
+            font-weight:700;z-index:9999;cursor:pointer;
+          `;
+          btn.onclick = () => { audio.play(); btn.remove(); };
+          document.getElementById('tap-to-hear-btn')?.remove();
+          btn.id = 'tap-to-hear-btn';
+          document.body.appendChild(btn);
         });
-
-        if (hint) hint.textContent = '🔊 Call live — audio connected';
       };
 
       // Add A's microphone
+      // This goes → WebRTC → relay B's onAddTrack → AudioTrack → GSM → C
       try {
         micStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 }
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 16000,
+            channelCount: 1
+          }
         });
-        micStream.getTracks().forEach(track => {
-          peerConnection.addTrack(track, micStream);
-          LOG.webrtc('Mic track added');
+        micStream.getTracks().forEach(t => {
+          peerConnection.addTrack(t, micStream);
         });
+        LOG.webrtc('Mic track added');
       } catch(e) {
         LOG.err('Mic failed: ' + e.message);
       }
 
-      // Create offer → send to B via server
+      // Create SDP offer and send to relay B via server
       try {
-        const offer = await peerConnection.createOffer();
+        const offer = await peerConnection.createOffer({
+          offerToReceiveAudio: true
+        });
         await peerConnection.setLocalDescription(offer);
-        wsSend({ type: 'sdp_offer', callId, sdp: { type: offer.type, sdp: offer.sdp } });
+        wsSend({
+          type: 'sdp_offer',
+          callId: currentCallId,
+          sdp: { type: offer.type, sdp: offer.sdp }
+        });
         LOG.webrtc('SDP offer sent to relay B');
       } catch(e) {
         LOG.err('createOffer failed: ' + e.message);
@@ -3466,27 +3474,29 @@ async function doHangup() {
   relayTimeout = null;
   relayCallActive = false;
 
-  try {
-    peerConnection?.close();
-    peerConnection = null;
-  } catch(e) {}
+  try { peerConnection?.close(); } catch(e) {}
+  peerConnection = null;
 
   try {
     micStream?.getTracks()?.forEach(t => t.stop());
-    micStream = null;
   } catch(e) {}
+  micStream = null;
 
   const audio = document.getElementById('relay-audio');
-  if (audio) audio.srcObject = null;
-
-  if (callMode === 'relay') {
-    await wsSend({ type: 'call.hangup', callId });
-  } else {
-    await wsSend({ type: 'hangup', callId, with: callWith });
+  if (audio) {
+    try { audio.srcObject = null; } catch(e) {}
   }
+
+  document.getElementById('tap-to-hear-btn')?.remove();
+
+  if (currentCallId) {
+    await wsSend({ type: 'call.hangup', callId: currentCallId });
+  }
+  currentCallId = null;
 
   LOG.relay('📴 Call ended — cleaned up');
   endCall();
+  setConnectionStatus('online');
 }
 function endCall() {
   hideActiveCallOverlay();
