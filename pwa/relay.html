@@ -19,7 +19,8 @@
 <div id="status">Initializing...</div>
 <div id="log"></div>
 
-<audio id="remote-audio" autoplay playsinline></audio>
+<audio id="remote-audio" autoplay playsinline
+       style="display:none"></audio>
 
 <script>
 const log = (msg, type='info') => {
@@ -326,10 +327,29 @@ async function setupPeerConnection(callId) {
     };
 
     pc.ontrack = (e) => {
-      log('✅ Audio track received from A!', 'ok');
+      log('✅ Audio track from A received', 'ok');
       log('  stream id: ' + (e.streams[0]?.id || 'none'), 'info');
+
       const audio = document.getElementById('remote-audio');
       audio.srcObject = e.streams[0];
+
+      audio.play().then(() => {
+        log('✅ A audio playing through device', 'ok');
+      }).catch(err => {
+        log('Audio play error: ' + err.message, 'err');
+        setTimeout(() => {
+          audio.play().catch(e => log('Retry failed: ' + e.message, 'err'));
+        }, 500);
+      });
+
+      // Notify Android to set audio routing for bridge
+      // Android sets speakerphone so GSM mic can pick up A's voice
+      if (window.AndroidRelay) {
+        try { window.AndroidRelay.onAudioTrackReceived(); } catch(e) {
+          // onAudioTrackReceived not yet in this APK version — fall back
+          try { window.AndroidRelay.onWebRTCConnected(); } catch(e2) {}
+        }
+      }
     };
 
     try {
