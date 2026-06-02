@@ -308,6 +308,14 @@ body::after {
   background: var(--blue-dim); color: var(--blue);
   border: 1px solid var(--blue-border);
 }
+.share-btn-primary {
+  width: 100%; margin-bottom: 10px;
+  padding: 13px; border-radius: var(--radius-md);
+  background: var(--blue); color: #03161b;
+  font-weight: 700; font-size: 14px;
+  border: none; cursor: pointer; transition: opacity 0.2s;
+}
+.share-btn-primary:hover { opacity: 0.85; }
 .share-section-label {
   font-size: 9px; color: var(--text-muted);
   letter-spacing: 0.8px; text-transform: uppercase;
@@ -761,6 +769,8 @@ input::placeholder { color: var(--text-muted); }
         &#9742; Trigger missed call via relay
       </button>
 
+      <button id="share-native" class="share-btn-primary">&#128279; Share invite…</button>
+
       <div class="share-section-label">Or share the link directly</div>
       <div class="share-grid">
         <div class="share-btn" id="share-whatsapp">
@@ -780,6 +790,9 @@ input::placeholder { color: var(--text-muted); }
         </div>
         <div class="share-btn" id="share-copy">
           <span class="share-icon">&#128203;</span>Copy link
+        </div>
+        <div class="share-btn" id="share-qr">
+          <span class="share-icon">&#9638;</span>Show QR
         </div>
       </div>
 
@@ -2611,6 +2624,12 @@ function showShareCard(link, cId, shareOptions) {
   });
   const copyEl = document.getElementById('share-copy');
   if (copyEl) copyEl.onclick = () => copyAnswerLink(link);
+
+  const nativeEl = document.getElementById('share-native');
+  if (nativeEl) nativeEl.onclick = () => nativeShare(window._shareLink);
+
+  const qrEl = document.getElementById('share-qr');
+  if (qrEl) qrEl.onclick = () => showQRCode(window._shareLink);
 
   // Relay buttons: no-op until relay_found wires them
   const bSMS  = document.getElementById('btn-relay-sms');
