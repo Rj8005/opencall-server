@@ -852,18 +852,30 @@ async function handle(ws, msg) {
   if (msg.type === 'sdp_offer') {
     try {
       const call = pendingCalls.get(msg.callId);
-      if (!call) { return; }
-      const role = getCallRole(ws, call);
-      console.log('[SDP_OFFER] role:', role, 'callId:', msg.callId?.slice(-6));
-      if (role === 'caller') {
-        if (call.relayWs?.readyState === 1) {
-          call.relayWs.send(JSON.stringify(msg));
-          console.log('[SDP_OFFER] ✅ A→B forwarded');
+      if (call) {
+        // Relay path: forward A→B via pendingCalls
+        const role = getCallRole(ws, call);
+        console.log('[SDP_OFFER] role:', role, 'callId:', msg.callId?.slice(-6));
+        if (role === 'caller') {
+          if (call.relayWs?.readyState === 1) {
+            call.relayWs.send(JSON.stringify(msg));
+            console.log('[SDP_OFFER] ✅ A→B forwarded');
+          } else {
+            console.log('[SDP_OFFER] ❌ relayWs not open:', call.relayWs?.readyState);
+          }
         } else {
-          console.log('[SDP_OFFER] ❌ relayWs not open:', call.relayWs?.readyState);
+          console.log('[SDP_OFFER] unexpected role:', role, '— ignoring');
         }
       } else {
-        console.log('[SDP_OFFER] unexpected role:', role, '— ignoring');
+        // Direct OCP-to-OCP path: no pendingCall entry, route by msg.to number
+        const from     = metadata.get(ws)?.number || null;
+        const targetWs = msg.to ? registry.get(msg.to) : null;
+        if (targetWs?.readyState === 1) {
+          targetWs.send(JSON.stringify({ type: 'sdp_offer', from, sdp: msg.sdp }));
+          console.log('[SDP_OFFER] ✅ direct', from, '→', msg.to);
+        } else {
+          console.log('[SDP_OFFER] ❌ direct target not found/open, to:', msg.to, 'readyState:', targetWs?.readyState);
+        }
       }
     } catch(e) { console.error('[SDP_OFFER]', e.message); }
     return;
@@ -872,17 +884,29 @@ async function handle(ws, msg) {
   if (msg.type === 'sdp_answer') {
     try {
       const call = pendingCalls.get(msg.callId);
-      if (!call) { return; }
-      const role = getCallRole(ws, call);
-      console.log('[SDP_ANSWER] role:', role, 'callId:', msg.callId?.slice(-6));
-      if (role === 'relay') {
-        call.relayWs = ws;  // refresh reference on every message from relay
-        if (call.callerWs?.readyState === 1) {
-          call.callerWs.send(JSON.stringify(msg));
-          console.log('[SDP_ANSWER] ✅ B→A forwarded');
+      if (call) {
+        // Relay path: forward B→A via pendingCalls
+        const role = getCallRole(ws, call);
+        console.log('[SDP_ANSWER] role:', role, 'callId:', msg.callId?.slice(-6));
+        if (role === 'relay') {
+          call.relayWs = ws;  // refresh reference on every message from relay
+          if (call.callerWs?.readyState === 1) {
+            call.callerWs.send(JSON.stringify(msg));
+            console.log('[SDP_ANSWER] ✅ B→A forwarded');
+          }
+        } else {
+          console.log('[SDP_ANSWER] unexpected role:', role, '— ignoring');
         }
       } else {
-        console.log('[SDP_ANSWER] unexpected role:', role, '— ignoring');
+        // Direct OCP-to-OCP path: no pendingCall entry, route by msg.to number
+        const from     = metadata.get(ws)?.number || null;
+        const targetWs = msg.to ? registry.get(msg.to) : null;
+        if (targetWs?.readyState === 1) {
+          targetWs.send(JSON.stringify({ type: 'sdp_answer', from, sdp: msg.sdp }));
+          console.log('[SDP_ANSWER] ✅ direct', from, '→', msg.to);
+        } else {
+          console.log('[SDP_ANSWER] ❌ direct target not found/open, to:', msg.to, 'readyState:', targetWs?.readyState);
+        }
       }
     } catch(e) { console.error('[SDP_ANSWER]', e.message); }
     return;
@@ -891,24 +915,35 @@ async function handle(ws, msg) {
   if (msg.type === 'ice') {
     try {
       const call = pendingCalls.get(msg.callId);
-      if (!call) return;
-      const role = getCallRole(ws, call);
-      if (role === 'caller') {
-        if (call.relayWs?.readyState === 1) {
-          call.relayWs.send(JSON.stringify(msg));
+      if (call) {
+        // Relay path: forward via pendingCalls
+        const role = getCallRole(ws, call);
+        if (role === 'caller') {
+          if (call.relayWs?.readyState === 1) {
+            call.relayWs.send(JSON.stringify(msg));
+          } else {
+            console.log('[ICE] ❌ relayWs not open, readyState:', call.relayWs?.readyState);
+          }
+        } else if (role === 'relay') {
+          call.relayWs = ws;  // refresh reference on every message from relay
+          call.iceState = 'exchanging';
+          if (call.callerWs?.readyState === 1) {
+            call.callerWs.send(JSON.stringify(msg));
+          } else {
+            console.log('[ICE] ❌ callerWs not open for B→A forward');
+          }
         } else {
-          console.log('[ICE] ❌ relayWs not open, readyState:', call.relayWs?.readyState);
-        }
-      } else if (role === 'relay') {
-        call.relayWs = ws;  // refresh reference on every message from relay
-        call.iceState = 'exchanging';
-        if (call.callerWs?.readyState === 1) {
-          call.callerWs.send(JSON.stringify(msg));
-        } else {
-          console.log('[ICE] ❌ callerWs not open for B→A forward');
+          console.log('[ICE] unknown role for ws, callId:', msg.callId?.slice(-6));
         }
       } else {
-        console.log('[ICE] unknown role for ws, callId:', msg.callId?.slice(-6));
+        // Direct OCP-to-OCP path: no pendingCall entry, route by msg.to number
+        const from     = metadata.get(ws)?.number || null;
+        const targetWs = msg.to ? registry.get(msg.to) : null;
+        if (targetWs?.readyState === 1) {
+          targetWs.send(JSON.stringify({ type: 'ice', from, candidate: msg.candidate }));
+        } else {
+          console.log('[ICE] ❌ direct target not found/open, to:', msg.to, 'readyState:', targetWs?.readyState);
+        }
       }
     } catch(e) { console.error('[ICE]', e.message); }
     return;
