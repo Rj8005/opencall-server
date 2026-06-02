@@ -1496,6 +1496,7 @@ async function subscribePush() {
 let ws            = null;
 let pc            = null;       // RTCPeerConnection (direct/link calls)
 let peerConnection = null;      // RTCPeerConnection (relay WebRTC)
+let iceCandidateQueue = [];     // buffer ICE candidates that arrive before setRemoteDescription
 let localStream   = null;
 let myNumber      = null;
 let myName        = null;
@@ -1645,23 +1646,13 @@ const RTC_CFG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    }
+    { urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478', username: 'ocp', credential: 'opencall2026' },
+    { urls: 'turn:ocp-node.onrender.com:3478',             username: 'ocp', credential: 'opencall2026' }
   ]
 };
+console.log('[WRTC] RTC_CFG iceServers:', JSON.stringify(RTC_CFG.iceServers),
+  '| turn entries:', RTC_CFG.iceServers.filter(s => s.urls.startsWith('turn:')).length,
+  '| has credential:', RTC_CFG.iceServers.some(s => s.credential));
 
 // ── keypad wiring ───────────────────────────────────────────
 function syncDialDisplay() {
@@ -2003,7 +1994,20 @@ async function onMessage(msg) {
       pc.ontrack = e => {
         const audio = document.getElementById('remote-audio');
         audio.srcObject = e.streams[0];
-        audio.play().catch(() => {});
+        audio.play()
+          .then(() => { const b = document.getElementById('tap-to-hear'); if (b) b.style.display = 'none'; })
+          .catch(() => {
+            let b = document.getElementById('tap-to-hear');
+            if (!b) {
+              b = document.createElement('button');
+              b.id = 'tap-to-hear';
+              b.textContent = '🔊 Tap to hear';
+              b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+              document.body.appendChild(b);
+            }
+            b.style.display = 'block';
+            b.onclick = () => { audio.play(); b.style.display = 'none'; };
+          });
         document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
         document.getElementById('caller-avatar').classList.remove('ringing');
         if (!timerInterval) startTimer();
@@ -2083,8 +2087,23 @@ async function onMessage(msg) {
             remoteAudio.srcObject = e.streams[0];
             console.log('[WRTC] remote-audio srcObject set (sdp_offer), streamId:', e.streams[0]?.id);
             remoteAudio.play()
-              .then(() => console.log('[WRTC] remote-audio play OK (sdp_offer)'))
-              .catch(err => console.log('[WRTC] remote-audio play BLOCKED (sdp_offer):', err.name, err.message));
+              .then(() => {
+                console.log('[WRTC] remote-audio play OK (sdp_offer)');
+                const b = document.getElementById('tap-to-hear'); if (b) b.style.display = 'none';
+              })
+              .catch(err => {
+                console.log('[WRTC] remote-audio play BLOCKED (sdp_offer):', err.name, err.message);
+                let b = document.getElementById('tap-to-hear');
+                if (!b) {
+                  b = document.createElement('button');
+                  b.id = 'tap-to-hear';
+                  b.textContent = '🔊 Tap to hear';
+                  b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+                  document.body.appendChild(b);
+                }
+                b.style.display = 'block';
+                b.onclick = () => { remoteAudio.play(); b.style.display = 'none'; };
+              });
           }
         };
 
@@ -2108,6 +2127,7 @@ async function onMessage(msg) {
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
           LOG.webrtc('Remote description (B\'s offer) set');
           console.log('[WRTC] setRemoteDescription OK (sdp_offer)');
+          await flushIce(pc);
         } catch(e) {
           console.log('[WRTC] setRemoteDescription FAILED (sdp_offer):', e.message);
           throw e;
@@ -2143,6 +2163,7 @@ async function onMessage(msg) {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
           LOG.webrtc('✅ Remote description set');
           console.log('[WRTC] setRemoteDescription OK (sdp_answer, peerConnection)');
+          await flushIce(peerConnection);
         } catch(e) {
           LOG.err('setRemoteDescription failed: ' + e.message);
           console.log('[WRTC] setRemoteDescription FAILED (sdp_answer, peerConnection):', e.message);
@@ -2152,6 +2173,7 @@ async function onMessage(msg) {
         try {
           await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
           console.log('[WRTC] setRemoteDescription OK (sdp_answer, pc/direct)');
+          await flushIce(pc);
         } catch(e) {
           console.log('[WRTC] setRemoteDescription FAILED (sdp_answer, pc/direct):', e.message);
         }
@@ -2161,10 +2183,14 @@ async function onMessage(msg) {
 
     case 'ice': {
       const conn = peerConnection || pc;
-      if (conn && msg.candidate) {
-        try {
-          await conn.addIceCandidate(new RTCIceCandidate(msg.candidate));
-        } catch(e) {}
+      if (msg.candidate) {
+        if (conn && conn.remoteDescription && conn.remoteDescription.type) {
+          try { await conn.addIceCandidate(new RTCIceCandidate(msg.candidate)); }
+          catch(e) { console.warn('[WRTC] addIceCandidate failed', e); }
+        } else {
+          iceCandidateQueue.push(msg.candidate);
+          console.log('[WRTC] queued ICE (no remoteDescription yet), size:', iceCandidateQueue.length);
+        }
       }
       break;
     }
@@ -2245,27 +2271,7 @@ async function onMessage(msg) {
 
       // Create peer connection
       if (peerConnection) { peerConnection.close(); peerConnection = null; }
-      peerConnection = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          }
-        ]
-      });
+      peerConnection = new RTCPeerConnection(RTC_CFG);
       console.log('[WRTC] relay_connected peerConnection iceServers:', JSON.stringify(peerConnection.getConfiguration().iceServers));
 
       // ICE candidates → server → relay B
@@ -2325,27 +2331,26 @@ async function onMessage(msg) {
         audio.srcObject = e.streams[0];
         console.log('[WRTC] relay-audio srcObject set, streamId:', e.streams[0]?.id);
         audio.volume = 1.0;
-        audio.play().then(() => {
-          LOG.webrtc('✅ Audio playing — you hear C now');
-          console.log('[WRTC] relay-audio play OK');
-        }).catch(err => {
-          LOG.err('Autoplay blocked: ' + err.message);
-          console.log('[WRTC] relay-audio play BLOCKED:', err.name, err.message);
-          const btn = document.createElement('button');
-          btn.textContent = '🔊 Tap to hear call';
-          btn.style.cssText = `
-            position:fixed;top:50%;left:50%;
-            transform:translate(-50%,-50%);
-            background:#1d9e75;color:white;
-            border:none;border-radius:16px;
-            padding:18px 32px;font-size:16px;
-            font-weight:700;z-index:9999;cursor:pointer;
-          `;
-          btn.onclick = () => { audio.play(); btn.remove(); };
-          document.getElementById('tap-to-hear-btn')?.remove();
-          btn.id = 'tap-to-hear-btn';
-          document.body.appendChild(btn);
-        });
+        audio.play()
+          .then(() => {
+            LOG.webrtc('✅ Audio playing — you hear C now');
+            console.log('[WRTC] relay-audio play OK');
+            const b = document.getElementById('tap-to-hear'); if (b) b.style.display = 'none';
+          })
+          .catch(err => {
+            LOG.err('Autoplay blocked: ' + err.message);
+            console.log('[WRTC] relay-audio play BLOCKED:', err.name, err.message);
+            let b = document.getElementById('tap-to-hear');
+            if (!b) {
+              b = document.createElement('button');
+              b.id = 'tap-to-hear';
+              b.textContent = '🔊 Tap to hear';
+              b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+              document.body.appendChild(b);
+            }
+            b.style.display = 'block';
+            b.onclick = () => { audio.play(); b.style.display = 'none'; };
+          });
       };
 
       // Add A's microphone
@@ -3706,7 +3711,7 @@ async function doHangup() {
     try { audio.srcObject = null; } catch(e) {}
   }
 
-  document.getElementById('tap-to-hear-btn')?.remove();
+  document.getElementById('tap-to-hear')?.remove();
 
   if (currentCallId) {
     await wsSend({ type: 'call.hangup', callId: currentCallId });
@@ -3774,8 +3779,23 @@ async function initWebRTC(isCaller) {
     audio.srcObject = e.streams[0];
     console.log('[WRTC] remote-audio srcObject set (initWebRTC), streamId:', e.streams[0]?.id);
     audio.play()
-      .then(() => console.log('[WRTC] remote-audio play OK (initWebRTC)'))
-      .catch(err => console.log('[WRTC] remote-audio play BLOCKED (initWebRTC):', err.name, err.message));
+      .then(() => {
+        console.log('[WRTC] remote-audio play OK (initWebRTC)');
+        const b = document.getElementById('tap-to-hear'); if (b) b.style.display = 'none';
+      })
+      .catch(err => {
+        console.log('[WRTC] remote-audio play BLOCKED (initWebRTC):', err.name, err.message);
+        let b = document.getElementById('tap-to-hear');
+        if (!b) {
+          b = document.createElement('button');
+          b.id = 'tap-to-hear';
+          b.textContent = '🔊 Tap to hear';
+          b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+          document.body.appendChild(b);
+        }
+        b.style.display = 'block';
+        b.onclick = () => { audio.play(); b.style.display = 'none'; };
+      });
   };
 
   pc.onicecandidate = async e => {
@@ -3810,11 +3830,22 @@ async function initWebRTC(isCaller) {
   }
 }
 
+async function flushIce(conn) {
+  if (!conn) return;
+  const q = iceCandidateQueue; iceCandidateQueue = [];
+  for (const c of q) {
+    try { await conn.addIceCandidate(new RTCIceCandidate(c)); }
+    catch(e) { console.warn('[WRTC] flush addIceCandidate failed', e); }
+  }
+  if (q.length) console.log('[WRTC] flushed', q.length, 'queued ICE');
+}
+
 async function handleOffer(sdp, from) {
   if (!pc) await initWebRTC(false);
   try {
     await pc.setRemoteDescription({ type:'offer', sdp });
     console.log('[WRTC] handleOffer setRemoteDescription OK');
+    await flushIce(pc);
   } catch(e) {
     console.log('[WRTC] handleOffer setRemoteDescription FAILED:', e.message);
   }
@@ -3827,6 +3858,7 @@ async function handleOffer(sdp, from) {
     console.log('[WRTC] handleOffer setLocalDescription FAILED:', e.message);
   }
   await wsSend({ type:'sdp_answer', to:from, sdp:answer.sdp });
+  console.log('[WRTC] sent sdp_answer');
 }
 
 // ── call timer ─────────────────────────────────────────────

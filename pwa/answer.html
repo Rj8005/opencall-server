@@ -494,9 +494,10 @@ let callStartTime = null;
 let timerInterval = null;
 let isMuted       = false;
 let isSpeakerOff  = false;
-let userAnswered  = false;
-let pendingOffer  = null;
-let pendingCallId = null;
+let userAnswered      = false;
+let pendingOffer      = null;
+let pendingCallId     = null;
+let iceCandidateQueue = [];     // buffer ICE candidates that arrive before setRemoteDescription
 
 // ── Screen management ───────────────────────────────────────────
 function showScreen(id) {
@@ -602,8 +603,14 @@ async function onMessage(event) {
     }
 
     case 'ice':
-      if (pc && msg.candidate) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch(e) {}
+      if (msg.candidate) {
+        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); }
+          catch(e) { console.warn('[WRTC] addIceCandidate failed', e); }
+        } else {
+          iceCandidateQueue.push(msg.candidate);
+          console.log('[WRTC] queued ICE (no remoteDescription yet), size:', iceCandidateQueue.length);
+        }
       }
       break;
 
@@ -659,6 +666,16 @@ async function answerCall() {
   }
 }
 
+async function flushIce(conn) {
+  if (!conn) return;
+  const q = iceCandidateQueue; iceCandidateQueue = [];
+  for (const c of q) {
+    try { await conn.addIceCandidate(new RTCIceCandidate(c)); }
+    catch(e) { console.warn('[WRTC] flush addIceCandidate failed', e); }
+  }
+  if (q.length) console.log('[WRTC] flushed', q.length, 'queued ICE');
+}
+
 // ── WebRTC: handle SDP offer from caller ────────────────────────
 async function handleOffer(sdp, offerCallId) {
   pc = new RTCPeerConnection(RTC_CFG);
@@ -669,7 +686,20 @@ async function handleOffer(sdp, offerCallId) {
   pc.ontrack = e => {
     if (audio.srcObject !== e.streams[0]) {
       audio.srcObject = e.streams[0];
-      audio.play().catch(() => {});
+      audio.play()
+        .then(() => { const b = document.getElementById('tap-to-hear'); if (b) b.style.display = 'none'; })
+        .catch(() => {
+          let b = document.getElementById('tap-to-hear');
+          if (!b) {
+            b = document.createElement('button');
+            b.id = 'tap-to-hear';
+            b.textContent = '🔊 Tap to hear';
+            b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+            document.body.appendChild(b);
+          }
+          b.style.display = 'block';
+          b.onclick = () => { audio.play(); b.style.display = 'none'; };
+        });
     }
   };
 
@@ -692,6 +722,8 @@ async function handleOffer(sdp, offerCallId) {
   };
 
   await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+  console.log('[WRTC] handleOffer setRemoteDescription OK');
+  await flushIce(pc);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
 
