@@ -2043,9 +2043,11 @@ async function onMessage(msg) {
         if (pc) { pc.close(); pc = null; }
         pc = new RTCPeerConnection(RTC_CFG);
         LOG.webrtc('PeerConnection created', { iceServers: RTC_CFG.iceServers.length });
+        console.log('[WRTC] sdp_offer/pc iceServers:', JSON.stringify(RTC_CFG.iceServers));
 
         pc.onicecandidate = async e => {
           if (e.candidate) {
+            console.log('[WRTC] ICE candidate (sdp_offer):', e.candidate.type, e.candidate.candidate.split(' ').slice(0,8).join(' '));
             LOG.ice('Sending ICE candidate to relay B');
             await wsSend({ type: 'ice', callId: msg.callId, candidate: e.candidate.toJSON() });
           } else {
@@ -2075,16 +2077,26 @@ async function onMessage(msg) {
         pc.ontrack = e => {
           LOG.webrtc('✅ AUDIO TRACK RECEIVED from relay (this is C speaking)');
           LOG.webrtc('Stream tracks: ' + (e.streams[0]?.getTracks()?.length ?? 0));
+          console.log('[WRTC] ontrack fired (sdp_offer) — kind:', e.track.kind, 'streamId:', e.streams[0]?.id, 'enabled:', e.track.enabled, 'muted:', e.track.muted);
           const remoteAudio = document.getElementById('remote-audio');
           if (remoteAudio) {
             remoteAudio.srcObject = e.streams[0];
-            remoteAudio.play().catch(() => {});
+            console.log('[WRTC] remote-audio srcObject set (sdp_offer), streamId:', e.streams[0]?.id);
+            remoteAudio.play()
+              .then(() => console.log('[WRTC] remote-audio play OK (sdp_offer)'))
+              .catch(err => console.log('[WRTC] remote-audio play BLOCKED (sdp_offer):', err.name, err.message));
           }
         };
 
         try {
           localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+          console.log('[WRTC] getUserMedia OK (sdp_offer) — audioTracks:', localStream.getAudioTracks().length,
+            localStream.getAudioTracks().map(t => 'enabled:'+t.enabled+' muted:'+t.muted));
+          localStream.getTracks().forEach(track => {
+            console.log('[WRTC] addTrack (before createAnswer) — kind:', track.kind, 'enabled:', track.enabled);
+            pc.addTrack(track, localStream);
+          });
+          console.log('[WRTC] addTrack done — senders now:', pc.getSenders().length);
           LOG.webrtc('Microphone acquired, tracks added to PeerConnection');
         } catch(e) {
           LOG.err('Microphone access denied', { error: e.message });
@@ -2092,11 +2104,23 @@ async function onMessage(msg) {
           break;
         }
 
-        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-        LOG.webrtc('Remote description (B\'s offer) set');
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          LOG.webrtc('Remote description (B\'s offer) set');
+          console.log('[WRTC] setRemoteDescription OK (sdp_offer)');
+        } catch(e) {
+          console.log('[WRTC] setRemoteDescription FAILED (sdp_offer):', e.message);
+          throw e;
+        }
         const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        LOG.webrtc('Local description (A\'s answer) set');
+        console.log('[WRTC] createAnswer type:', answer.type, '| m=audio:', answer.sdp.includes('m=audio'), '| sendrecv:', answer.sdp.includes('sendrecv'));
+        try {
+          await pc.setLocalDescription(answer);
+          LOG.webrtc('Local description (A\'s answer) set');
+          console.log('[WRTC] setLocalDescription OK (answer, sdp_offer)');
+        } catch(e) {
+          console.log('[WRTC] setLocalDescription FAILED (sdp_offer):', e.message);
+        }
 
         await wsSend({
           type:   'sdp_answer',
@@ -2118,12 +2142,19 @@ async function onMessage(msg) {
         try {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
           LOG.webrtc('✅ Remote description set');
+          console.log('[WRTC] setRemoteDescription OK (sdp_answer, peerConnection)');
         } catch(e) {
           LOG.err('setRemoteDescription failed: ' + e.message);
+          console.log('[WRTC] setRemoteDescription FAILED (sdp_answer, peerConnection):', e.message);
         }
       } else if (pc) {
         LOG.webrtc('📨 SDP answer received', { callId: msg.callId });
-        await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+        try {
+          await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+          console.log('[WRTC] setRemoteDescription OK (sdp_answer, pc/direct)');
+        } catch(e) {
+          console.log('[WRTC] setRemoteDescription FAILED (sdp_answer, pc/direct):', e.message);
+        }
       }
       break;
     }
@@ -2235,10 +2266,12 @@ async function onMessage(msg) {
           }
         ]
       });
+      console.log('[WRTC] relay_connected peerConnection iceServers:', JSON.stringify(peerConnection.getConfiguration().iceServers));
 
       // ICE candidates → server → relay B
       peerConnection.onicecandidate = (e) => {
         if (e.candidate) {
+          console.log('[WRTC] ICE candidate (relay_connected):', e.candidate.type, e.candidate.candidate.split(' ').slice(0,8).join(' '));
           LOG.ice('Sending ICE to relay B');
           wsSend({
             type: 'ice',
@@ -2279,6 +2312,7 @@ async function onMessage(msg) {
       // C's voice arrives here via relay B's AudioRecord
       peerConnection.ontrack = (e) => {
         LOG.webrtc('✅ Audio track from relay B (C voice)');
+        console.log('[WRTC] ontrack fired (relay_connected) — kind:', e.track.kind, 'streamId:', e.streams[0]?.id, 'enabled:', e.track.enabled, 'muted:', e.track.muted);
 
         let audio = document.getElementById('relay-audio');
         if (!audio) {
@@ -2289,11 +2323,14 @@ async function onMessage(msg) {
           document.body.appendChild(audio);
         }
         audio.srcObject = e.streams[0];
+        console.log('[WRTC] relay-audio srcObject set, streamId:', e.streams[0]?.id);
         audio.volume = 1.0;
         audio.play().then(() => {
           LOG.webrtc('✅ Audio playing — you hear C now');
+          console.log('[WRTC] relay-audio play OK');
         }).catch(err => {
           LOG.err('Autoplay blocked: ' + err.message);
+          console.log('[WRTC] relay-audio play BLOCKED:', err.name, err.message);
           const btn = document.createElement('button');
           btn.textContent = '🔊 Tap to hear call';
           btn.style.cssText = `
@@ -2322,8 +2359,12 @@ async function onMessage(msg) {
             channelCount: 1
           }
         });
+        console.log('[WRTC] getUserMedia OK (relay_connected) — audioTracks:', micStream.getAudioTracks().length,
+          micStream.getAudioTracks().map(t => 'enabled:'+t.enabled+' muted:'+t.muted));
         micStream.getTracks().forEach(t => {
+          console.log('[WRTC] addTrack (before createOffer) — kind:', t.kind, 'enabled:', t.enabled);
           peerConnection.addTrack(t, micStream);
+          console.log('[WRTC] addTrack done — senders now:', peerConnection.getSenders().length);
         });
         LOG.webrtc('Mic track added');
       } catch(e) {
@@ -2335,7 +2376,9 @@ async function onMessage(msg) {
         const offer = await peerConnection.createOffer({
           offerToReceiveAudio: true
         });
+        console.log('[WRTC] createOffer type:', offer.type, '| m=audio:', offer.sdp.includes('m=audio'), '| sendrecv:', offer.sdp.includes('sendrecv'));
         await peerConnection.setLocalDescription(offer);
+        console.log('[WRTC] setLocalDescription OK (offer, relay_connected)');
         wsSend({
           type: 'sdp_offer',
           callId: currentCallId,
@@ -2344,6 +2387,7 @@ async function onMessage(msg) {
         LOG.webrtc('SDP offer sent to relay B');
       } catch(e) {
         LOG.err('createOffer failed: ' + e.message);
+        console.log('[WRTC] createOffer/setLocalDescription FAILED:', e.message);
       }
 
       break;
@@ -3712,39 +3756,76 @@ async function initWebRTC(isCaller) {
     toast('Microphone access denied');
     doHangup(); return;
   }
+  console.log('[WRTC] getUserMedia OK (initWebRTC) — audioTracks:', localStream.getAudioTracks().length,
+    localStream.getAudioTracks().map(t => 'enabled:'+t.enabled+' muted:'+t.muted));
 
   pc = new RTCPeerConnection(RTC_CFG);
-  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  console.log('[WRTC] initWebRTC iceServers:', JSON.stringify(RTC_CFG.iceServers));
+
+  localStream.getTracks().forEach(t => {
+    console.log('[WRTC] addTrack (initWebRTC, before offer/answer) — kind:', t.kind, 'enabled:', t.enabled);
+    pc.addTrack(t, localStream);
+  });
+  console.log('[WRTC] addTrack done — senders now:', pc.getSenders().length);
 
   pc.ontrack = e => {
+    console.log('[WRTC] ontrack fired (initWebRTC) — kind:', e.track.kind, 'streamId:', e.streams[0]?.id, 'enabled:', e.track.enabled, 'muted:', e.track.muted);
     const audio = document.getElementById('remote-audio');
     audio.srcObject = e.streams[0];
-    audio.play().catch(()=>{});
+    console.log('[WRTC] remote-audio srcObject set (initWebRTC), streamId:', e.streams[0]?.id);
+    audio.play()
+      .then(() => console.log('[WRTC] remote-audio play OK (initWebRTC)'))
+      .catch(err => console.log('[WRTC] remote-audio play BLOCKED (initWebRTC):', err.name, err.message));
   };
 
   pc.onicecandidate = async e => {
-    if (e.candidate) await wsSend({ type:'ice', to:callWith, candidate:e.candidate });
+    if (e.candidate) {
+      console.log('[WRTC] ICE candidate (initWebRTC):', e.candidate.type, e.candidate.candidate.split(' ').slice(0,8).join(' '));
+      await wsSend({ type:'ice', to:callWith, candidate:e.candidate });
+    }
   };
 
   pc.oniceconnectionstatechange = () => {
+    console.log('[WRTC] iceConnectionState (initWebRTC):', pc?.iceConnectionState);
     if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
       toast('Connection lost');
       endCall();
     }
   };
 
+  pc.onconnectionstatechange = () => {
+    console.log('[WRTC] connectionState (initWebRTC):', pc?.connectionState);
+  };
+
   if (isCaller) {
     const offer = await pc.createOffer({ offerToReceiveAudio:true });
-    await pc.setLocalDescription(offer);
+    console.log('[WRTC] createOffer (initWebRTC) type:', offer.type, '| m=audio:', offer.sdp.includes('m=audio'), '| sendrecv:', offer.sdp.includes('sendrecv'));
+    try {
+      await pc.setLocalDescription(offer);
+      console.log('[WRTC] setLocalDescription OK (offer, initWebRTC)');
+    } catch(e) {
+      console.log('[WRTC] setLocalDescription FAILED (initWebRTC):', e.message);
+    }
     await wsSend({ type:'sdp_offer', to:callWith, sdp:offer.sdp });
   }
 }
 
 async function handleOffer(sdp, from) {
   if (!pc) await initWebRTC(false);
-  await pc.setRemoteDescription({ type:'offer', sdp });
+  try {
+    await pc.setRemoteDescription({ type:'offer', sdp });
+    console.log('[WRTC] handleOffer setRemoteDescription OK');
+  } catch(e) {
+    console.log('[WRTC] handleOffer setRemoteDescription FAILED:', e.message);
+  }
   const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
+  console.log('[WRTC] handleOffer createAnswer type:', answer.type, '| m=audio:', answer.sdp.includes('m=audio'), '| sendrecv:', answer.sdp.includes('sendrecv'));
+  try {
+    await pc.setLocalDescription(answer);
+    console.log('[WRTC] handleOffer setLocalDescription OK (answer)');
+  } catch(e) {
+    console.log('[WRTC] handleOffer setLocalDescription FAILED:', e.message);
+  }
   await wsSend({ type:'sdp_answer', to:from, sdp:answer.sdp });
 }
 
