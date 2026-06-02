@@ -2603,8 +2603,12 @@ function showShareCard(link, cId, shareOptions) {
   // Build share URLs from link and callee number
   const toNumber = (callWith && !callWith.startsWith('link:')) ? callWith : '';
   const num      = toNumber.replace(/[^0-9]/g, '');
-  const textMsg  = encodeURIComponent('Answer my free call — no app needed: ' + link);
-  const linkEnc  = encodeURIComponent(link);
+  // link is already a URL with pct-encoded chars (e.g. %2B for +).
+  // Decode once so encodeURIComponent doesn't double-encode % → %25.
+  let linkForMsg;
+  try { linkForMsg = decodeURIComponent(link); } catch(e) { linkForMsg = link; }
+  const textMsg  = encodeURIComponent('Answer my free call — no app needed: ' + linkForMsg);
+  const linkEnc  = encodeURIComponent(link); // used as ?url= param value — single encoding is correct
 
   const shareDefs = {
     'share-whatsapp': ['whatsapp://send?phone=' + num + '&text=' + textMsg,
@@ -2710,39 +2714,33 @@ function nativeShare(link) {
 }
 
 function showQRCode(link) {
-  const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='
-    + encodeURIComponent(link);
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position:fixed;inset:0;
-    background:rgba(0,0,0,0.88);
-    display:flex;flex-direction:column;
-    align-items:center;justify-content:center;
-    z-index:200;
-  `;
-  overlay.innerHTML = `
-    <img src="${qrUrl}"
-      style="border-radius:14px;border:4px solid #c8f55a;
-             width:220px;height:220px">
-    <div style="color:#c8f55a;font-size:14px;
-                margin:18px 0 6px;font-family:'Syne',sans-serif;
-                font-weight:600">
-      Point your camera at this
-    </div>
-    <div style="color:#555;font-size:12px;
-                font-family:'DM Mono',monospace;
-                margin-bottom:20px">
-      No app needed to scan
-    </div>
-    <button onclick="this.parentElement.remove()"
-      style="padding:10px 28px;background:#1a1a1a;
-             color:#888;border:1px solid #333;
-             border-radius:12px;cursor:pointer;
-             font-family:'DM Mono',monospace">
-      Close
-    </button>
-  `;
-  document.getElementById('app').appendChild(overlay);
+  if (!link) return;
+
+  let box = document.getElementById('ocp-qr-box');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'ocp-qr-box';
+    box.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:rgba(5,8,15,.92);';
+    document.body.appendChild(box);
+  }
+  box.innerHTML = '';
+
+  const img = document.createElement('img');
+  img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=' + encodeURIComponent(link);
+  img.alt = 'Scan to join';
+  img.style.cssText = 'width:260px;height:260px;border-radius:12px;background:#fff;padding:10px;';
+  box.appendChild(img);
+
+  const caption = document.createElement('div');
+  caption.textContent = 'Point your camera to join';
+  caption.style.cssText = 'color:#c8f55a;font-size:14px;font-weight:600;font-family:"Syne",sans-serif;';
+  box.appendChild(caption);
+
+  const close = document.createElement('button');
+  close.textContent = 'Close';
+  close.style.cssText = 'padding:12px 24px;border:0;border-radius:24px;background:#5fd6ea;color:#03161b;font-weight:700;cursor:pointer;';
+  close.onclick = () => box.remove();
+  box.appendChild(close);
 }
 
 // ── invite panel — worldwide reach-out system ──────────────
