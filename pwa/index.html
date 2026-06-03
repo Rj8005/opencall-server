@@ -937,38 +937,9 @@ function reconnectAndRejoin() {
   else doRegister();
 }
 
-// ── OCP Identity — Web Crypto API (no dependencies) ──────
+// ── OCP Identity — Wallet model (BIP-39 + Ed25519) ────────
+// Keys derived from a recovery phrase; never stored on any server.
 const OCP_KEY_STORAGE = 'ocp_identity_v1';
-
-async function generateIdentity() {
-  // Generate Ed25519 key pair using Web Crypto
-  const keyPair = await crypto.subtle.generateKey(
-    { name: 'Ed25519' },
-    true,
-    ['sign', 'verify']
-  );
-
-  // Export keys
-  const publicKeyRaw = await crypto.subtle.exportKey('raw', keyPair.publicKey);
-  const privateKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-  const publicKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-
-  // Compute fingerprint using SHA-256
-  const fingerprint = await crypto.subtle.digest('SHA-256', publicKeyRaw);
-  const fingerprintHex = Array.from(new Uint8Array(fingerprint))
-    .map(b => b.toString(16).padStart(2, '0')).join('');
-
-  const ocpAddress = 'ocp:' + fingerprintHex;
-
-  return {
-    privateKeyJwk,
-    publicKeyJwk,
-    publicKeyRaw: btoa(String.fromCharCode(...new Uint8Array(publicKeyRaw))),
-    fingerprint: fingerprintHex,
-    ocp_address: ocpAddress,
-    created: Date.now()
-  };
-}
 
 async function saveIdentity(identity) {
   localStorage.setItem(OCP_KEY_STORAGE, JSON.stringify(identity));
@@ -982,14 +953,216 @@ async function loadIdentity() {
 }
 
 async function getOrCreateIdentity() {
-  let identity = await loadIdentity();
-  if (!identity) {
-    console.log('[OCP] Generating new Ed25519 key pair...');
-    identity = await generateIdentity();
-    await saveIdentity(identity);
+  const cached = await loadIdentity();
+  if (cached) {
+    console.log('[OCP] Identity loaded:', cached.ocp_address);
+    return cached;
   }
-  console.log('[OCP] Identity loaded:', identity.ocp_address);
+  // No stored identity — run onboarding; blocks until user confirms phrase.
+  const identity = await _runWalletOnboarding();
+  await saveIdentity(identity);
   return identity;
+}
+
+// ── Wallet onboarding ──────────────────────────────────────
+// Returns a promise that resolves with a fully populated identity object
+// after the user backs up and confirms their 12-word recovery phrase.
+// The phrase itself is NEVER logged, NEVER transmitted, and goes out of
+// scope as soon as the keypair is derived.
+function _runWalletOnboarding() {
+  return new Promise((resolve, reject) => {
+    // Dynamic import — no hard module dependency in the main script.
+    import('./ocp-identity.js').then(({ generateMnemonic, mnemonicToKeypair, publicKeyToOcp }) => {
+
+      const phrase = generateMnemonic(); // 128-bit entropy, crypto.getRandomValues
+      const words  = phrase.split(' ');  // 12 words — stays local, never logged
+
+      const BASE = [
+        'position:fixed;inset:0;z-index:20000;background:var(--bg-deep,#060a10);',
+        'overflow-y:auto;display:flex;flex-direction:column;align-items:center;',
+        'padding:32px 20px 56px;'
+      ].join('');
+
+      // ── Step 1: display phrase + warning ──────────────────
+      function showPhrase() {
+        const ovl = document.createElement('div');
+        ovl.id = '_ocp-onboard';
+        ovl.style.cssText = BASE;
+
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'max-width:460px;width:100%;';
+        ovl.appendChild(wrap);
+
+        // Header
+        const h = document.createElement('h2');
+        h.textContent = 'Your Recovery Phrase';
+        h.style.cssText = 'font-family:"Syne",sans-serif;font-size:22px;color:#c8f55a;' +
+          'text-align:center;margin:0 0 16px;font-weight:700;';
+        wrap.appendChild(h);
+
+        // Warning banner
+        const warn = document.createElement('div');
+        warn.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#f87171;' +
+          'background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);' +
+          'border-radius:12px;padding:12px 16px;margin-bottom:20px;line-height:1.55;';
+        warn.innerHTML = '⚠ <strong>Only way to recover your identity.</strong><br>' +
+          'Never sent to any server. Lose it = identity gone forever, no reset.';
+        wrap.appendChild(warn);
+
+        // 12-word grid
+        const grid = document.createElement('div');
+        grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:24px;';
+        words.forEach((w, i) => {
+          const cell = document.createElement('div');
+          cell.style.cssText = 'background:rgba(200,245,90,.06);border:1px solid rgba(200,245,90,.18);' +
+            'border-radius:8px;padding:9px 10px;display:flex;align-items:center;gap:6px;';
+          const num = document.createElement('span');
+          num.textContent = (i + 1) + '.';
+          num.style.cssText = 'color:#666;font-size:11px;font-family:"DM Mono",monospace;min-width:18px;';
+          const word = document.createElement('strong');
+          word.textContent = w;
+          word.style.cssText = 'color:#c8f55a;font-family:"DM Mono",monospace;font-size:14px;';
+          cell.appendChild(num);
+          cell.appendChild(word);
+          grid.appendChild(cell);
+        });
+        wrap.appendChild(grid);
+
+        // Continue button
+        const btn = document.createElement('button');
+        btn.textContent = "I've written it down →";
+        btn.style.cssText = 'width:100%;padding:15px;background:#3ddc84;color:#03161b;border:0;' +
+          'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
+        btn.onclick = () => { document.body.removeChild(ovl); showConfirm(); };
+        wrap.appendChild(btn);
+
+        document.body.appendChild(ovl);
+      }
+
+      // ── Step 2: 3-word verification challenge ─────────────
+      function showConfirm() {
+        // Pick 3 distinct word positions using cryptographic randomness.
+        const picks = [];
+        while (picks.length < 3) {
+          const r = crypto.getRandomValues(new Uint32Array(1))[0];
+          const i = Math.floor(r / 0x100000000 * 12);
+          if (!picks.includes(i)) picks.push(i);
+        }
+        picks.sort((a, b) => a - b);
+
+        const ovl = document.createElement('div');
+        ovl.id = '_ocp-onboard';
+        ovl.style.cssText = BASE;
+
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'max-width:460px;width:100%;';
+        ovl.appendChild(wrap);
+
+        const h = document.createElement('h2');
+        h.textContent = 'Confirm Your Phrase';
+        h.style.cssText = 'font-family:"Syne",sans-serif;font-size:22px;color:#c8f55a;' +
+          'text-align:center;margin:0 0 8px;font-weight:700;';
+        wrap.appendChild(h);
+
+        const sub = document.createElement('p');
+        sub.textContent = 'Enter words ' + picks.map(i => '#' + (i + 1)).join(', ') + ' from your phrase.';
+        sub.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#8aabb8;' +
+          'text-align:center;margin:0 0 20px;';
+        wrap.appendChild(sub);
+
+        const inputs = [];
+        picks.forEach((idx, k) => {
+          const label = document.createElement('label');
+          label.textContent = 'Word #' + (idx + 1);
+          label.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#667;' +
+            'display:block;margin-bottom:4px;';
+
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.setAttribute('autocomplete', 'off');
+          inp.setAttribute('autocorrect', 'off');
+          inp.setAttribute('autocapitalize', 'off');
+          inp.setAttribute('spellcheck', 'false');
+          inp.placeholder = 'word ' + (idx + 1);
+          inp.style.cssText = 'width:100%;box-sizing:border-box;padding:12px 14px;' +
+            'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);' +
+            'border-radius:10px;color:#e8f4f7;font-size:16px;' +
+            'font-family:"DM Mono",monospace;margin-bottom:12px;';
+          inputs.push({ el: inp, expected: words[idx] });
+
+          wrap.appendChild(label);
+          wrap.appendChild(inp);
+        });
+
+        const errEl = document.createElement('p');
+        errEl.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#f87171;' +
+          'text-align:center;min-height:18px;margin:0 0 12px;';
+        wrap.appendChild(errEl);
+
+        const submitBtn = document.createElement('button');
+        submitBtn.textContent = 'Confirm & Create Identity';
+        submitBtn.style.cssText = 'width:100%;padding:15px;background:#3ddc84;color:#03161b;border:0;' +
+          'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
+        wrap.appendChild(submitBtn);
+
+        const backBtn = document.createElement('button');
+        backBtn.textContent = '← Back to phrase';
+        backBtn.style.cssText = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
+          'margin-top:8px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
+        backBtn.onclick = () => { document.body.removeChild(ovl); showPhrase(); };
+        wrap.appendChild(backBtn);
+
+        submitBtn.onclick = () => {
+          const wrong = inputs.some(({ el, expected: exp }) =>
+            el.value.trim().toLowerCase() !== exp.toLowerCase());
+          if (wrong) {
+            errEl.textContent = 'One or more words are incorrect — check your phrase.';
+            return;
+          }
+          document.body.removeChild(ovl);
+          deriveAndResolve();
+        };
+
+        document.body.appendChild(ovl);
+        inputs[0].el.focus();
+      }
+
+      // ── Derive keypair and resolve the outer promise ───────
+      function deriveAndResolve() {
+        const { privateKey, publicKey } = mnemonicToKeypair(phrase);
+        const ocp_address  = publicKeyToOcp(publicKey);
+
+        // Hex representations for storage
+        const toHex = arr => Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+        const privateKeyHex = toHex(privateKey);
+        const publicKeyHex  = toHex(publicKey);
+
+        // Base64url JWK fields so signMessage() (WebCrypto Ed25519) continues to work.
+        const toB64u = arr => btoa(String.fromCharCode(...arr))
+          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+        const x = toB64u(publicKey);
+        const d = toB64u(privateKey);
+        const privateKeyJwk = { kty: 'OKP', crv: 'Ed25519', d, x, key_ops: ['sign'] };
+        const publicKeyJwk  = { kty: 'OKP', crv: 'Ed25519', x,    key_ops: ['verify'] };
+        const publicKeyRaw  = btoa(String.fromCharCode(...publicKey));
+
+        // phrase is local to this closure and goes out of scope here.
+        // It is never logged, never transmitted, never stored.
+        resolve({
+          wallet:        true,
+          ocp_address,
+          privateKeyHex,
+          publicKeyHex,
+          privateKeyJwk,
+          publicKeyJwk,
+          publicKeyRaw,
+          created:       Date.now()
+        });
+      }
+
+      showPhrase();
+    }).catch(reject);
+  });
 }
 
 async function exportIdentity() {
