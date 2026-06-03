@@ -990,17 +990,47 @@ async function getOrCreateIdentity() {
     console.log('[OCP] Identity loaded:', cached.ocp_address);
     return cached;
   }
-  // No stored identity — run onboarding; blocks until user confirms phrase.
-  const identity = await _runWalletOnboarding();
+  // No stored identity — create silently; phrase is saved locally for optional
+  // backup later but the user is never blocked at launch.
+  const { generateMnemonic, mnemonicToKeypair, publicKeyToOcp } =
+    await import('./ocp-identity.js');
+  const phrase   = generateMnemonic();
+  const identity = _buildIdentityFromPhrase(phrase, mnemonicToKeypair, publicKeyToOcp);
+  localStorage.setItem('ocp_backed_up', 'false');
   await saveIdentity(identity);
+  console.log('[OCP] New identity created:', identity.ocp_address);
   return identity;
 }
 
-// ── Wallet onboarding ──────────────────────────────────────
-// Returns a promise resolving with the derived identity after the user either
-// creates a new identity (backup + 3-word confirm) or restores from an existing
-// phrase. The mnemonic is stored in the identity object so backupIdentity() can
-// re-show it later. It is NEVER logged, NEVER transmitted over any network path.
+// Build the full identity object from a BIP-39 phrase.
+// Pure function — no DOM, no network. Used by silent creation and restore.
+function _buildIdentityFromPhrase(phrase, mnemonicToKeypair, publicKeyToOcp) {
+  const { privateKey, publicKey } = mnemonicToKeypair(phrase);
+  const ocp_address = publicKeyToOcp(publicKey);
+  const toHex  = arr => Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+  const toB64u = arr => btoa(String.fromCharCode(...arr))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const x = toB64u(publicKey);
+  const d = toB64u(privateKey);
+  return {
+    wallet:        true,
+    ocp_address,
+    mnemonic:      phrase,
+    privateKeyHex: toHex(privateKey),
+    publicKeyHex:  toHex(publicKey),
+    privateKeyJwk: { kty: 'OKP', crv: 'Ed25519', d, x, key_ops: ['sign']   },
+    publicKeyJwk:  { kty: 'OKP', crv: 'Ed25519',    x, key_ops: ['verify'] },
+    publicKeyRaw:  btoa(String.fromCharCode(...publicKey)),
+    created:       Date.now()
+  };
+}
+
+// ── Wallet restore flow ────────────────────────────────────
+// Used when a user wants to recover an existing identity from their phrase.
+// NOT called on first launch — new identities are created silently by
+// getOrCreateIdentity(). Call _runWalletOnboarding() from settings to trigger
+// the restore UI. showPhrase() / showConfirm() are kept here for reuse by the
+// backup overlay (wired up separately). Phrase is NEVER logged, NEVER transmitted.
 function _runWalletOnboarding() {
   return new Promise((resolve, reject) => {
     import('./ocp-identity.js').then(({ generateMnemonic, mnemonicToKeypair, publicKeyToOcp }) => {
@@ -1293,35 +1323,9 @@ function _runWalletOnboarding() {
       }
 
       // ── Final: derive keypair, build identity, resolve ────
-      // phrase is passed in from each path; never logged, never transmitted.
-      // Stored as identity.mnemonic (on-device only) so backupIdentity() can show it.
+      // phrase is passed in from restore path; never logged, never transmitted.
       function deriveAndResolve(phrase) {
-        const { privateKey, publicKey } = mnemonicToKeypair(phrase);
-        const ocp_address = publicKeyToOcp(publicKey);
-
-        const toHex  = arr => Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
-        const toB64u = arr => btoa(String.fromCharCode(...arr))
-          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-
-        const privateKeyHex = toHex(privateKey);
-        const publicKeyHex  = toHex(publicKey);
-        const x = toB64u(publicKey);
-        const d = toB64u(privateKey);
-        const privateKeyJwk = { kty: 'OKP', crv: 'Ed25519', d, x, key_ops: ['sign']   };
-        const publicKeyJwk  = { kty: 'OKP', crv: 'Ed25519',    x, key_ops: ['verify'] };
-        const publicKeyRaw  = btoa(String.fromCharCode(...publicKey));
-
-        resolve({
-          wallet:        true,
-          ocp_address,
-          mnemonic:      phrase,    // on-device only; used by backupIdentity()
-          privateKeyHex,
-          publicKeyHex,
-          privateKeyJwk,
-          publicKeyJwk,
-          publicKeyRaw,
-          created:       Date.now()
-        });
+        resolve(_buildIdentityFromPhrase(phrase, mnemonicToKeypair, publicKeyToOcp));
       }
 
       showWelcome();
@@ -1414,6 +1418,23 @@ async function backupIdentity() {
       }
     };
     secA.appendChild(revealBtn);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = 'Copy phrase';
+    copyBtn.style.cssText = 'width:100%;padding:10px;background:transparent;' +
+      'color:#8aabb8;border:1px solid rgba(255,255,255,.1);border-radius:10px;' +
+      'font-size:13px;font-family:"DM Mono",monospace;cursor:pointer;margin-top:8px;';
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(identity.mnemonic).then(() => {
+        copyBtn.textContent = '✓ Copied';
+        copyBtn.style.color = '#c8f55a';
+        localStorage.setItem('ocp_backed_up', 'true');
+        setTimeout(() => { copyBtn.textContent = 'Copy phrase'; copyBtn.style.color = ''; }, 2000);
+      }).catch(() => {
+        copyBtn.textContent = 'Copy failed — write words manually';
+      });
+    };
+    secA.appendChild(copyBtn);
   } else {
     const noPhrase = document.createElement('p');
     noPhrase.textContent = 'Recovery phrase not available for this identity (created before wallet upgrade). Use the encrypted keystore below.';
@@ -1481,6 +1502,7 @@ async function backupIdentity() {
       a.href = url; a.download = 'ocp-identity-backup.json'; a.click();
       URL.revokeObjectURL(url);
       toast('Backup downloaded — store it safely');
+      localStorage.setItem('ocp_backed_up', 'true');
       pw1.value = ''; pw2.value = '';
     } catch(e) {
       ksErr.textContent = 'Encryption failed — try again.';
@@ -1960,6 +1982,10 @@ async function _triggerPwaInstall() {
 
 // ── Load identity on startup ───────────────────────────────
 let myIdentity = null;
+// Latched once ICE reaches connected/completed in any call path;
+// reset is intentionally absent — one real call per session is enough to nudge.
+let _iceWasConnected  = false;
+let _backupNudgeShown = false;   // show the banner at most once per session
 getOrCreateIdentity().then(async id => {
   myIdentity = id;
   // Update all OCP address display elements (register + dialer screens)
@@ -2584,6 +2610,7 @@ async function onMessage(msg) {
           LOG.webrtc('ICE connection state: ' + pc.iceConnectionState);
           if (pc.iceConnectionState === 'connected') {
             LOG.webrtc('✅ ICE CONNECTED — audio tunnel established');
+            _iceWasConnected = true;
           }
           if (pc.iceConnectionState === 'failed') {
             LOG.err('❌ ICE FAILED — audio tunnel could not be established');
@@ -2814,6 +2841,7 @@ async function onMessage(msg) {
         LOG.webrtc('ICE state: ' + state);
         if (state === 'connected' || state === 'completed') {
           LOG.webrtc('✅ WebRTC connected to relay B!');
+          _iceWasConnected = true;
           showActiveCallOverlay();
           startTimer();
           setConnectionStatus('calling');
@@ -4247,6 +4275,58 @@ async function doHangup() {
   endCall();
   setConnectionStatus('online');
 }
+// ── Post-call backup nudge ─────────────────────────────────
+function _maybeShowBackupNudge() {
+  if (_backupNudgeShown) return;
+  if (!_iceWasConnected)  return;
+  if (localStorage.getItem('ocp_backed_up') === 'true') return;
+  _backupNudgeShown = true;
+  setTimeout(_showBackupBanner, 400);   // let the dialer screen settle first
+}
+
+function _showBackupBanner() {
+  document.getElementById('ocp-backup-banner')?.remove();
+
+  if (!document.getElementById('_ocp-backup-anim')) {
+    const st = document.createElement('style');
+    st.id = '_ocp-backup-anim';
+    st.textContent = '@keyframes _bannerUp{from{transform:translateY(100%);opacity:0}' +
+      'to{transform:translateY(0);opacity:1}}';
+    document.head.appendChild(st);
+  }
+
+  const banner = document.createElement('div');
+  banner.id = 'ocp-backup-banner';
+  banner.style.cssText = 'position:fixed;bottom:44px;left:0;right:0;z-index:15000;' +
+    'padding:10px 14px;background:rgba(13,31,53,.97);' +
+    'border-top:1px solid rgba(200,245,90,.2);' +
+    'display:flex;align-items:center;gap:10px;' +
+    'animation:_bannerUp .3s ease;';
+
+  const txt = document.createElement('span');
+  txt.textContent = '🔒 Back up your identity so you never lose it';
+  txt.style.cssText = 'flex:1;font-family:"DM Mono",monospace;font-size:11px;' +
+    'color:#c8dff5;line-height:1.4;';
+  banner.appendChild(txt);
+
+  const backupBtn = document.createElement('button');
+  backupBtn.textContent = 'Back up';
+  backupBtn.style.cssText = 'padding:7px 13px;background:#c8f55a;color:#03161b;border:0;' +
+    'border-radius:8px;font-weight:700;font-size:12px;font-family:"Syne",sans-serif;' +
+    'cursor:pointer;white-space:nowrap;';
+  backupBtn.onclick = () => { banner.remove(); backupIdentity(); };
+  banner.appendChild(backupBtn);
+
+  const laterBtn = document.createElement('button');
+  laterBtn.textContent = 'Later';
+  laterBtn.style.cssText = 'padding:7px 10px;background:transparent;color:#667;border:0;' +
+    'font-size:12px;font-family:"DM Mono",monospace;cursor:pointer;white-space:nowrap;';
+  laterBtn.onclick = () => banner.remove();
+  banner.appendChild(laterBtn);
+
+  document.body.appendChild(banner);
+}
+
 function endCall() {
   hideActiveCallOverlay();
   hideIncomingOverlay();
@@ -4276,6 +4356,7 @@ function endCall() {
   document.getElementById('inp-dial').value = '+';
   syncDialDisplay();
   show('dialer');
+  _maybeShowBackupNudge();
 }
 
 // ── WebRTC ─────────────────────────────────────────────────
@@ -4332,6 +4413,9 @@ async function initWebRTC(isCaller) {
 
   pc.oniceconnectionstatechange = () => {
     console.log('[WRTC] iceConnectionState (initWebRTC):', pc?.iceConnectionState);
+    if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
+      _iceWasConnected = true;
+    }
     if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
       toast('Connection lost');
       endCall();

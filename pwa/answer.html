@@ -473,10 +473,57 @@ const RTC_CFG = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478', username: 'ocp', credential: 'opencall2026' },
-    { urls: 'turn:ocp-node.onrender.com:3478', username: 'ocp', credential: 'opencall2026' },
-    { urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478', username: 'ocp', credential: 'opencall2026' }
+    { urls: 'turn:ocp-node.onrender.com:3478',             username: 'ocp', credential: 'opencall2026' }
   ]
 };
+console.log('[WRTC] RTC_CFG iceServers:', JSON.stringify(RTC_CFG.iceServers),
+  '| turn entries:', RTC_CFG.iceServers.filter(s => s.urls.startsWith('turn:')).length,
+  '| has credential:', RTC_CFG.iceServers.some(s => s.credential));
+
+// ── Identity (silent — no onboarding UI, never blocks join flow) ─
+const OCP_KEY_STORAGE = 'ocp_identity_v1';
+let myIdentity    = null;
+let _identityReady = null;   // Promise — resolved before join_call is sent
+
+async function _silentLoadOrCreateIdentity() {
+  try {
+    const stored = localStorage.getItem(OCP_KEY_STORAGE);
+    if (stored) {
+      myIdentity = JSON.parse(stored);
+      console.log('[ANSWER] identity ready (cached):', myIdentity.ocp_address);
+      return;
+    }
+    // Nothing cached — create silently using the same derivation as index.html.
+    const { generateMnemonic, mnemonicToKeypair, publicKeyToOcp } =
+      await import('./ocp-identity.js');
+    const phrase     = generateMnemonic();
+    const { privateKey, publicKey } = mnemonicToKeypair(phrase);
+    const ocp_address = publicKeyToOcp(publicKey);
+    const toHex  = arr => Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
+    const toB64u = arr => btoa(String.fromCharCode(...arr))
+      .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+    const x = toB64u(publicKey);
+    const d = toB64u(privateKey);
+    myIdentity = {
+      wallet: true, ocp_address,
+      mnemonic:      phrase,
+      privateKeyHex: toHex(privateKey),
+      publicKeyHex:  toHex(publicKey),
+      privateKeyJwk: { kty:'OKP', crv:'Ed25519', d, x, key_ops:['sign']   },
+      publicKeyJwk:  { kty:'OKP', crv:'Ed25519',    x, key_ops:['verify'] },
+      publicKeyRaw:  btoa(String.fromCharCode(...publicKey)),
+      created:       Date.now()
+    };
+    localStorage.setItem(OCP_KEY_STORAGE, JSON.stringify(myIdentity));
+    localStorage.setItem('ocp_backed_up', 'false');
+    console.log('[ANSWER] identity ready (new):', myIdentity.ocp_address);
+  } catch(e) {
+    // Non-fatal — call still works without identity
+    console.warn('[ANSWER] identity init failed (non-fatal):', e.message);
+  }
+}
+// Fire immediately at load — completes long before user can tap Answer
+_identityReady = _silentLoadOrCreateIdentity();
 
 // ── URL params ──────────────────────────────────────────────────
 const params     = new URLSearchParams(location.search);
@@ -581,7 +628,14 @@ async function onMessage(event) {
   switch (msg.type) {
 
     case 'connected':
-      wsSend({ type: 'join_call', callId });
+      await _identityReady;   // always resolved by the time user can tap Answer
+      wsSend({
+        type:       'join_call',
+        callId,
+        public_key: myIdentity ? JSON.stringify(myIdentity.publicKeyJwk) : null
+      });
+      console.log('[ANSWER] join_call sent', callId,
+        '| ocp:', myIdentity ? myIdentity.ocp_address.slice(0,20) + '…' : 'none');
       break;
 
     case 'incoming_call': {
@@ -679,16 +733,28 @@ async function flushIce(conn) {
 // ── WebRTC: handle SDP offer from caller ────────────────────────
 async function handleOffer(sdp, offerCallId) {
   pc = new RTCPeerConnection(RTC_CFG);
+  console.log('[WRTC] PeerConnection created | iceServers:', RTC_CFG.iceServers.length,
+    '| callId:', offerCallId);
 
-  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+  localStream.getTracks().forEach(track => {
+    pc.addTrack(track, localStream);
+    console.log('[WRTC] addTrack — kind:', track.kind, 'enabled:', track.enabled);
+  });
 
   const audio = document.getElementById('remote-audio');
   pc.ontrack = e => {
+    console.log('[WRTC] ontrack fired — kind:', e.track.kind,
+      'streams:', e.streams.length, 'muted:', e.track.muted);
     if (audio.srcObject !== e.streams[0]) {
       audio.srcObject = e.streams[0];
       audio.play()
-        .then(() => { const b = document.getElementById('tap-to-hear'); if (b) b.style.display = 'none'; })
-        .catch(() => {
+        .then(() => {
+          console.log('[WRTC] remote-audio play OK');
+          const b = document.getElementById('tap-to-hear');
+          if (b) b.style.display = 'none';
+        })
+        .catch(err => {
+          console.warn('[WRTC] remote-audio play BLOCKED:', err.name, err.message);
           let b = document.getElementById('tap-to-hear');
           if (!b) {
             b = document.createElement('button');
@@ -705,27 +771,35 @@ async function handleOffer(sdp, offerCallId) {
 
   pc.onicecandidate = e => {
     if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
+      console.log('[WRTC] local ICE candidate:', e.candidate.type,
+        e.candidate.candidate.split(' ').slice(0, 6).join(' '));
       ws.send(JSON.stringify({
         type:      'ice',
         to:        callerNumber,
         candidate: e.candidate,
         callId:    offerCallId
       }));
+    } else if (!e.candidate) {
+      console.log('[WRTC] ICE gathering complete');
     }
   };
 
   pc.onconnectionstatechange = () => {
-    console.log('[RTC] state:', pc.connectionState);
+    console.log('[WRTC] connectionState:', pc.connectionState);
     if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
       endCall(stopTimer());
     }
   };
 
+  pc.onicegatheringstatechange = () =>
+    console.log('[WRTC] iceGatheringState:', pc.iceGatheringState);
+
   await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
-  console.log('[WRTC] handleOffer setRemoteDescription OK');
+  console.log('[WRTC] setRemoteDescription OK (offer)');
   await flushIce(pc);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
+  console.log('[WRTC] setLocalDescription OK (answer)');
 
   ws.send(JSON.stringify({
     type:   'sdp_answer',
@@ -733,6 +807,7 @@ async function handleOffer(sdp, offerCallId) {
     sdp:    answer.sdp,
     callId: offerCallId
   }));
+  console.log('[WRTC] sdp_answer sent | callId:', offerCallId);
 
   showScreen('screen-active');
   startTimer();
