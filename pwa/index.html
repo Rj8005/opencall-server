@@ -2510,77 +2510,21 @@ async function onMessage(msg) {
       stopRingback();
 
       callId   = msg.callId;
+      // callWith is the routing key sent in sdp_offer/ice; 'link:' prefix matches
+      // the registry entry the server set for this callee when they called join_call.
       callWith = 'link:' + msg.callId;
+      callMode = 'link';   // invite-link path — tells initWebRTC to route by callId
 
       document.getElementById('call-status-detail').textContent = 'They opened the link! Connecting...';
       document.getElementById('caller-name-display').textContent = 'Connecting...';
       showActiveCallOverlay();
       toast('They opened the link! Connecting...');
 
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      } catch(e) {
-        toast('Microphone error: ' + e.message);
-        break;
-      }
-
-      pc = new RTCPeerConnection(RTC_CFG);
-      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-
-      pc.onicecandidate = e => {
-        if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type:      'ice',
-            to:        'link:' + msg.callId,
-            candidate: e.candidate,
-            callId:    msg.callId
-          }));
-        }
-      };
-
-      pc.ontrack = e => {
-        const audio = document.getElementById('remote-audio');
-        audio.srcObject = e.streams[0];
-        audio.play()
-          .then(() => { const b = document.getElementById('tap-to-hear'); if (b) b.style.display = 'none'; })
-          .catch(() => {
-            let b = document.getElementById('tap-to-hear');
-            if (!b) {
-              b = document.createElement('button');
-              b.id = 'tap-to-hear';
-              b.textContent = '🔊 Tap to hear';
-              b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
-              document.body.appendChild(b);
-            }
-            b.style.display = 'block';
-            b.onclick = () => { audio.play(); b.style.display = 'none'; };
-          });
-        document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
-        document.getElementById('caller-avatar').classList.remove('ringing');
-        if (!timerInterval) startTimer();
-      };
-
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'connected') {
-          document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
-          document.getElementById('caller-avatar').classList.remove('ringing');
-          if (!timerInterval) startTimer();
-        }
-        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          endCall();
-        }
-      };
-
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
-      await pc.setLocalDescription(offer);
-
-      ws.send(JSON.stringify({
-        type:   'sdp_offer',
-        to:     'link:' + msg.callId,
-        sdp:    offer.sdp,
-        callId: msg.callId
-      }));
-
+      setConnectionStatus('calling');
+      document.getElementById('caller-avatar')?.classList.remove('ringing');
+      startTimer();
+      console.log('[WRTC] callee joined via link — starting offer | callId:', callId);
+      await initWebRTC(true);   // getUserMedia + addTrack + createOffer + sdp_offer
       break;
     }
 
@@ -4407,7 +4351,14 @@ async function initWebRTC(isCaller) {
   pc.onicecandidate = async e => {
     if (e.candidate) {
       console.log('[WRTC] ICE candidate (initWebRTC):', e.candidate.type, e.candidate.candidate.split(' ').slice(0,8).join(' '));
-      await wsSend({ type:'ice', to:callWith, candidate:e.candidate });
+      // Link path: route by callId so the server forwards via pendingCalls (relayWs).
+      // Direct path: route by callWith (phone number) via registry.
+      if (callMode === 'link') {
+        await wsSend({ type: 'ice', callId, candidate: e.candidate });
+        console.log('[WRTC] ICE sent (link/callId):', callId, e.candidate.type);
+      } else {
+        await wsSend({ type: 'ice', to: callWith, candidate: e.candidate });
+      }
     }
   };
 
@@ -4435,7 +4386,15 @@ async function initWebRTC(isCaller) {
     } catch(e) {
       console.log('[WRTC] setLocalDescription FAILED (initWebRTC):', e.message);
     }
-    await wsSend({ type:'sdp_offer', to:callWith, sdp:offer.sdp });
+    // Link path: route by callId (server forwards via pendingCalls.relayWs).
+    // Direct path: route by callWith (phone number registered in registry).
+    if (callMode === 'link') {
+      await wsSend({ type: 'sdp_offer', callId, sdp: offer.sdp });
+      console.log('[WRTC] sdp_offer sent (link) | callId:', callId);
+    } else {
+      await wsSend({ type: 'sdp_offer', to: callWith, sdp: offer.sdp });
+      console.log('[WRTC] sdp_offer sent (direct) | to:', callWith);
+    }
   }
 }
 

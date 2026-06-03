@@ -1344,6 +1344,10 @@ async function handle(ws, msg) {
         ocpAddress:    null
       });
       registry.set('link:' + msg.callId, ws);
+      // Wire the link callee as the relay endpoint so sdp_offer / sdp_answer / ice
+      // are routed through pendingCalls instead of being dropped (relayWs was null).
+      pending.relayWs   = ws;
+      pending.relayWsId = ws._ocpId;
       send(ws, {
         type:     'incoming_call',
         callId:   msg.callId,

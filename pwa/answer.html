@@ -646,10 +646,14 @@ async function onMessage(event) {
     }
 
     case 'sdp_offer': {
+      console.log('[ANSWER] sdp_offer received | callId:', msg.callId,
+        '| from:', (msg.from || '').slice(0, 20) + '…',
+        '| answered:', userAnswered, '| stream:', !!localStream);
       callerNumber = msg.from || callerNumber;
       if (!userAnswered || !localStream) {
         pendingOffer  = msg.sdp;
         pendingCallId = msg.callId;
+        console.log('[ANSWER] sdp_offer buffered (waiting for Answer tap)');
         return;
       }
       await handleOffer(msg.sdp, msg.callId);
@@ -687,6 +691,9 @@ async function answerCall() {
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    console.log('[ANSWER] getUserMedia OK — audioTracks:',
+      localStream.getAudioTracks().length,
+      localStream.getAudioTracks().map(t => 'enabled:' + t.enabled + ' muted:' + t.muted));
   } catch(e) {
     userAnswered = false;
     alert('Microphone access is required to answer the call.\n\nTap Allow when your browser asks, then try again.');
@@ -781,6 +788,16 @@ async function handleOffer(sdp, offerCallId) {
       }));
     } else if (!e.candidate) {
       console.log('[WRTC] ICE gathering complete');
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    console.log('[WRTC] iceConnectionState:', pc.iceConnectionState);
+    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+      console.log('[WRTC] ✅ ICE connected — audio tunnel established');
+    }
+    if (pc.iceConnectionState === 'failed') {
+      console.warn('[WRTC] ❌ ICE failed — TURN unreachable or NAT blocking');
     }
   };
 
