@@ -282,6 +282,56 @@ body::after {
   background: var(--bg-card); border: 1px solid var(--border);
   color: var(--text-secondary);
 }
+.cbtn-mute.active {
+  background: rgba(255,107,107,0.15);
+  border-color: rgba(255,107,107,0.4);
+  color: #ff6b6b;
+}
+.cbtn-spk.active {
+  background: var(--blue-dim);
+  border-color: var(--blue-border);
+  color: var(--blue);
+}
+.cbtn-vid {
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.cbtn-vid.active {
+  background: var(--blue-dim);
+  border-color: var(--blue-border);
+  color: var(--blue);
+}
+/* ── Video call layout ── */
+#video-container {
+  display: none;
+  position: fixed; inset: 0; z-index: 99;
+  background: #000; pointer-events: none;
+}
+#remote-video {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+#local-video {
+  position: absolute; bottom: 130px; right: 12px;
+  width: 90px; height: 120px; object-fit: cover;
+  border-radius: 10px; border: 2px solid rgba(99,180,255,0.3);
+  background: #111; pointer-events: auto;
+}
+body.video-mode #video-container { display: block; }
+body.video-mode #overlay-active-call { background: transparent !important; }
+body.video-mode #call-screen-ui {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: rgba(6,10,16,0.65);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  padding: 12px 16px 28px; z-index: 101; text-align: center;
+}
+body.video-mode .caller-avatar,
+body.video-mode #caller-name-display,
+body.video-mode #call-route-info,
+body.video-mode #call-status-detail { display: none !important; }
+body.video-mode .call-timer {
+  margin: 4px 0 12px; font-size: 28px;
+  text-shadow: 0 1px 6px rgba(0,0,0,.85);
+}
 .cbtn-end {
   background: rgba(61,10,10,0.8);
   border: 1px solid rgba(122,26,26,0.6);
@@ -783,9 +833,10 @@ input::placeholder { color: var(--text-muted); }
       <div class="call-route-badge" id="call-route-info">via OCP network</div>
       <div class="call-timer" id="call-timer">0:00</div>
       <div class="call-btns">
-        <div class="cbtn cbtn-mute" id="btn-mute" title="Mute" onclick="toggleMute()">&#128263;</div>
+        <div class="cbtn cbtn-mute" id="btn-mute" title="Mute" onclick="toggleMute()">&#127908;</div>
+        <div class="cbtn cbtn-vid" id="btn-video" title="Video" onclick="toggleVideo()">&#127909;</div>
         <div class="cbtn cbtn-end" id="btn-hangup" title="End call" onclick="doHangup()">&#9742;</div>
-        <div class="cbtn cbtn-spk" id="btn-speaker" title="Speaker" onclick="toggleSpeaker()">&#128264;</div>
+        <div class="cbtn cbtn-spk" id="btn-speaker" title="Speaker" onclick="toggleSpeaker()">&#128266;</div>
       </div>
     </div>
 
@@ -891,6 +942,11 @@ input::placeholder { color: var(--text-muted); }
     <button id="smsSend" class="send" title="Send">&#8593;</button>
   </div>
 </section>
+
+<div id="video-container">
+  <video id="remote-video" autoplay playsinline></video>
+  <video id="local-video"  autoplay muted playsinline></video>
+</div>
 
 <div id="toast"></div>
 <audio id="remote-audio" autoplay playsinline></audio>
@@ -2052,6 +2108,9 @@ let callWith      = null;
 let callMode      = null;       // "direct" | "relay"
 let pendingCall   = null;
 let isMuted       = false;
+let isSpeaker     = false;
+let isVideo       = false;
+let videoStream   = null;
 let timerInterval = null;
 let timerSecs     = 0;
 let audioCtx      = null;
@@ -4289,6 +4348,11 @@ function endCall() {
   document.getElementById('invite-panel')?.remove();
   document.getElementById('country-selector')?.remove();
   window._selectedCountry = null;
+  if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
+  isVideo = false;
+  updateVideoLayout(false);
+  const vidBtn = document.getElementById('btn-video');
+  if (vidBtn) { vidBtn.innerHTML = '&#127909;'; vidBtn.classList.remove('active'); }
   if (pc) { pc.close(); pc = null; }
   if (peerConnection) { peerConnection.close(); peerConnection = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
@@ -4325,6 +4389,14 @@ async function initWebRTC(isCaller) {
 
   pc.ontrack = e => {
     console.log('[WRTC] ontrack fired (initWebRTC) — kind:', e.track.kind, 'streamId:', e.streams[0]?.id, 'enabled:', e.track.enabled, 'muted:', e.track.muted);
+    if (e.track.kind === 'video') {
+      // Route remote video to the <video> element only; audio stays in <audio>.
+      const rv = document.getElementById('remote-video');
+      rv.srcObject = new MediaStream([e.track]);
+      rv.play().catch(err => console.warn('[WRTC] remote-video play blocked:', err.message));
+      updateVideoLayout(true);
+      return;
+    }
     const audio = document.getElementById('remote-audio');
     audio.srcObject = e.streams[0];
     console.log('[WRTC] remote-audio srcObject set (initWebRTC), streamId:', e.streams[0]?.id);
@@ -4425,7 +4497,13 @@ async function handleOffer(sdp, from) {
   } catch(e) {
     console.log('[WRTC] handleOffer setLocalDescription FAILED:', e.message);
   }
-  await wsSend({ type:'sdp_answer', to:from, sdp:answer.sdp });
+  // Link path: callee registered as 'link:<callId>', not by phone/OCP.
+  // Route answer to callWith so the server can deliver via registry.
+  if (callMode === 'link') {
+    await wsSend({ type:'sdp_answer', to: callWith, callId, sdp: answer.sdp });
+  } else {
+    await wsSend({ type:'sdp_answer', to:from, sdp:answer.sdp });
+  }
   console.log('[WRTC] sent sdp_answer');
 }
 
@@ -4487,14 +4565,86 @@ function stopRingback() {
 // ── call controls ──────────────────────────────────────────
 function toggleMute() {
   isMuted = !isMuted;
-  if (localStream) localStream.getAudioTracks().forEach(t=>t.enabled=!isMuted);
-  document.getElementById('btn-mute').classList.toggle('active',isMuted);
-  toast(isMuted?'Muted':'Unmuted');
+  if (localStream) localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
+  const muteBtn = document.getElementById('btn-mute');
+  muteBtn.innerHTML = isMuted ? '&#128263;' : '&#127908;';
+  muteBtn.classList.toggle('active', isMuted);
+  toast(isMuted ? 'Muted' : 'Unmuted');
 }
-function toggleSpeaker() {
-  document.getElementById('btn-speaker').classList.toggle('active');
-  toast('Speaker toggled');
+async function toggleSpeaker() {
+  isSpeaker = !isSpeaker;
+  const audio = document.getElementById('remote-audio');
+  audio.volume = isSpeaker ? 1.0 : 0.5;
+  if (typeof audio.setSinkId === 'function') {
+    try { await audio.setSinkId(''); } catch(e) {}
+  }
+  const spkBtn = document.getElementById('btn-speaker');
+  spkBtn.innerHTML = isSpeaker ? '&#128264;' : '&#128266;';
+  spkBtn.classList.toggle('active', isSpeaker);
+  toast(isSpeaker ? 'Speaker on' : 'Earpiece');
 }
+
+async function toggleVideo() {
+  // Video is only meaningful on direct/link WebRTC path (not phone relay).
+  if (!pc || pc.signalingState === 'closed') {
+    toast('Video not available'); return;
+  }
+  if (isVideo) {
+    isVideo = false;
+    if (videoStream) { videoStream.getVideoTracks().forEach(t => t.stop()); videoStream = null; }
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) await sender.replaceTrack(null);
+    document.getElementById('local-video').srcObject = null;
+    updateVideoLayout(false);
+    await sendReOffer();
+  } else {
+    try {
+      videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    } catch(e) {
+      toast('Camera access denied'); return;
+    }
+    isVideo = true;
+    const vTrack = videoStream.getVideoTracks()[0];
+    document.getElementById('local-video').srcObject = videoStream;
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) {
+      await sender.replaceTrack(vTrack);
+    } else {
+      pc.addTrack(vTrack, videoStream);
+    }
+    updateVideoLayout(true);
+    await sendReOffer();
+  }
+  const btn = document.getElementById('btn-video');
+  btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
+  btn.classList.toggle('active', isVideo);
+  toast(isVideo ? 'Video on' : 'Video off');
+}
+
+async function sendReOffer() {
+  if (!pc || pc.signalingState === 'closed') return;
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    if (callMode === 'link') {
+      await wsSend({ type: 'sdp_offer', callId, sdp: offer.sdp });
+    } else {
+      await wsSend({ type: 'sdp_offer', to: callWith, sdp: offer.sdp });
+    }
+    console.log('[WRTC] re-offer sent | callMode:', callMode);
+  } catch(e) {
+    console.warn('[WRTC] sendReOffer failed:', e.message);
+  }
+}
+
+function updateVideoLayout(on) {
+  document.body.classList.toggle('video-mode', on);
+  if (!on) {
+    const rv = document.getElementById('remote-video');
+    if (rv) rv.srcObject = null;
+  }
+}
+
 function toggleKeypad() {
   document.getElementById('ctrl-kp')?.classList.toggle('active');
 }

@@ -276,6 +276,57 @@ body::after {
   background: var(--bg-card); border: 1px solid var(--border);
   color: var(--text-secondary);
 }
+.cbtn-mute.active {
+  background: rgba(255,107,107,0.15);
+  border-color: rgba(255,107,107,0.4);
+  color: #ff6b6b;
+}
+.cbtn-spk.active {
+  background: var(--blue-dim);
+  border-color: var(--blue-border);
+  color: var(--blue);
+}
+.cbtn-vid {
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.cbtn-vid.active {
+  background: var(--blue-dim);
+  border-color: var(--blue-border);
+  color: var(--blue);
+}
+/* ── Video call layout ── */
+#video-container {
+  display: none;
+  position: fixed; inset: 0; z-index: 99;
+  background: #000; pointer-events: none;
+}
+#remote-video {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+#local-video {
+  position: absolute; bottom: 130px; right: 12px;
+  width: 90px; height: 120px; object-fit: cover;
+  border-radius: 10px; border: 2px solid rgba(99,180,255,0.3);
+  background: #111; pointer-events: auto;
+}
+body.video-mode #video-container { display: block; }
+body.video-mode #screen-active {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: rgba(6,10,16,0.65);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  padding: 12px 16px 28px; z-index: 101; text-align: center;
+}
+body.video-mode #screen-active .caller-avatar,
+body.video-mode #screen-active .caller-name,
+body.video-mode #screen-active .call-status-text,
+body.video-mode #screen-active .call-route-badge { display: none !important; }
+body.video-mode #screen-active .call-timer {
+  margin: 4px 0 12px; font-size: 28px;
+  text-shadow: 0 1px 6px rgba(0,0,0,.85);
+}
+body.video-mode .app-header,
+body.video-mode .status-footer { display: none; }
 .cbtn-end {
   background: rgba(61,10,10,0.8);
   border: 1px solid rgba(122,26,26,0.6);
@@ -437,9 +488,10 @@ input::placeholder { color: var(--text-muted); }
     <div class="call-route-badge">OpenCall Protocol</div>
     <div class="call-timer" id="ans-timer">0:00</div>
     <div class="call-btns">
-      <div class="cbtn cbtn-mute" id="ans-mute">&#128263;</div>
+      <div class="cbtn cbtn-mute" id="ans-mute">&#127908;</div>
+      <div class="cbtn cbtn-vid" id="ans-video">&#127909;</div>
       <div class="cbtn cbtn-end" id="ans-end">&#9742;</div>
-      <div class="cbtn cbtn-spk" id="ans-spk">&#128264;</div>
+      <div class="cbtn cbtn-spk" id="ans-spk">&#128266;</div>
     </div>
   </div>
 
@@ -459,6 +511,11 @@ input::placeholder { color: var(--text-muted); }
 <div class="status-footer">
   <span class="sf-text">No app downloaded · No account</span>
   <span class="sf-text">OpenCall Protocol</span>
+</div>
+
+<div id="video-container">
+  <video id="remote-video" autoplay playsinline></video>
+  <video id="local-video"  autoplay muted playsinline></video>
 </div>
 
 <audio id="remote-audio" autoplay playsinline></audio>
@@ -540,7 +597,9 @@ let callerName    = fromName;
 let callStartTime = null;
 let timerInterval = null;
 let isMuted       = false;
-let isSpeakerOff  = false;
+let isSpeaker     = false;
+let isVideo       = false;
+let videoStream   = null;
 let userAnswered      = false;
 let pendingOffer      = null;
 let pendingCallId     = null;
@@ -672,6 +731,20 @@ async function onMessage(event) {
       }
       break;
 
+    case 'sdp_answer': {
+      // Arrives when we sent a re-offer (video renegotiation) and caller answered.
+      if (pc && pc.signalingState !== 'closed') {
+        try {
+          await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+          await flushIce(pc);
+          console.log('[WRTC] sdp_answer applied (renegotiation)');
+        } catch(e) {
+          console.warn('[WRTC] sdp_answer setRemoteDescription failed:', e.message);
+        }
+      }
+      break;
+    }
+
     case 'hangup':
       endCall(stopTimer());
       break;
@@ -737,82 +810,93 @@ async function flushIce(conn) {
   if (q.length) console.log('[WRTC] flushed', q.length, 'queued ICE');
 }
 
-// ── WebRTC: handle SDP offer from caller ────────────────────────
+// ── WebRTC: handle SDP offer from caller (initial + renegotiation) ──────
 async function handleOffer(sdp, offerCallId) {
-  pc = new RTCPeerConnection(RTC_CFG);
-  console.log('[WRTC] PeerConnection created | iceServers:', RTC_CFG.iceServers.length,
-    '| callId:', offerCallId);
+  const isRenegotiation = pc && pc.signalingState !== 'closed';
 
-  localStream.getTracks().forEach(track => {
-    pc.addTrack(track, localStream);
-    console.log('[WRTC] addTrack — kind:', track.kind, 'enabled:', track.enabled);
-  });
+  if (!isRenegotiation) {
+    pc = new RTCPeerConnection(RTC_CFG);
+    console.log('[WRTC] PeerConnection created | iceServers:', RTC_CFG.iceServers.length,
+      '| callId:', offerCallId);
 
-  const audio = document.getElementById('remote-audio');
-  pc.ontrack = e => {
-    console.log('[WRTC] ontrack fired — kind:', e.track.kind,
-      'streams:', e.streams.length, 'muted:', e.track.muted);
-    if (audio.srcObject !== e.streams[0]) {
-      audio.srcObject = e.streams[0];
-      audio.play()
-        .then(() => {
-          console.log('[WRTC] remote-audio play OK');
-          const b = document.getElementById('tap-to-hear');
-          if (b) b.style.display = 'none';
-        })
-        .catch(err => {
-          console.warn('[WRTC] remote-audio play BLOCKED:', err.name, err.message);
-          let b = document.getElementById('tap-to-hear');
-          if (!b) {
-            b = document.createElement('button');
-            b.id = 'tap-to-hear';
-            b.textContent = '🔊 Tap to hear';
-            b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
-            document.body.appendChild(b);
-          }
-          b.style.display = 'block';
-          b.onclick = () => { audio.play(); b.style.display = 'none'; };
-        });
-    }
-  };
+    localStream.getTracks().forEach(track => {
+      pc.addTrack(track, localStream);
+      console.log('[WRTC] addTrack — kind:', track.kind, 'enabled:', track.enabled);
+    });
 
-  pc.onicecandidate = e => {
-    if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
-      console.log('[WRTC] local ICE candidate:', e.candidate.type,
-        e.candidate.candidate.split(' ').slice(0, 6).join(' '));
-      ws.send(JSON.stringify({
-        type:      'ice',
-        to:        callerNumber,
-        candidate: e.candidate,
-        callId:    offerCallId
-      }));
-    } else if (!e.candidate) {
-      console.log('[WRTC] ICE gathering complete');
-    }
-  };
+    const audio = document.getElementById('remote-audio');
+    pc.ontrack = e => {
+      console.log('[WRTC] ontrack fired — kind:', e.track.kind,
+        'streams:', e.streams.length, 'muted:', e.track.muted);
+      if (e.track.kind === 'video') {
+        const rv = document.getElementById('remote-video');
+        rv.srcObject = new MediaStream([e.track]);
+        rv.play().catch(err => console.warn('[WRTC] remote-video play blocked:', err.message));
+        updateVideoLayout(true);
+        return;
+      }
+      if (audio.srcObject !== e.streams[0]) {
+        audio.srcObject = e.streams[0];
+        audio.play()
+          .then(() => {
+            console.log('[WRTC] remote-audio play OK');
+            const b = document.getElementById('tap-to-hear');
+            if (b) b.style.display = 'none';
+          })
+          .catch(err => {
+            console.warn('[WRTC] remote-audio play BLOCKED:', err.name, err.message);
+            let b = document.getElementById('tap-to-hear');
+            if (!b) {
+              b = document.createElement('button');
+              b.id = 'tap-to-hear';
+              b.textContent = '🔊 Tap to hear';
+              b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+              document.body.appendChild(b);
+            }
+            b.style.display = 'block';
+            b.onclick = () => { audio.play(); b.style.display = 'none'; };
+          });
+      }
+    };
 
-  pc.oniceconnectionstatechange = () => {
-    console.log('[WRTC] iceConnectionState:', pc.iceConnectionState);
-    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-      console.log('[WRTC] ✅ ICE connected — audio tunnel established');
-    }
-    if (pc.iceConnectionState === 'failed') {
-      console.warn('[WRTC] ❌ ICE failed — TURN unreachable or NAT blocking');
-    }
-  };
+    pc.onicecandidate = e => {
+      if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
+        console.log('[WRTC] local ICE candidate:', e.candidate.type,
+          e.candidate.candidate.split(' ').slice(0, 6).join(' '));
+        ws.send(JSON.stringify({
+          type:      'ice',
+          to:        callerNumber,
+          candidate: e.candidate,
+          callId:    offerCallId
+        }));
+      } else if (!e.candidate) {
+        console.log('[WRTC] ICE gathering complete');
+      }
+    };
 
-  pc.onconnectionstatechange = () => {
-    console.log('[WRTC] connectionState:', pc.connectionState);
-    if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
-      endCall(stopTimer());
-    }
-  };
+    pc.oniceconnectionstatechange = () => {
+      console.log('[WRTC] iceConnectionState:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        console.log('[WRTC] ✅ ICE connected — audio tunnel established');
+      }
+      if (pc.iceConnectionState === 'failed') {
+        console.warn('[WRTC] ❌ ICE failed — TURN unreachable or NAT blocking');
+      }
+    };
 
-  pc.onicegatheringstatechange = () =>
-    console.log('[WRTC] iceGatheringState:', pc.iceGatheringState);
+    pc.onconnectionstatechange = () => {
+      console.log('[WRTC] connectionState:', pc.connectionState);
+      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+        endCall(stopTimer());
+      }
+    };
+
+    pc.onicegatheringstatechange = () =>
+      console.log('[WRTC] iceGatheringState:', pc.iceGatheringState);
+  }
 
   await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
-  console.log('[WRTC] setRemoteDescription OK (offer)');
+  console.log('[WRTC] setRemoteDescription OK (offer' + (isRenegotiation ? '/renegotiation' : '') + ')');
   await flushIce(pc);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
@@ -824,10 +908,13 @@ async function handleOffer(sdp, offerCallId) {
     sdp:    answer.sdp,
     callId: offerCallId
   }));
-  console.log('[WRTC] sdp_answer sent | callId:', offerCallId);
+  console.log('[WRTC] sdp_answer sent | callId:', offerCallId,
+    isRenegotiation ? '(renegotiation)' : '(initial)');
 
-  showScreen('screen-active');
-  startTimer();
+  if (!isRenegotiation) {
+    showScreen('screen-active');
+    startTimer();
+  }
 }
 
 // ── Controls ────────────────────────────────────────────────────
@@ -835,13 +922,81 @@ function toggleMute() {
   if (!localStream) return;
   isMuted = !isMuted;
   localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
-  document.getElementById('ans-mute').classList.toggle('active', isMuted);
+  const muteBtn = document.getElementById('ans-mute');
+  muteBtn.innerHTML = isMuted ? '&#128263;' : '&#127908;';
+  muteBtn.classList.toggle('active', isMuted);
 }
 
-function toggleSpeaker() {
-  isSpeakerOff = !isSpeakerOff;
-  document.getElementById('remote-audio').muted = isSpeakerOff;
-  document.getElementById('ans-spk').classList.toggle('active', isSpeakerOff);
+async function toggleSpeaker() {
+  isSpeaker = !isSpeaker;
+  const audio = document.getElementById('remote-audio');
+  audio.volume = isSpeaker ? 1.0 : 0.5;
+  if (typeof audio.setSinkId === 'function') {
+    try { await audio.setSinkId(''); } catch(e) {}
+  }
+  const spkBtn = document.getElementById('ans-spk');
+  spkBtn.innerHTML = isSpeaker ? '&#128264;' : '&#128266;';
+  spkBtn.classList.toggle('active', isSpeaker);
+}
+
+async function toggleVideo() {
+  if (!pc || pc.signalingState === 'closed') return;
+  if (isVideo) {
+    isVideo = false;
+    if (videoStream) { videoStream.getVideoTracks().forEach(t => t.stop()); videoStream = null; }
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) await sender.replaceTrack(null);
+    document.getElementById('local-video').srcObject = null;
+    updateVideoLayout(false);
+    await sendReOffer();
+  } else {
+    try {
+      videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    } catch(e) {
+      alert('Camera access is required to enable video.'); return;
+    }
+    isVideo = true;
+    const vTrack = videoStream.getVideoTracks()[0];
+    document.getElementById('local-video').srcObject = videoStream;
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) {
+      await sender.replaceTrack(vTrack);
+    } else {
+      pc.addTrack(vTrack, videoStream);
+    }
+    updateVideoLayout(true);
+    await sendReOffer();
+  }
+  const btn = document.getElementById('ans-video');
+  btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
+  btn.classList.toggle('active', isVideo);
+}
+
+async function sendReOffer() {
+  if (!pc || pc.signalingState === 'closed') return;
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({
+      type:   'sdp_offer',
+      to:     callerNumber,
+      callId: callId,
+      sdp:    offer.sdp
+    }));
+    console.log('[WRTC] re-offer sent | callId:', callId);
+  } catch(e) {
+    console.warn('[WRTC] sendReOffer failed:', e.message);
+  }
+}
+
+function updateVideoLayout(on) {
+  document.body.classList.toggle('video-mode', on);
+  if (!on) {
+    const rv = document.getElementById('remote-video');
+    if (rv) rv.srcObject = null;
+    const lv = document.getElementById('local-video');
+    if (lv) lv.srcObject = null;
+  }
 }
 
 // ── DECLINE button ──────────────────────────────────────────────
@@ -865,6 +1020,11 @@ function endCall(duration) {
 
 function cleanupMedia() {
   stopTimer();
+  if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
+  isVideo = false;
+  updateVideoLayout(false);
+  const vidBtn = document.getElementById('ans-video');
+  if (vidBtn) { vidBtn.innerHTML = '&#127909;'; vidBtn.classList.remove('active'); }
   if (pc)          { try { pc.close(); } catch(e) {} pc = null; }
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   if (ws && ws.readyState <= 1) { try { ws.close(); } catch(e) {} ws = null; }
@@ -893,6 +1053,7 @@ function stopTimer() {
 document.getElementById('btn-answer').addEventListener('click', answerCall);
 document.getElementById('btn-decline').addEventListener('click', declineCall);
 document.getElementById('ans-mute').addEventListener('click', toggleMute);
+document.getElementById('ans-video').addEventListener('click', toggleVideo);
 document.getElementById('ans-spk').addEventListener('click', toggleSpeaker);
 document.getElementById('ans-end').addEventListener('click', hangup);
 
