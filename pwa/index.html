@@ -572,6 +572,33 @@ input::placeholder { color: var(--text-muted); }
       </div>
     </div>
 
+    <!-- Install hint (shown by JS if not already installed/dismissed) -->
+    <div id="install-hint-card" style="display:none;margin-top:12px;
+      background:rgba(99,180,255,.07);border:1px solid rgba(99,180,255,.15);
+      border-radius:12px;padding:12px 14px;
+      font-family:'DM Mono',monospace;font-size:12px;
+      color:var(--text-secondary,#6b8fad);line-height:1.6">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="color:var(--blue,#63b4ff);font-weight:700;font-size:11px;letter-spacing:.5px">📲 KEEP YOUR IDENTITY SAFE</span>
+        <span onclick="_dismissInstallHint()" style="cursor:pointer;color:#555;font-size:15px;padding:0 2px;line-height:1">✕</span>
+      </div>
+      <div id="install-hint-text">Install OpenCall as an app so your identity persists across sessions.</div>
+      <button id="btn-pwa-install" onclick="_triggerPwaInstall()" style="display:none;
+        margin-top:8px;padding:7px 16px;background:var(--blue,#63b4ff);color:#03161b;
+        border:0;border-radius:8px;font-weight:700;font-size:12px;cursor:pointer">
+        Install app
+      </button>
+    </div>
+
+    <!-- Back up identity link -->
+    <div style="margin-top:10px;text-align:right">
+      <span onclick="backupIdentity()" style="font-size:11px;color:var(--blue,#63b4ff);
+        cursor:pointer;font-family:'DM Mono',monospace;
+        text-decoration:underline;text-underline-offset:3px">
+        🔐 back up identity
+      </span>
+    </div>
+
   </div>
 </div>
 
@@ -612,7 +639,12 @@ input::placeholder { color: var(--text-muted); }
     <span style="display:none" id="lbl-ocpaddr"></span>
 
     <div class="card">
-      <div class="card-label">Your identity</div>
+      <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Your identity</span>
+        <span onclick="backupIdentity()" style="font-size:10px;color:rgba(99,180,255,.55);
+          cursor:pointer;font-family:'DM Mono',monospace;
+          text-decoration:underline;text-underline-offset:2px">🔐 back up</span>
+      </div>
       <div class="identity-val">
         <span id="ocp-addr-dialer">ocp:loading...</span>
         <span class="copy-btn" onclick="copyOCPAddress()">copy</span>
@@ -965,17 +997,13 @@ async function getOrCreateIdentity() {
 }
 
 // ── Wallet onboarding ──────────────────────────────────────
-// Returns a promise that resolves with a fully populated identity object
-// after the user backs up and confirms their 12-word recovery phrase.
-// The phrase itself is NEVER logged, NEVER transmitted, and goes out of
-// scope as soon as the keypair is derived.
+// Returns a promise resolving with the derived identity after the user either
+// creates a new identity (backup + 3-word confirm) or restores from an existing
+// phrase. The mnemonic is stored in the identity object so backupIdentity() can
+// re-show it later. It is NEVER logged, NEVER transmitted over any network path.
 function _runWalletOnboarding() {
   return new Promise((resolve, reject) => {
-    // Dynamic import — no hard module dependency in the main script.
     import('./ocp-identity.js').then(({ generateMnemonic, mnemonicToKeypair, publicKeyToOcp }) => {
-
-      const phrase = generateMnemonic(); // 128-bit entropy, crypto.getRandomValues
-      const words  = phrase.split(' ');  // 12 words — stays local, never logged
 
       const BASE = [
         'position:fixed;inset:0;z-index:20000;background:var(--bg-deep,#060a10);',
@@ -983,24 +1011,80 @@ function _runWalletOnboarding() {
         'padding:32px 20px 56px;'
       ].join('');
 
-      // ── Step 1: display phrase + warning ──────────────────
+      const H2 = 'font-family:"Syne",sans-serif;font-size:22px;color:#c8f55a;' +
+        'text-align:center;margin:0 0 16px;font-weight:700;';
+      const SUB = 'font-family:"DM Mono",monospace;font-size:13px;color:#8aabb8;' +
+        'text-align:center;margin:0 0 20px;';
+      const BTN_PRI = 'width:100%;padding:15px;background:#3ddc84;color:#03161b;border:0;' +
+        'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
+      const BTN_SEC = 'width:100%;padding:12px;background:rgba(255,255,255,.06);color:#c8dff5;border:0;' +
+        'border-radius:14px;font-weight:600;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;margin-top:10px;';
+      const BTN_GHOST = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
+        'margin-top:8px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
+      const INP = 'width:100%;box-sizing:border-box;padding:12px 14px;' +
+        'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);' +
+        'border-radius:10px;color:#e8f4f7;font-size:16px;font-family:"DM Mono",monospace;margin-bottom:12px;';
+      const ERR = 'font-family:"DM Mono",monospace;font-size:13px;color:#f87171;' +
+        'text-align:center;min-height:18px;margin:0 0 12px;';
+
+      function makeOvl(id) {
+        const o = document.createElement('div');
+        o.id = id || '_ocp-onboard';
+        o.style.cssText = BASE;
+        const w = document.createElement('div');
+        w.style.cssText = 'max-width:460px;width:100%;';
+        o.appendChild(w);
+        return { ovl: o, wrap: w };
+      }
+
+      function mount(ovl) { document.body.appendChild(ovl); }
+      function unmount(ovl) { if (ovl.parentNode) document.body.removeChild(ovl); }
+
+      // ── Step 0: welcome — create vs restore ───────────────
+      function showWelcome() {
+        const { ovl, wrap } = makeOvl();
+
+        const logo = document.createElement('div');
+        logo.style.cssText = 'text-align:center;margin-bottom:20px;';
+        logo.innerHTML = '<svg width="40" height="40" viewBox="0 0 40 40">' +
+          '<circle cx="20" cy="20" r="18" fill="none" stroke="rgba(99,180,255,0.2)" stroke-width="1.5"/>' +
+          '<circle cx="20" cy="20" r="12" fill="none" stroke="rgba(99,180,255,0.35)" stroke-width="1.5"/>' +
+          '<circle cx="20" cy="20" r="6"  fill="none" stroke="rgba(99,180,255,0.6)"  stroke-width="1.5"/>' +
+          '<circle cx="20" cy="20" r="3"  fill="#63b4ff"/></svg>' +
+          '<div style="font-family:\'Syne\',sans-serif;font-size:22px;font-weight:700;' +
+          'color:var(--text-primary,#e8f4ff);margin-top:10px">OpenCall</div>' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:#667;margin-top:4px">' +
+          'Set up your identity to call</div>';
+        wrap.appendChild(logo);
+
+        const btnCreate = document.createElement('button');
+        btnCreate.textContent = 'Create new identity';
+        btnCreate.style.cssText = BTN_PRI;
+        btnCreate.onclick = () => { unmount(ovl); showPhrase(); };
+        wrap.appendChild(btnCreate);
+
+        const btnRestore = document.createElement('button');
+        btnRestore.textContent = 'Restore existing identity';
+        btnRestore.style.cssText = BTN_SEC;
+        btnRestore.onclick = () => { unmount(ovl); showRestore(); };
+        wrap.appendChild(btnRestore);
+
+        mount(ovl);
+      }
+
+      // ── Step 1a: display new phrase + warning ─────────────
       function showPhrase() {
-        const ovl = document.createElement('div');
-        ovl.id = '_ocp-onboard';
-        ovl.style.cssText = BASE;
+        // phrase generated only when user chose "create new"
+        const phrase = generateMnemonic();
+        const words  = phrase.split(' ');
 
-        const wrap = document.createElement('div');
-        wrap.style.cssText = 'max-width:460px;width:100%;';
-        ovl.appendChild(wrap);
+        const { ovl, wrap } = makeOvl();
 
-        // Header
         const h = document.createElement('h2');
         h.textContent = 'Your Recovery Phrase';
-        h.style.cssText = 'font-family:"Syne",sans-serif;font-size:22px;color:#c8f55a;' +
-          'text-align:center;margin:0 0 16px;font-weight:700;';
+        h.style.cssText = H2;
         wrap.appendChild(h);
 
-        // Warning banner
         const warn = document.createElement('div');
         warn.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#f87171;' +
           'background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);' +
@@ -1009,7 +1093,6 @@ function _runWalletOnboarding() {
           'Never sent to any server. Lose it = identity gone forever, no reset.';
         wrap.appendChild(warn);
 
-        // 12-word grid
         const grid = document.createElement('div');
         grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:24px;';
         words.forEach((w, i) => {
@@ -1028,20 +1111,118 @@ function _runWalletOnboarding() {
         });
         wrap.appendChild(grid);
 
-        // Continue button
         const btn = document.createElement('button');
         btn.textContent = "I've written it down →";
-        btn.style.cssText = 'width:100%;padding:15px;background:#3ddc84;color:#03161b;border:0;' +
-          'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
-        btn.onclick = () => { document.body.removeChild(ovl); showConfirm(); };
+        btn.style.cssText = BTN_PRI;
+        btn.onclick = () => { unmount(ovl); showConfirm(phrase, words); };
         wrap.appendChild(btn);
 
-        document.body.appendChild(ovl);
+        const back = document.createElement('button');
+        back.textContent = '← Back';
+        back.style.cssText = BTN_GHOST;
+        back.onclick = () => { unmount(ovl); showWelcome(); };
+        wrap.appendChild(back);
+
+        mount(ovl);
       }
 
-      // ── Step 2: 3-word verification challenge ─────────────
-      function showConfirm() {
-        // Pick 3 distinct word positions using cryptographic randomness.
+      // ── Step 1b: restore from existing phrase ─────────────
+      function showRestore() {
+        const { ovl, wrap } = makeOvl();
+
+        const h = document.createElement('h2');
+        h.textContent = 'Restore Identity';
+        h.style.cssText = H2;
+        wrap.appendChild(h);
+
+        const sub = document.createElement('p');
+        sub.textContent = 'Paste or type your 12-word recovery phrase, one space between each word.';
+        sub.style.cssText = SUB;
+        wrap.appendChild(sub);
+
+        const ta = document.createElement('textarea');
+        ta.rows = 4;
+        ta.setAttribute('autocomplete', 'off');
+        ta.setAttribute('autocorrect', 'off');
+        ta.setAttribute('autocapitalize', 'off');
+        ta.setAttribute('spellcheck', 'false');
+        ta.placeholder = 'word1 word2 word3 … word12';
+        ta.style.cssText = 'width:100%;box-sizing:border-box;padding:12px 14px;resize:vertical;' +
+          'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);' +
+          'border-radius:10px;color:#e8f4f7;font-size:15px;font-family:"DM Mono",monospace;' +
+          'line-height:1.6;margin-bottom:12px;';
+        wrap.appendChild(ta);
+
+        const errEl = document.createElement('p');
+        errEl.style.cssText = ERR;
+        wrap.appendChild(errEl);
+
+        const btn = document.createElement('button');
+        btn.textContent = 'Restore →';
+        btn.style.cssText = BTN_PRI;
+        btn.onclick = () => {
+          const raw = ta.value.trim().toLowerCase().replace(/\s+/g, ' ');
+          errEl.textContent = '';
+          try {
+            const { publicKey } = mnemonicToKeypair(raw);
+            const ocp = publicKeyToOcp(publicKey);
+            unmount(ovl);
+            // Show the derived address so the user can confirm it matches
+            showRestoreConfirm(raw, ocp);
+          } catch(e) {
+            errEl.textContent = 'Invalid phrase — check spelling and word count (12 words required).';
+          }
+        };
+        wrap.appendChild(btn);
+
+        const back = document.createElement('button');
+        back.textContent = '← Back';
+        back.style.cssText = BTN_GHOST;
+        back.onclick = () => { unmount(ovl); showWelcome(); };
+        wrap.appendChild(back);
+
+        mount(ovl);
+        ta.focus();
+      }
+
+      // ── Step 1b-confirm: show derived address before committing ──
+      function showRestoreConfirm(phrase, ocp) {
+        const { ovl, wrap } = makeOvl();
+
+        const h = document.createElement('h2');
+        h.textContent = 'Confirm Identity';
+        h.style.cssText = H2;
+        wrap.appendChild(h);
+
+        const sub = document.createElement('p');
+        sub.textContent = 'Your phrase produces this address. Does it match your original?';
+        sub.style.cssText = SUB;
+        wrap.appendChild(sub);
+
+        const addrBox = document.createElement('div');
+        addrBox.style.cssText = 'background:rgba(200,245,90,.06);border:1px solid rgba(200,245,90,.2);' +
+          'border-radius:10px;padding:14px;font-family:"DM Mono",monospace;font-size:11px;' +
+          'color:#c8f55a;word-break:break-all;margin-bottom:20px;text-align:center;';
+        addrBox.textContent = ocp;
+        wrap.appendChild(addrBox);
+
+        const btn = document.createElement('button');
+        btn.textContent = 'Yes, restore this identity →';
+        btn.style.cssText = BTN_PRI;
+        btn.onclick = () => { unmount(ovl); deriveAndResolve(phrase); };
+        wrap.appendChild(btn);
+
+        const back = document.createElement('button');
+        back.textContent = '← Try a different phrase';
+        back.style.cssText = BTN_GHOST;
+        back.onclick = () => { unmount(ovl); showRestore(); };
+        wrap.appendChild(back);
+
+        mount(ovl);
+      }
+
+      // ── Step 2: 3-word verification (new identity only) ───
+      function showConfirm(phrase, words) {
         const picks = [];
         while (picks.length < 3) {
           const r = crypto.getRandomValues(new Uint32Array(1))[0];
@@ -1050,33 +1231,24 @@ function _runWalletOnboarding() {
         }
         picks.sort((a, b) => a - b);
 
-        const ovl = document.createElement('div');
-        ovl.id = '_ocp-onboard';
-        ovl.style.cssText = BASE;
-
-        const wrap = document.createElement('div');
-        wrap.style.cssText = 'max-width:460px;width:100%;';
-        ovl.appendChild(wrap);
+        const { ovl, wrap } = makeOvl();
 
         const h = document.createElement('h2');
         h.textContent = 'Confirm Your Phrase';
-        h.style.cssText = 'font-family:"Syne",sans-serif;font-size:22px;color:#c8f55a;' +
-          'text-align:center;margin:0 0 8px;font-weight:700;';
+        h.style.cssText = H2;
         wrap.appendChild(h);
 
         const sub = document.createElement('p');
         sub.textContent = 'Enter words ' + picks.map(i => '#' + (i + 1)).join(', ') + ' from your phrase.';
-        sub.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#8aabb8;' +
-          'text-align:center;margin:0 0 20px;';
+        sub.style.cssText = SUB;
         wrap.appendChild(sub);
 
         const inputs = [];
-        picks.forEach((idx, k) => {
+        picks.forEach((idx) => {
           const label = document.createElement('label');
           label.textContent = 'Word #' + (idx + 1);
           label.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#667;' +
             'display:block;margin-bottom:4px;';
-
           const inp = document.createElement('input');
           inp.type = 'text';
           inp.setAttribute('autocomplete', 'off');
@@ -1084,32 +1256,25 @@ function _runWalletOnboarding() {
           inp.setAttribute('autocapitalize', 'off');
           inp.setAttribute('spellcheck', 'false');
           inp.placeholder = 'word ' + (idx + 1);
-          inp.style.cssText = 'width:100%;box-sizing:border-box;padding:12px 14px;' +
-            'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);' +
-            'border-radius:10px;color:#e8f4f7;font-size:16px;' +
-            'font-family:"DM Mono",monospace;margin-bottom:12px;';
+          inp.style.cssText = INP;
           inputs.push({ el: inp, expected: words[idx] });
-
           wrap.appendChild(label);
           wrap.appendChild(inp);
         });
 
         const errEl = document.createElement('p');
-        errEl.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#f87171;' +
-          'text-align:center;min-height:18px;margin:0 0 12px;';
+        errEl.style.cssText = ERR;
         wrap.appendChild(errEl);
 
         const submitBtn = document.createElement('button');
         submitBtn.textContent = 'Confirm & Create Identity';
-        submitBtn.style.cssText = 'width:100%;padding:15px;background:#3ddc84;color:#03161b;border:0;' +
-          'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
+        submitBtn.style.cssText = BTN_PRI;
         wrap.appendChild(submitBtn);
 
         const backBtn = document.createElement('button');
         backBtn.textContent = '← Back to phrase';
-        backBtn.style.cssText = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
-          'margin-top:8px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
-        backBtn.onclick = () => { document.body.removeChild(ovl); showPhrase(); };
+        backBtn.style.cssText = BTN_GHOST;
+        backBtn.onclick = () => { unmount(ovl); showPhrase(); };
         wrap.appendChild(backBtn);
 
         submitBtn.onclick = () => {
@@ -1119,38 +1284,37 @@ function _runWalletOnboarding() {
             errEl.textContent = 'One or more words are incorrect — check your phrase.';
             return;
           }
-          document.body.removeChild(ovl);
-          deriveAndResolve();
+          unmount(ovl);
+          deriveAndResolve(phrase);
         };
 
-        document.body.appendChild(ovl);
+        mount(ovl);
         inputs[0].el.focus();
       }
 
-      // ── Derive keypair and resolve the outer promise ───────
-      function deriveAndResolve() {
+      // ── Final: derive keypair, build identity, resolve ────
+      // phrase is passed in from each path; never logged, never transmitted.
+      // Stored as identity.mnemonic (on-device only) so backupIdentity() can show it.
+      function deriveAndResolve(phrase) {
         const { privateKey, publicKey } = mnemonicToKeypair(phrase);
-        const ocp_address  = publicKeyToOcp(publicKey);
+        const ocp_address = publicKeyToOcp(publicKey);
 
-        // Hex representations for storage
-        const toHex = arr => Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
-        const privateKeyHex = toHex(privateKey);
-        const publicKeyHex  = toHex(publicKey);
-
-        // Base64url JWK fields so signMessage() (WebCrypto Ed25519) continues to work.
+        const toHex  = arr => Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
         const toB64u = arr => btoa(String.fromCharCode(...arr))
           .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+
+        const privateKeyHex = toHex(privateKey);
+        const publicKeyHex  = toHex(publicKey);
         const x = toB64u(publicKey);
         const d = toB64u(privateKey);
-        const privateKeyJwk = { kty: 'OKP', crv: 'Ed25519', d, x, key_ops: ['sign'] };
-        const publicKeyJwk  = { kty: 'OKP', crv: 'Ed25519', x,    key_ops: ['verify'] };
+        const privateKeyJwk = { kty: 'OKP', crv: 'Ed25519', d, x, key_ops: ['sign']   };
+        const publicKeyJwk  = { kty: 'OKP', crv: 'Ed25519',    x, key_ops: ['verify'] };
         const publicKeyRaw  = btoa(String.fromCharCode(...publicKey));
 
-        // phrase is local to this closure and goes out of scope here.
-        // It is never logged, never transmitted, never stored.
         resolve({
           wallet:        true,
           ocp_address,
+          mnemonic:      phrase,    // on-device only; used by backupIdentity()
           privateKeyHex,
           publicKeyHex,
           privateKeyJwk,
@@ -1160,62 +1324,181 @@ function _runWalletOnboarding() {
         });
       }
 
-      showPhrase();
+      showWelcome();
     }).catch(reject);
   });
 }
 
-async function exportIdentity() {
+// ── Backup identity (overlay UI) ──────────────────────────
+// Replaces the old prompt()-based exportIdentity().
+// Section A: re-show the 12-word recovery phrase (wallet identities only).
+// Section B: download AES-GCM / PBKDF2 encrypted keystore (all identities).
+async function backupIdentity() {
   const identity = await loadIdentity();
-  if (!identity) return toast('No identity to export');
+  if (!identity) return toast('No identity to back up');
 
-  // Encrypt the backup with a user passphrase
-  const passphrase = prompt('Enter a passphrase to protect your backup:');
-  if (!passphrase) return;
+  const BASE = 'position:fixed;inset:0;z-index:20000;background:var(--bg-deep,#060a10);' +
+    'overflow-y:auto;display:flex;flex-direction:column;align-items:center;padding:32px 20px 56px;';
+  const CARD = 'background:rgba(13,31,53,.6);border:1px solid rgba(99,180,255,.12);' +
+    'border-radius:14px;padding:18px;margin-bottom:16px;';
+  const LABEL = 'font-family:"Syne",sans-serif;font-size:13px;font-weight:700;' +
+    'color:var(--blue,#63b4ff);letter-spacing:.5px;margin-bottom:10px;display:block;';
+  const INP = 'width:100%;box-sizing:border-box;padding:11px 14px;' +
+    'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);' +
+    'border-radius:10px;color:#e8f4f7;font-size:15px;font-family:"DM Mono",monospace;margin-bottom:10px;';
+  const BTN_PRI = 'width:100%;padding:13px;background:#3ddc84;color:#03161b;border:0;' +
+    'border-radius:12px;font-weight:700;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;';
 
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(passphrase),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveKey']
-  );
-  const encryptionKey = await crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt,
-      iterations: 100000,
-      hash: 'SHA-256'
-    },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt']
-  );
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce },
-    encryptionKey,
-    new TextEncoder().encode(JSON.stringify(identity))
-  );
+  const ovl = document.createElement('div');
+  ovl.style.cssText = BASE;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'max-width:460px;width:100%;';
+  ovl.appendChild(wrap);
 
-  const backup = {
-    version: 1,
-    salt:    btoa(String.fromCharCode(...salt)),
-    nonce:   btoa(String.fromCharCode(...new Uint8Array(nonce))),
-    data:    btoa(String.fromCharCode(...new Uint8Array(encrypted)))
+  // Header
+  const h = document.createElement('h2');
+  h.textContent = 'Back Up Your Identity';
+  h.style.cssText = 'font-family:"Syne",sans-serif;font-size:22px;color:#c8f55a;' +
+    'text-align:center;margin:0 0 20px;font-weight:700;';
+  wrap.appendChild(h);
+
+  // ── Section A: recovery phrase ─────────────────────────
+  const secA = document.createElement('div');
+  secA.style.cssText = CARD;
+  wrap.appendChild(secA);
+
+  const lblA = document.createElement('span');
+  lblA.textContent = 'RECOVERY PHRASE';
+  lblA.style.cssText = LABEL;
+  secA.appendChild(lblA);
+
+  if (identity.mnemonic) {
+    const noteA = document.createElement('p');
+    noteA.textContent = 'Your 12 words. Write them down and store safely — anyone with these can restore your identity.';
+    noteA.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin:0 0 12px;line-height:1.55;';
+    secA.appendChild(noteA);
+
+    // Blurred grid, click-to-reveal
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-bottom:12px;' +
+      'filter:blur(6px);pointer-events:none;user-select:none;transition:filter .3s;';
+    identity.mnemonic.split(' ').forEach((w, i) => {
+      const cell = document.createElement('div');
+      cell.style.cssText = 'background:rgba(200,245,90,.06);border:1px solid rgba(200,245,90,.18);' +
+        'border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:5px;';
+      cell.innerHTML = `<span style="color:#666;font-size:11px;font-family:'DM Mono',monospace;min-width:18px">${i+1}.</span>` +
+        `<strong style="color:#c8f55a;font-family:'DM Mono',monospace;font-size:13px">${w}</strong>`;
+      grid.appendChild(cell);
+    });
+    secA.appendChild(grid);
+
+    const revealBtn = document.createElement('button');
+    revealBtn.textContent = 'Tap to reveal phrase';
+    revealBtn.style.cssText = 'width:100%;padding:11px;background:rgba(200,245,90,.1);' +
+      'color:#c8f55a;border:1px solid rgba(200,245,90,.25);border-radius:10px;font-weight:600;' +
+      'font-size:14px;font-family:"DM Mono",monospace;cursor:pointer;';
+    let revealed = false;
+    revealBtn.onclick = () => {
+      if (!revealed) {
+        grid.style.filter = 'none';
+        grid.style.pointerEvents = '';
+        grid.style.userSelect = '';
+        revealBtn.textContent = 'Hide phrase';
+        revealed = true;
+      } else {
+        grid.style.filter = 'blur(6px)';
+        grid.style.pointerEvents = 'none';
+        grid.style.userSelect = 'none';
+        revealBtn.textContent = 'Tap to reveal phrase';
+        revealed = false;
+      }
+    };
+    secA.appendChild(revealBtn);
+  } else {
+    const noPhrase = document.createElement('p');
+    noPhrase.textContent = 'Recovery phrase not available for this identity (created before wallet upgrade). Use the encrypted keystore below.';
+    noPhrase.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin:0;line-height:1.55;';
+    secA.appendChild(noPhrase);
+  }
+
+  // ── Section B: encrypted keystore download ─────────────
+  const secB = document.createElement('div');
+  secB.style.cssText = CARD;
+  wrap.appendChild(secB);
+
+  const lblB = document.createElement('span');
+  lblB.textContent = 'ENCRYPTED KEYSTORE';
+  lblB.style.cssText = LABEL;
+  secB.appendChild(lblB);
+
+  const noteB = document.createElement('p');
+  noteB.textContent = 'Download your private key encrypted with a password. The password is never stored.';
+  noteB.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin:0 0 12px;line-height:1.55;';
+  secB.appendChild(noteB);
+
+  const pw1 = document.createElement('input');
+  pw1.type = 'password'; pw1.placeholder = 'Password';
+  pw1.style.cssText = INP;
+
+  const pw2 = document.createElement('input');
+  pw2.type = 'password'; pw2.placeholder = 'Confirm password';
+  pw2.style.cssText = INP;
+
+  const ksErr = document.createElement('p');
+  ksErr.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#f87171;min-height:16px;margin:0 0 10px;';
+
+  const dlBtn = document.createElement('button');
+  dlBtn.textContent = 'Download encrypted backup';
+  dlBtn.style.cssText = BTN_PRI;
+
+  secB.appendChild(pw1);
+  secB.appendChild(pw2);
+  secB.appendChild(ksErr);
+  secB.appendChild(dlBtn);
+
+  dlBtn.onclick = async () => {
+    ksErr.textContent = '';
+    const pass = pw1.value;
+    if (!pass) { ksErr.textContent = 'Enter a password.'; return; }
+    if (pass !== pw2.value) { ksErr.textContent = 'Passwords do not match.'; return; }
+    dlBtn.disabled = true;
+    dlBtn.textContent = 'Encrypting…';
+    try {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const km   = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass),
+        { name: 'PBKDF2' }, false, ['deriveKey']);
+      const key  = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
+        km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+      const iv   = crypto.getRandomValues(new Uint8Array(12));
+      const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv },
+        key, new TextEncoder().encode(JSON.stringify(identity)));
+      const b64  = arr => btoa(String.fromCharCode(...new Uint8Array(arr)));
+      const pkg  = { version: 2, salt: b64(salt), iv: b64(iv), data: b64(ct) };
+      const blob = new Blob([JSON.stringify(pkg)], { type: 'application/json' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = 'ocp-identity-backup.json'; a.click();
+      URL.revokeObjectURL(url);
+      toast('Backup downloaded — store it safely');
+      pw1.value = ''; pw2.value = '';
+    } catch(e) {
+      ksErr.textContent = 'Encryption failed — try again.';
+    } finally {
+      dlBtn.disabled = false;
+      dlBtn.textContent = 'Download encrypted backup';
+    }
   };
 
-  // Download as file
-  const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = 'ocp-identity-backup.json';
-  a.click();
-  URL.revokeObjectURL(url);
-  toast('Identity exported — keep this file safe');
+  // ── Close button ───────────────────────────────────────
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Close';
+  closeBtn.style.cssText = 'width:100%;padding:12px;background:transparent;color:#667;border:0;' +
+    'cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
+  closeBtn.onclick = () => { if (ovl.parentNode) document.body.removeChild(ovl); };
+  wrap.appendChild(closeBtn);
+
+  document.body.appendChild(ovl);
 }
 
 async function importIdentity() {
@@ -1624,7 +1907,58 @@ async function answerMissedCall() {
   window._pendingMissedCallback = window._missedFrom;
 }
 
-// Load identity on startup
+// ── Install hint + PWA prompt ──────────────────────────────
+let _deferredInstallPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+  // Show install button inside the hint card if it's visible
+  const btn = document.getElementById('btn-pwa-install');
+  if (btn) btn.style.display = 'block';
+});
+
+function _initInstallHint() {
+  // Don't show if already running as installed PWA
+  if (window.matchMedia('(display-mode: standalone)').matches) return;
+  if (navigator.standalone) return; // iOS Safari installed
+  if (localStorage.getItem('install-hint-dismissed')) return;
+
+  const card = document.getElementById('install-hint-card');
+  const textEl = document.getElementById('install-hint-text');
+  if (!card) return;
+
+  // Platform-specific copy
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const android = /Android/.test(navigator.userAgent);
+  if (ios) {
+    textEl.textContent = 'Install: tap the Share button (□↑) below, then "Add to Home Screen". ' +
+      'This keeps your identity safe across sessions.';
+  } else if (android) {
+    textEl.textContent = 'Install: tap ⋮ → "Add to Home Screen" or "Install app". ' +
+      'Keeps your identity safe across sessions.';
+  } else {
+    textEl.textContent = 'Install OpenCall as an app (browser address bar → install icon) ' +
+      'to keep your identity safe across sessions.';
+  }
+  card.style.display = 'block';
+}
+
+function _dismissInstallHint() {
+  localStorage.setItem('install-hint-dismissed', '1');
+  const card = document.getElementById('install-hint-card');
+  if (card) card.style.display = 'none';
+}
+
+async function _triggerPwaInstall() {
+  if (!_deferredInstallPrompt) return;
+  _deferredInstallPrompt.prompt();
+  const { outcome } = await _deferredInstallPrompt.userChoice;
+  _deferredInstallPrompt = null;
+  if (outcome === 'accepted') _dismissInstallHint();
+}
+
+// ── Load identity on startup ───────────────────────────────
 let myIdentity = null;
 getOrCreateIdentity().then(async id => {
   myIdentity = id;
@@ -1642,6 +1976,7 @@ getOrCreateIdentity().then(async id => {
   });
   subscribePush();
   checkMissedCallRoute();
+  _initInstallHint();
 }).catch(e => console.error('[OCP] Identity init failed:', e));
 
 async function subscribePush() {
