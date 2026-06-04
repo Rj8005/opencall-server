@@ -1013,7 +1013,14 @@ async function onMessage(event) {
     }
 
     case 'hangup':
+      console.log('[CALL] hangup received — tearing down');
       endCall(stopTimer());
+      break;
+
+    case 'video_toggle':
+      console.log('[WRTC] video_toggle received — state:', msg.state);
+      if (msg.state === 'on'  && !isVideo) await toggleVideo(true);
+      if (msg.state === 'off' &&  isVideo) await toggleVideo(true);
       break;
 
     case 'error':
@@ -1099,6 +1106,7 @@ async function handleOffer(sdp, offerCallId) {
         const rv = document.getElementById('remote-video');
         rv.srcObject = new MediaStream([e.track]);
         rv.play().catch(err => console.warn('[WRTC] remote-video play blocked:', err.message));
+        console.log('[WRTC] remote video attached');
         updateVideoLayout(true);
         return;
       }
@@ -1206,7 +1214,7 @@ async function toggleSpeaker() {
   spkBtn.classList.toggle('active', isSpeaker);
 }
 
-async function toggleVideo() {
+async function toggleVideo(_mirrored = false) {
   if (!pc || pc.signalingState === 'closed') return;
   if (isVideo) {
     isVideo = false;
@@ -1233,6 +1241,9 @@ async function toggleVideo() {
     }
     updateVideoLayout(true);
     await sendReOffer();
+  }
+  if (!_mirrored) {
+    wsSend({ type: 'video_toggle', state: isVideo ? 'on' : 'off', callId, to: callerNumber });
   }
   const btn = document.getElementById('ans-video');
   btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
