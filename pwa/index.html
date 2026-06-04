@@ -616,6 +616,16 @@ input::placeholder { color: var(--text-muted); }
 }
 .send:hover    { background: rgba(29,158,117,0.25); }
 .send:disabled { opacity: 0.4; cursor: default; }
+#ocpMic.recording {
+  background: rgba(255,70,70,.18) !important;
+  border-color: rgba(255,100,100,.5) !important;
+  color: #ff6464 !important;
+  animation: micPulse .7s ease-in-out infinite;
+}
+@keyframes micPulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(1.08)} }
+.voice-bubble { display:flex;align-items:center;gap:8px;min-width:140px; }
+.voice-bubble audio { flex:1;height:32px;min-width:0; }
+.voice-dur { font-size:10px;color:var(--text-muted);font-family:'DM Mono',monospace;flex-shrink:0; }
 </style>
 </head>
 <body>
@@ -1109,6 +1119,8 @@ input::placeholder { color: var(--text-muted); }
   </ul>
   <div class="composer">
     <textarea id="ocpInput" class="field" placeholder="Message…" rows="1" maxlength="2000"></textarea>
+    <button id="ocpMic"  class="send" title="Hold to record voice note"
+            style="background:var(--bg-card);border-color:var(--border);">&#127908;</button>
     <button id="ocpSend" class="send" title="Send">&#8593;</button>
   </div>
 </section>
@@ -2364,13 +2376,47 @@ async function sendOcpMessage(peerOcp, text) {
   await wsSend({ type: 'chat_msg', to: targetOcp, from: myIdentity?.ocp_address, ciphertext, msgId, ts });
 }
 
-function addOcpBubble(dir, text, msgId, status, ts, kind) {
+// extraData is used for voice notes: { blobUrl, durationMs }
+function addOcpBubble(dir, text, msgId, status, ts, kind, extraData) {
   const msgList = document.getElementById('ocpMsgs');
   if (!msgList) return;
   const li = document.createElement('li');
   li.dataset.msgId = msgId;
   const d = ts ? new Date(ts) : new Date();
   const timeStr = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+
+  if (kind === 'voice') {
+    li.className = 'bubble ' + dir;
+    const blobUrl = extraData?.blobUrl || _voiceBlobUrls.get(msgId) || null;
+    const durMs   = extraData?.durationMs || 0;
+    const durStr  = durMs ? (Math.floor(durMs/60000) + ':' + String(Math.floor((durMs%60000)/1000)).padStart(2,'0')) : '';
+    const st = status || 'sent';
+    const tickText = st === 'delivered' ? '✓✓' : st === 'queued' ? '⏳'
+                   : (st === 'sending' || st === 'pending') ? '…' : st === 'failed' ? '✗' : '✓';
+    const tickHtml = dir === 'out' ? `<span class="tick st-${st}" id="otick_${msgId}">${tickText}</span>` : '';
+    if (blobUrl) {
+      // Audio available in this session
+      const audioEl = document.createElement('audio');
+      audioEl.preload = 'metadata';
+      audioEl.src     = blobUrl;
+      audioEl.controls = true;
+      audioEl.style.cssText = 'width:100%;max-width:200px;height:32px;vertical-align:middle;';
+      li.innerHTML = `<div class="voice-bubble"></div><div class="meta"><span class="ts">${timeStr}</span>${tickHtml}</div>`;
+      li.querySelector('.voice-bubble').appendChild(audioEl);
+      if (durStr) {
+        const durEl = document.createElement('span');
+        durEl.className = 'voice-dur'; durEl.textContent = durStr;
+        li.querySelector('.voice-bubble').appendChild(durEl);
+      }
+    } else {
+      // Restored from thread — audio not in memory; show placeholder
+      li.innerHTML = `<span style="color:var(--text-secondary)">🎤 Voice note${durStr ? ' · ' + durStr : ''}</span>` +
+        `<div class="meta"><span class="ts">${timeStr}</span>${tickHtml}</div>`;
+    }
+    msgList.appendChild(li);
+    msgList.scrollTop = msgList.scrollHeight;
+    return;
+  }
 
   if (kind === 'call') {
     // System entry: call ended
@@ -2440,6 +2486,7 @@ function setOcpStatus(msgId, status) {
   document.getElementById('ocpChatBack').onclick = () => {
     document.getElementById('ocpChat').classList.remove('open');
     activeOcpChat = null;
+    _cancelVoiceRecording();
   };
   const inp  = document.getElementById('ocpInput');
   const send = document.getElementById('ocpSend');
@@ -2451,7 +2498,134 @@ function setOcpStatus(msgId, status) {
     inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
   });
   send.addEventListener('click', sendOcpMessage);
+
+  const mic = document.getElementById('ocpMic');
+  // Hold-to-record on desktop; tap-to-start / tap-to-send on touch
+  let _touchRecording = false;
+  mic.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') {
+      e.preventDefault();
+      if (!_touchRecording) { _touchRecording = true; _startVoiceRecording(); }
+      else                  { _touchRecording = false; _stopVoiceRecording(); }
+    } else {
+      mic.setPointerCapture(e.pointerId);
+      _startVoiceRecording();
+    }
+  });
+  mic.addEventListener('pointerup', e => {
+    if (e.pointerType !== 'touch') _stopVoiceRecording();
+  });
+  mic.addEventListener('pointercancel', () => _cancelVoiceRecording());
 })();
+
+// ── Voice notes ────────────────────────────────────────────────────────────
+// In-memory blob URLs for the current session; not persisted (avoids filling
+// localStorage with binary data). Restored threads show a "🎤 Voice note"
+// placeholder if the audio isn't available in this session.
+const _voiceBlobUrls = new Map(); // msgId → blobURL
+
+let _voiceRecorder  = null;
+let _voiceChunks    = [];
+let _voiceStartMs   = 0;
+let _voiceAutoStop  = null;
+const VOICE_MAX_BYTES = 200_000;  // ~45-50 s of Opus; stays under the server cap
+const VOICE_MAX_MS    = 60_000;
+
+function _getBestMimeType() {
+  for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return '';
+}
+
+async function _startVoiceRecording() {
+  if (_voiceRecorder) return;
+  if (!activeOcpChat) { toast('Open a chat first'); return; }
+  const mic = document.getElementById('ocpMic');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = _getBestMimeType();
+    _voiceChunks  = [];
+    _voiceStartMs = Date.now();
+    _voiceRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    _voiceRecorder.ondataavailable = e => { if (e.data.size) _voiceChunks.push(e.data); };
+    _voiceRecorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(_voiceChunks, { type: _voiceRecorder.mimeType || 'audio/webm' });
+      _voiceChunks   = [];
+      _voiceRecorder = null;
+      if (blob.size > 4) _sendVoiceNote(blob, Date.now() - _voiceStartMs);
+    };
+    _voiceRecorder.start(200); // collect chunks every 200 ms
+    if (mic) mic.classList.add('recording');
+    _voiceAutoStop = setTimeout(_stopVoiceRecording, VOICE_MAX_MS);
+  } catch(e) {
+    toast('Microphone access denied');
+    _voiceRecorder = null;
+  }
+}
+
+function _stopVoiceRecording() {
+  clearTimeout(_voiceAutoStop);
+  _voiceAutoStop = null;
+  const mic = document.getElementById('ocpMic');
+  if (mic) mic.classList.remove('recording');
+  if (_voiceRecorder && _voiceRecorder.state !== 'inactive') {
+    _voiceRecorder.stop();
+  } else {
+    _voiceRecorder = null;
+  }
+}
+
+function _cancelVoiceRecording() {
+  clearTimeout(_voiceAutoStop);
+  _voiceAutoStop = null;
+  const mic = document.getElementById('ocpMic');
+  if (mic) mic.classList.remove('recording');
+  if (_voiceRecorder) {
+    _voiceRecorder.ondataavailable = null;
+    _voiceRecorder.onstop = null;
+    try { _voiceRecorder.stop(); } catch(e) {}
+    _voiceRecorder = null;
+  }
+  _voiceChunks = [];
+}
+
+async function _sendVoiceNote(blob, durationMs) {
+  if (!activeOcpChat) return;
+  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
+  const { peerOcp } = activeOcpChat;
+
+  if (blob.size > VOICE_MAX_BYTES) {
+    toast('Clip too long — try a shorter recording (max ~50 s)');
+    return;
+  }
+
+  // Convert blob → base64
+  const arrayBuf = await blob.arrayBuffer();
+  const audioB64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+  const mimeType = blob.type || 'audio/webm';
+  const ts    = Date.now();
+  const msgId = 'vm_' + ts + '_' + Math.random().toString(36).slice(2, 6);
+
+  // Optimistic bubble using a local blob URL (in-memory only)
+  const blobUrl = URL.createObjectURL(blob);
+  _voiceBlobUrls.set(msgId, blobUrl);
+  addOcpBubble('out', '', msgId, 'sending', ts, 'voice', { blobUrl, durationMs });
+
+  // Persist marker (no audio data in localStorage)
+  if (!ocpThreads.has(peerOcp)) ocpThreads.set(peerOcp, { peerOcp, peerName: null, messages: [] });
+  ocpThreads.get(peerOcp).messages.push(
+    { dir: 'out', kind: 'voice', durationMs, msgId, ts, status: 'sending' }
+  );
+  saveOcpChats();
+
+  // Encrypt and send
+  await initChatSession(peerOcp);
+  const ciphertext = await ratchetEncrypt('chat:' + peerOcp, { audioB64, mimeType, durationMs, ts });
+  await wsSend({ type: 'chat_msg', to: peerOcp, from: myIdentity?.ocp_address,
+                 ciphertext, msgId, ts, kind: 'voice' });
+}
 
 // ── Missed Call Landing Page ──────────────────────────────
 
@@ -3583,27 +3757,57 @@ async function onMessage(msg) {
       break;
 
     case 'chat_msg': {
-      const { from, ciphertext, msgId, ts: msgTs } = msg;
+      const { from, ciphertext, msgId, ts: msgTs, kind: msgKind } = msg;
       if (!from || !ciphertext || !msgId) break;
       await initChatSession(from);
       const plain = await ratchetDecrypt('chat:' + from, ciphertext);
-      const text  = plain?.text || '[could not decrypt]';
-      if (!ocpThreads.has(from)) ocpThreads.set(from, { messages: [] });
+      if (!ocpThreads.has(from)) ocpThreads.set(from, { peerOcp: from, peerName: null, messages: [] });
       const thread = ocpThreads.get(from);
+      const contacts = loadContacts();
+      const ct = contacts.find(c => c.ocp === from);
+      const peerLabel = ct?.name || from.slice(0, 20) + '…';
+
       if (!thread.messages.find(m => m.msgId === msgId)) {
-        thread.messages.push({ dir: 'in', text, msgId, status: 'delivered', ts: msgTs || Date.now() });
-        saveOcpChats();
-      }
-      if (activeOcpChat?.peerOcp === from) {
-        addOcpBubble('in', text, msgId, 'delivered', msgTs);
-      } else {
-        const contacts = loadContacts();
-        const ct = contacts.find(c => c.ocp === from);
-        toast((ct?.name || from.slice(0,20) + '…') + ': ' + text.slice(0, 60));
+        if (msgKind === 'voice' && plain?.audioB64) {
+          // ── Inbound voice note ────────────────────────────
+          const { audioB64, mimeType, durationMs } = plain;
+          // Build blob URL for this session
+          const bytes   = Uint8Array.from(atob(audioB64), c => c.charCodeAt(0));
+          const blob    = new Blob([bytes], { type: mimeType || 'audio/webm' });
+          const blobUrl = URL.createObjectURL(blob);
+          _voiceBlobUrls.set(msgId, blobUrl);
+          // Store marker only — no audio binary in localStorage
+          thread.messages.push({ dir: 'in', kind: 'voice', durationMs: durationMs || 0,
+                                  msgId, ts: msgTs || Date.now(), status: 'delivered' });
+          saveOcpChats();
+          if (activeOcpChat?.peerOcp === from) {
+            addOcpBubble('in', '', msgId, 'delivered', msgTs, 'voice', { blobUrl, durationMs });
+          } else {
+            toast(peerLabel + ': 🎤 Voice note');
+          }
+        } else {
+          // ── Inbound text message ──────────────────────────
+          const text = plain?.text || '[could not decrypt]';
+          thread.messages.push({ dir: 'in', text, msgId, status: 'delivered',
+                                  ts: msgTs || Date.now(), kind: 'chat' });
+          saveOcpChats();
+          if (activeOcpChat?.peerOcp === from) {
+            addOcpBubble('in', text, msgId, 'delivered', msgTs, 'chat');
+          } else {
+            toast(peerLabel + ': ' + text.slice(0, 60));
+          }
+        }
       }
       await wsSend({ type: 'chat_delivered', to: from, msgId });
       break;
     }
+
+    case 'chat_error':
+      if (msg.reason === 'payload_too_large') {
+        setOcpStatus(msg.msgId, 'failed');
+        toast('Clip too long — try a shorter recording.');
+      }
+      break;
 
     case 'chat_sent':
       setOcpStatus(msg.msgId, 'sent');

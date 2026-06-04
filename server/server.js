@@ -77,7 +77,11 @@ const ocpRegistry = new Map();
 // Flushed to the user when they reconnect (register).
 // Format: ocp_address → Array<{ from, fromName, ciphertext, msgId, ts }>
 const offlineChatInbox = new Map();
-const OFFLINE_INBOX_MAX = 50; // per-user cap
+const OFFLINE_INBOX_MAX    = 50;      // messages per offline user
+// ~60 s Opus (~32 kbps) → ~240 KB binary → ~320 KB base64 + encryption overhead.
+// 400 KB is the per-message cap; anything larger is rejected immediately so the
+// client can warn "clip too long" rather than silently dropping it.
+const MAX_CHAT_PAYLOAD_BYTES = 400_000;
 
 // WhatsApp Web.js stubs — set waReady=true and assign waClient after
 // calling require('whatsapp-web.js') and authenticating
@@ -1112,7 +1116,8 @@ async function handle(ws, msg) {
         if (queued?.length) {
           for (const m of queued) {
             send(ws, { type: 'chat_msg', from: m.from, fromName: m.fromName,
-                       ciphertext: m.ciphertext, msgId: m.msgId, ts: m.ts });
+                       ciphertext: m.ciphertext, msgId: m.msgId,
+                       ts: m.ts, kind: m.kind || 'chat' });
           }
           offlineChatInbox.delete(msg.from);
           log('💬', `flushed ${queued.length} queued chat(s) to`, msg.from.slice(0, 20) + '…');
@@ -2011,8 +2016,16 @@ async function handle(ws, msg) {
     // Route an E2E-encrypted chat message to the recipient.
     // msg: { to, from, ciphertext, msgId, ts }
     case 'chat_msg': {
-      const { to, from, ciphertext, msgId, ts } = msg;
+      const { to, from, ciphertext, msgId, ts, kind } = msg;
       if (!to || !ciphertext || !msgId) break;
+
+      // Reject oversized payloads immediately (large voice clips that exceed the cap)
+      const payloadLen = JSON.stringify(ciphertext).length;
+      if (payloadLen > MAX_CHAT_PAYLOAD_BYTES) {
+        send(ws, { type: 'chat_error', reason: 'payload_too_large', msgId });
+        log('!', `chat_msg rejected (${payloadLen} bytes > cap) from ${(from||'?').slice(0,16)}…`);
+        break;
+      }
 
       // Resolve recipient ocp address
       let recipientOcp = null;
@@ -2027,28 +2040,29 @@ async function handle(ws, msg) {
 
       const senderMeta = metadata.get(ws);
       const fromName   = senderMeta?.name || null;
+      const msgKind    = kind || 'chat';
 
       if (recipientWs && recipientWs.readyState === 1) {
         // ── Online: deliver immediately ──────────────────────
-        send(recipientWs, { type: 'chat_msg', from, fromName, ciphertext, msgId, ts: ts || Date.now() });
+        send(recipientWs, { type: 'chat_msg', from, fromName, ciphertext, msgId,
+                            ts: ts || Date.now(), kind: msgKind });
         send(ws, { type: 'chat_sent', msgId });
-        log('💬', `chat ${(from||'?').slice(0,16)}… → ${(to||'?').slice(0,16)}… (live)`);
+        log('💬', `${msgKind} ${(from||'?').slice(0,16)}… → ${(to||'?').slice(0,16)}… (live)`);
       } else if (recipientOcp) {
         // ── Offline: queue + push ────────────────────────────
         const inbox = offlineChatInbox.get(recipientOcp) || [];
         if (inbox.length < OFFLINE_INBOX_MAX) {
-          inbox.push({ from, fromName, ciphertext, msgId, ts: ts || Date.now() });
+          inbox.push({ from, fromName, ciphertext, msgId, ts: ts || Date.now(), kind: msgKind });
           offlineChatInbox.set(recipientOcp, inbox);
         }
         // Web Push nudge — no plaintext, just a "new message" wake signal
+        const pushPreview = msgKind === 'voice' ? '🎤 Voice message' : 'New message';
         sendPushNotification(recipientOcp, {
-          type:     'chat_message',
-          from:     from || '',
-          fromName: fromName || '',
-          preview:  'New message'
+          type: 'chat_message', from: from || '', fromName: fromName || '',
+          preview: pushPreview
         });
         send(ws, { type: 'chat_queued', msgId });
-        log('💬', `chat queued for offline user ${recipientOcp.slice(0,20)}… (${inbox.length} in inbox)`);
+        log('💬', `${msgKind} queued for offline user ${recipientOcp.slice(0,20)}… (${inbox.length} in inbox)`);
       } else {
         send(ws, { type: 'chat_undelivered', msgId });
       }
