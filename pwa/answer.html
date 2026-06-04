@@ -295,6 +295,53 @@ body::after {
   border-color: var(--blue-border);
   color: var(--blue);
 }
+.cbtn-ainotes {
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.cbtn-ainotes.active {
+  background: rgba(245,166,35,0.15);
+  border-color: rgba(245,166,35,0.4);
+  color: #f5a623;
+}
+/* ── AI Notes banner + transcript panel ── */
+.ai-notes-banner {
+  display: none;
+  background: rgba(245,166,35,0.10);
+  border: 1px solid rgba(245,166,35,0.28);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px; margin: 8px 0 4px;
+  font-size: 10px; color: #f5a623;
+  text-align: center; letter-spacing: 0.3px;
+}
+.ai-notes-panel {
+  display: none;
+  background: var(--bg-field); border: 1px solid var(--border);
+  border-radius: var(--radius-md); margin-top: 8px; overflow: hidden;
+}
+.ai-transcript {
+  max-height: 150px; overflow-y: auto;
+  padding: 8px 12px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.ai-line {
+  font-size: 11px; color: var(--text-secondary);
+  font-family: 'DM Mono', monospace; line-height: 1.45;
+}
+.ai-line .ai-spk { color: var(--blue); font-weight: 500; }
+.ai-line.ai-interim { color: var(--text-muted); font-style: italic; }
+.ai-notes-foot {
+  display: flex; gap: 8px; padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
+.ai-foot-btn {
+  flex: 1; padding: 6px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 10px; color: var(--text-muted);
+  transition: color 0.2s, border-color 0.2s;
+}
+.ai-foot-btn:hover { color: var(--blue); border-color: var(--blue-border); }
 /* ── Video call layout ── */
 #video-container {
   display: none;
@@ -492,6 +539,26 @@ input::placeholder { color: var(--text-muted); }
       <div class="cbtn cbtn-vid" id="ans-video">&#127909;</div>
       <div class="cbtn cbtn-end" id="ans-end">&#9742;</div>
       <div class="cbtn cbtn-spk" id="ans-spk">&#128266;</div>
+      <div class="cbtn cbtn-ainotes" id="btn-ai-notes" title="AI Notes" onclick="toggleAiNotes()">&#128221;</div>
+    </div>
+
+    <!-- AI Notes consent banner — visible when either party enables AI Notes -->
+    <div class="ai-notes-banner" id="ai-notes-banner">&#128221; AI Notes are ON for this call</div>
+
+    <!-- AI Notes transcript panel -->
+    <div class="ai-notes-panel" id="ai-notes-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;
+                  padding:6px 12px;border-bottom:1px solid var(--border)">
+        <span style="font-size:9px;color:var(--text-muted);letter-spacing:0.8px;
+                     text-transform:uppercase">Live transcript</span>
+        <span onclick="toggleAiPanel()" style="cursor:pointer;font-size:11px;
+              color:var(--text-muted)">&#10005;</span>
+      </div>
+      <div class="ai-transcript" id="ai-transcript"></div>
+      <div class="ai-notes-foot">
+        <button class="ai-foot-btn" onclick="copyTranscript()">Copy</button>
+        <button class="ai-foot-btn" onclick="downloadTranscript()">Download</button>
+      </div>
     </div>
   </div>
 
@@ -604,6 +671,194 @@ let userAnswered      = false;
 let pendingOffer      = null;
 let pendingCallId     = null;
 let iceCandidateQueue = [];     // buffer ICE candidates that arrive before setRemoteDescription
+
+// ── AI Notes (browser SpeechRecognition live transcript) ──
+// TODO: replace SpeechRecognition with Whisper/Deepgram for better accuracy
+// and non-Chrome browser support.
+const _SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+let aiNotesLocalOn  = false;
+let aiNotesRemoteOn = false;
+let aiRecognition   = null;
+let aiTranscript    = [];      // { speaker, text, ts }
+let aiPanelVisible  = false;
+let _aiInterimEl    = null;
+
+// Local speaker name: reuse identity stored by index.html if the same browser
+const _myAnswerName = localStorage.getItem('user_name') || 'Guest';
+
+function toggleAiNotes() {
+  if (!_SR) {
+    alert('AI Notes need a supported browser (Chrome or Edge).');
+    const btn = document.getElementById('btn-ai-notes');
+    if (btn) { btn.style.opacity = '0.4'; btn.title = 'Unsupported browser'; }
+    return;
+  }
+  aiNotesLocalOn = !aiNotesLocalOn;
+  document.getElementById('btn-ai-notes')?.classList.toggle('active', aiNotesLocalOn);
+
+  // callerNumber is the "to" for direct path routing on the server
+  wsSend({ type: 'ai_notes', state: aiNotesLocalOn ? 'on' : 'off',
+           callId, to: callerNumber });
+
+  _updateAiNotesBanner();
+
+  if (aiNotesLocalOn) {
+    _startTranscription();
+  } else {
+    _stopTranscription();
+  }
+}
+
+function _updateAiNotesBanner() {
+  const banner = document.getElementById('ai-notes-banner');
+  if (banner) banner.style.display = (aiNotesLocalOn || aiNotesRemoteOn) ? 'block' : 'none';
+}
+
+function toggleAiPanel() {
+  aiPanelVisible = !aiPanelVisible;
+  const panel = document.getElementById('ai-notes-panel');
+  if (panel) panel.style.display = aiPanelVisible ? 'block' : 'none';
+}
+
+function _startTranscription() {
+  if (!_SR || aiRecognition) return;
+  aiRecognition = new _SR();
+  aiRecognition.continuous     = true;
+  aiRecognition.interimResults = true;
+  aiRecognition.lang           = navigator.language || 'en-US';
+
+  aiRecognition.onresult = (event) => {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const res = event.results[i];
+      if (res.isFinal) {
+        const text = res[0].transcript.trim();
+        if (!text) continue;
+        const ts = Date.now();
+        aiTranscript.push({ speaker: _myAnswerName, text, ts });
+        _appendAiLine(_myAnswerName, text, ts);
+        wsSend({ type: 'ai_note_line', callId, to: callerNumber,
+                 speaker: _myAnswerName, text, ts });
+        if (_aiInterimEl) { _aiInterimEl.remove(); _aiInterimEl = null; }
+      } else {
+        interim += res[0].transcript;
+      }
+    }
+    const box = document.getElementById('ai-transcript');
+    if (interim && box) {
+      if (!_aiInterimEl) {
+        _aiInterimEl = document.createElement('div');
+        _aiInterimEl.className = 'ai-line ai-interim';
+        box.appendChild(_aiInterimEl);
+      }
+      _aiInterimEl.textContent = _myAnswerName + ': ' + interim + '…';
+      box.scrollTop = box.scrollHeight;
+    } else if (!interim && _aiInterimEl) {
+      _aiInterimEl.remove(); _aiInterimEl = null;
+    }
+  };
+
+  aiRecognition.onerror = (e) => {
+    if (e.error === 'not-allowed') {
+      alert('Microphone permission denied for AI Notes.');
+      aiNotesLocalOn = false;
+      document.getElementById('btn-ai-notes')?.classList.remove('active');
+      _stopTranscription();
+    }
+  };
+
+  aiRecognition.onend = () => {
+    if (aiNotesLocalOn) {
+      try { aiRecognition && aiRecognition.start(); } catch(e) {}
+    }
+  };
+
+  try {
+    aiRecognition.start();
+    if (!aiPanelVisible) {
+      aiPanelVisible = true;
+      const panel = document.getElementById('ai-notes-panel');
+      if (panel) panel.style.display = 'block';
+    }
+  } catch(e) {
+    alert('Could not start AI Notes: ' + e.message);
+    aiNotesLocalOn = false;
+    document.getElementById('btn-ai-notes')?.classList.remove('active');
+    aiRecognition = null;
+  }
+}
+
+function _stopTranscription() {
+  if (aiRecognition) {
+    try { aiRecognition.stop(); } catch(e) {}
+    aiRecognition = null;
+  }
+  if (_aiInterimEl) { _aiInterimEl.remove(); _aiInterimEl = null; }
+}
+
+function _appendAiLine(speaker, text, ts) {
+  const box = document.getElementById('ai-transcript');
+  if (!box) return;
+  const el = document.createElement('div');
+  el.className = 'ai-line';
+  const hhmm = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  el.innerHTML = '<span class="ai-spk">' + speaker + '</span>'
+    + ' <span style="color:var(--text-muted);font-size:9px">' + hhmm + '</span><br>'
+    + text;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+  if (!aiPanelVisible) {
+    aiPanelVisible = true;
+    const panel = document.getElementById('ai-notes-panel');
+    if (panel) panel.style.display = 'block';
+  }
+}
+
+function copyTranscript() {
+  if (!aiTranscript.length) { alert('No transcript yet'); return; }
+  const text = aiTranscript.map(l => {
+    const t = new Date(l.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return '[' + t + '] ' + l.speaker + ': ' + l.text;
+  }).join('\n');
+  navigator.clipboard.writeText(text).then(() => alert('Transcript copied to clipboard'));
+}
+
+function downloadTranscript() {
+  if (!aiTranscript.length) { alert('No transcript yet'); return; }
+  const text = aiTranscript.map(l => {
+    const t = new Date(l.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return '[' + t + '] ' + l.speaker + ': ' + l.text;
+  }).join('\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = 'opencall-transcript-' + new Date().toISOString().slice(0, 10) + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function _offerTranscriptDownload() {
+  if (!aiTranscript.length) return;
+  const bar = document.createElement('div');
+  bar.id = 'ai-transcript-offer';
+  bar.style.cssText = 'position:fixed;bottom:44px;left:0;right:0;z-index:15001;' +
+    'padding:10px 14px;background:rgba(13,31,53,.97);' +
+    'border-top:1px solid rgba(245,166,35,.25);' +
+    'display:flex;align-items:center;gap:10px;';
+  bar.innerHTML =
+    '<span style="flex:1;font-family:\'DM Mono\',monospace;font-size:11px;color:#c8dff5">&#128221; Call transcript ready</span>' +
+    '<button onclick="copyTranscript()" style="padding:6px 12px;background:rgba(245,166,35,.15);' +
+    'border:1px solid rgba(245,166,35,.35);border-radius:8px;color:#f5a623;' +
+    'font-size:11px;cursor:pointer;">Copy</button>' +
+    '<button onclick="downloadTranscript()" style="padding:6px 12px;background:rgba(99,180,255,.1);' +
+    'border:1px solid rgba(99,180,255,.25);border-radius:8px;color:#63b4ff;' +
+    'font-size:11px;cursor:pointer;">Download</button>' +
+    '<button onclick="document.getElementById(\'ai-transcript-offer\').remove()" ' +
+    'style="padding:6px 8px;background:none;border:0;color:#555;font-size:14px;cursor:pointer;">&#10005;</button>';
+  document.body.appendChild(bar);
+  setTimeout(() => bar.remove(), 30000);
+}
 
 // ── Screen management ───────────────────────────────────────────
 function showScreen(id) {
@@ -742,6 +997,18 @@ async function onMessage(event) {
           console.warn('[WRTC] sdp_answer setRemoteDescription failed:', e.message);
         }
       }
+      break;
+    }
+
+    case 'ai_notes': {
+      aiNotesRemoteOn = (msg.state === 'on');
+      _updateAiNotesBanner();
+      break;
+    }
+
+    case 'ai_note_line': {
+      aiTranscript.push({ speaker: msg.speaker, text: msg.text, ts: msg.ts });
+      _appendAiLine(msg.speaker, msg.text, msg.ts);
       break;
     }
 
@@ -1013,6 +1280,21 @@ function hangup() {
 
 // ── End call + cleanup ──────────────────────────────────────────
 function endCall(duration) {
+  // AI Notes cleanup — stop recognition, offer transcript download
+  _stopTranscription();
+  _offerTranscriptDownload();
+  aiNotesLocalOn = false;
+  aiNotesRemoteOn = false;
+  aiPanelVisible = false;
+  aiTranscript = [];
+  document.getElementById('btn-ai-notes')?.classList.remove('active');
+  const _ainBanner = document.getElementById('ai-notes-banner');
+  if (_ainBanner) _ainBanner.style.display = 'none';
+  const _ainPanel = document.getElementById('ai-notes-panel');
+  if (_ainPanel) _ainPanel.style.display = 'none';
+  const _ainBox = document.getElementById('ai-transcript');
+  if (_ainBox) _ainBox.innerHTML = '';
+
   cleanupMedia();
   document.getElementById('ans-duration').textContent = duration || '0:00';
   showScreen('screen-ended');

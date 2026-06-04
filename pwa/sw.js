@@ -38,15 +38,17 @@ self.addEventListener('push', e => {
   let data = {};
   try { data = e.data.json(); } catch {}
 
-  const title = data.fromName
-    ? 'Call from ' + data.fromName
-    : 'Incoming OCP Call';
+  // Title is fixed per spec; body surfaces the caller's handle/name/number.
+  const title = '📞 Incoming OCP call';
+  const body  = data.handle || data.fromName || data.from || 'Unknown caller';
 
   const options = {
-    body:             data.from || 'OpenCall',
-    icon:             '/icon-192.png',
-    badge:            '/icon-192.png',
-    tag:              'opencall-incoming',
+    body,
+    icon:    '/icon-192.png',
+    badge:   '/icon-192.png',
+    // Use callId as tag so each call shows its own notification; same callId
+    // collapses duplicate pushes (e.g. retries) into one.
+    tag:              data.callId || 'opencall-incoming',
     renotify:         true,
     requireInteraction: true,
     vibrate:          [200, 100, 200, 100, 200],
@@ -62,19 +64,36 @@ self.addEventListener('push', e => {
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
+
+  const callId = e.notification.data?.callId;
   const action = e.action;
-  const callData = e.notification.data;
+  // Target URL: open/focus the app pre-loaded with the call to answer.
+  const targetUrl = callId ? '/index.html?answer=' + callId : '/';
 
   e.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    self.clients
+      .matchAll({ type: 'window', includeUncontrolled: true })
       .then(clients => {
-        const msg = { type: 'notification_action', action, callData };
-        if (clients.length > 0) {
-          clients[0].focus();
-          clients[0].postMessage(msg);
-        } else {
-          self.clients.openWindow('/').then(w => w && w.postMessage(msg));
+        // Prefer an existing OCP window — navigate it to the answer URL.
+        const existing = clients.find(
+          c => c.url.includes('/index.html') || c.url.endsWith('/')
+        );
+        if (existing) {
+          return existing.navigate(targetUrl)
+            .then(win => {
+              if (win) {
+                win.focus();
+                // Let the page know which button the user tapped (answer/decline).
+                if (action) win.postMessage({ type: 'notification_action', action, callId });
+              }
+            })
+            .catch(() => existing.focus());   // navigate() may reject in some browsers
         }
+        // No window open — open a new one.
+        return self.clients.openWindow(targetUrl)
+          .then(win => {
+            if (win && action) win.postMessage({ type: 'notification_action', action, callId });
+          });
       })
   );
 });

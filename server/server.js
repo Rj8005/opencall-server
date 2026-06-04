@@ -8,10 +8,34 @@
  * ╚═══════════════════════════════════════════════════════╝
  */
 
-const http = require("http");
-const { WebSocketServer } = require("ws");
+const http    = require('http');
+const { WebSocketServer } = require('ws');
+const webPush = require('web-push');
 
 const PORT = process.env.PORT || 8080;
+
+// ── VAPID setup ────────────────────────────────────────────────
+// Generate keys ONCE, then set the three env vars so subscriptions survive
+// server restarts. One-liner to print fresh keys:
+//   node -e "const w=require('web-push'); console.log(JSON.stringify(w.generateVAPIDKeys(),null,2))"
+// Then: export VAPID_PUBLIC=... VAPID_PRIVATE=... VAPID_SUBJECT=mailto:you@opencall
+let vapidPublic  = process.env.VAPID_PUBLIC  || null;
+let vapidPrivate = process.env.VAPID_PRIVATE || null;
+const vapidSubject = process.env.VAPID_SUBJECT || 'mailto:admin@opencall';
+
+if (!vapidPublic || !vapidPrivate) {
+  const kp = webPush.generateVAPIDKeys();
+  vapidPublic  = kp.publicKey;
+  vapidPrivate = kp.privateKey;
+  console.log('[PUSH] ⚠️  No VAPID env vars found — ephemeral keys generated (lost on restart!)');
+  console.log('[PUSH] Persist these before deploying:');
+  console.log('[PUSH]   VAPID_PUBLIC=' + vapidPublic);
+  console.log('[PUSH]   VAPID_PRIVATE=' + vapidPrivate);
+  console.log('[PUSH]   VAPID_SUBJECT=' + vapidSubject);
+}
+
+webPush.setVapidDetails(vapidSubject, vapidPublic, vapidPrivate);
+console.log('[PUSH] VAPID ready. Public key:', vapidPublic);
 
 console.log('[SERVER] =============================');
 console.log('[SERVER] OCP Signal Server v2.1 RELAY-FIX');
@@ -27,10 +51,10 @@ const registry  = new Map(); // "+14161234567" → WebSocket
 const metadata  = new Map(); // WebSocket       → { number, name, registeredAt }
 const relays    = new Map(); // relayId         → { ws, areaCode, country }
 const relayRegistry = new Map(); // key: WebSocket, value: { country, relay_mode, ocp_address, number, capacity }
-const callLog          = new Map(); // callId          → { from, to, startedAt }
-const pushSubscriptions = new Map(); // number           → push subscription
-const webPush           = null;      // using native fetch for push
-const pendingCalls      = new Map(); // callId           → { from, to, link, callerWs, ... }
+const callLog           = new Map(); // callId       → { from, to, startedAt }
+const pushSubscriptions = new Map(); // ocp_address  → Array<PushSubscription>  (one ocp = many devices)
+const numberToOcp       = new Map(); // e164          → ocp_address  (persists past WS disconnect for push lookup)
+const pendingCalls      = new Map(); // callId        → { from, to, link, callerWs, ... }
 const wsToRelay         = new Map(); // ws               → relay ocp_address
 const sentAnswerLinks   = new Set(); // callId           → de-duplicate answer_link_ready
 const smsThreads        = new Map(); // `${relayId}|${cNumber}` → { aWs, aOcp, cNumber, relayId, threadId, lastActive }
@@ -140,23 +164,42 @@ function send(ws, obj) {
   }
 }
 
-async function sendPushNotification(number, data) {
-  const sub = pushSubscriptions.get(number);
-  if (!sub) return;
-  try {
-    const payload = JSON.stringify(data);
-    const response = await fetch(sub.endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type':    'application/octet-stream',
-        'Content-Encoding': 'aes128gcm',
-        'TTL':             '86400'
-      },
-      body: payload
-    });
-    log('✓', 'push sent to', number, 'status:', response.status);
-  } catch(e) {
-    log('!', 'push failed for', number, e.message);
+// Send a Web Push (VAPID) notification to every device registered for the
+// given OCP address (or phone number, resolved via numberToOcp).
+// Stale 410/404 subscriptions are pruned automatically.
+async function sendPushNotification(ocpOrNumber, data) {
+  // Resolve phone number → ocp address if needed
+  let ocp = ocpOrNumber;
+  if (ocp && !ocp.startsWith('ocp:') && (ocp.startsWith('+') || /^\d/.test(ocp))) {
+    ocp = numberToOcp.get(ocp) || null;
+  }
+  if (!ocp) return;
+
+  const subs = pushSubscriptions.get(ocp);
+  if (!subs || subs.length === 0) return;
+
+  const payload  = JSON.stringify(data);
+  const toRemove = [];
+
+  for (const sub of subs) {
+    try {
+      await webPush.sendNotification(sub, payload, { TTL: 86400, urgency: 'high' });
+      log('✓', 'push delivered to', ocp.slice(0, 24) + '…');
+    } catch(err) {
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        // Subscription expired or revoked — prune it
+        toRemove.push(sub);
+        log('!', 'push sub expired (410/404) — pruned for', ocp.slice(0, 24) + '…');
+      } else {
+        log('!', 'push failed for', ocp.slice(0, 24) + '…', err.statusCode, err.message);
+      }
+    }
+  }
+
+  if (toRemove.length) {
+    const remaining = subs.filter(s => !toRemove.includes(s));
+    if (remaining.length) pushSubscriptions.set(ocp, remaining);
+    else                  pushSubscriptions.delete(ocp);
   }
 }
 
@@ -578,6 +621,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.url === '/vapid-public-key') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ publicKey: vapidPublic }));
+    return;
+  }
+
   if (req.url === "/health") {
     res.writeHead(200);
     res.end(JSON.stringify({
@@ -949,6 +998,25 @@ async function handle(ws, msg) {
     return;
   }
 
+  // ── AI NOTES relay ───────────────────────────────────────
+  // Pure passthrough: relay consent (ai_notes) and transcript lines
+  // (ai_note_line) between both parties on a call, by callId.
+  // TODO: swap window.SpeechRecognition on the client for Whisper/Deepgram
+  // for better accuracy and non-Chrome browser support.
+  if (msg.type === 'ai_notes' || msg.type === 'ai_note_line') {
+    const call = msg.callId ? pendingCalls.get(msg.callId) : null;
+    if (call) {
+      const role   = getCallRole(ws, call);
+      const target = (role === 'caller') ? call.relayWs : call.callerWs;
+      if (target?.readyState === 1) send(target, msg);
+    } else if (msg.to) {
+      // Direct OCP-to-OCP path: route by msg.to (same as sdp_offer)
+      const targetWs = registry.get(msg.to);
+      if (targetWs?.readyState === 1) send(targetWs, msg);
+    }
+    return;
+  }
+
   switch (msg.type) {
 
     // ── REGISTER ─────────────────────────────────────────────
@@ -978,6 +1046,9 @@ async function handle(ws, msg) {
         ocpAddress:    msg.from || null,
         publicKeyJwk:  msg.public_key || null
       });
+
+      // Keep phone-number → OCP mapping fresh for push lookup after disconnect
+      if (msg.from) numberToOcp.set(number, msg.from);
 
       send(ws, { type: "registered", number, name });
       log("✓", "registered", number, `(${name})`);
@@ -1037,11 +1108,53 @@ async function handle(ws, msg) {
     }
 
     // ── PUSH_SUBSCRIBE ────────────────────────────────────────
+    // msg: { ocp: string, subscription: PushSubscriptionJSON | string }
+    // One ocp address may have many subscriptions (multiple devices/browsers).
     case "push_subscribe": {
+      const ocp = msg.ocp || metadata.get(ws)?.ocpAddress;
+      if (!ocp || !msg.subscription) break;
+
+      let sub;
+      try {
+        sub = typeof msg.subscription === 'string'
+          ? JSON.parse(msg.subscription) : msg.subscription;
+      } catch { break; }
+
+      if (!sub?.endpoint) break;
+
+      const existing = pushSubscriptions.get(ocp) || [];
+      // Deduplicate by endpoint URL so re-subscribes don't pile up
+      if (!existing.some(s => s.endpoint === sub.endpoint)) {
+        existing.push(sub);
+        pushSubscriptions.set(ocp, existing);
+      }
+
+      // Keep the number→ocp lookup fresh (survives reconnects)
       const meta = metadata.get(ws);
-      if (meta?.number && msg.subscription) {
-        pushSubscriptions.set(meta.number, JSON.parse(msg.subscription));
-        log("✓", "push subscription registered for", meta.number);
+      if (meta?.number) numberToOcp.set(normalizeNumber(meta.number), ocp);
+
+      log('✓', 'push sub added for', ocp.slice(0, 24) + '…',
+          '| devices now:', pushSubscriptions.get(ocp).length);
+      send(ws, { type: 'push_subscribed' });
+      break;
+    }
+
+    // ── PUSH_UNSUBSCRIBE ──────────────────────────────────────
+    // msg: { ocp: string, endpoint?: string }
+    // Omit endpoint to remove ALL subscriptions for this ocp.
+    case "push_unsubscribe": {
+      const ocp = msg.ocp || metadata.get(ws)?.ocpAddress;
+      if (!ocp) break;
+
+      if (msg.endpoint) {
+        const subs     = pushSubscriptions.get(ocp) || [];
+        const filtered = subs.filter(s => s.endpoint !== msg.endpoint);
+        if (filtered.length) pushSubscriptions.set(ocp, filtered);
+        else                 pushSubscriptions.delete(ocp);
+        log('✓', 'push sub removed (by endpoint) for', ocp.slice(0, 24) + '…');
+      } else {
+        pushSubscriptions.delete(ocp);
+        log('✓', 'all push subs removed for', ocp.slice(0, 24) + '…');
       }
       break;
     }
@@ -1074,11 +1187,15 @@ async function handle(ws, msg) {
           fromName: callerMeta.name
         });
 
-        // wake callee if app is backgrounded
-        sendPushNotification(to, {
+        // Wake callee if the tab is backgrounded / closed.
+        // Prefer the callee's OCP address (already in metadata); fall back to
+        // number so numberToOcp can resolve it if OCP address is absent.
+        sendPushNotification(calleeMeta?.ocpAddress || to, {
+          type:     'incoming_call',
           callId,
           from:     callerMeta.number,
-          fromName: callerMeta.name
+          fromName: callerMeta.name,
+          handle:   calleeMeta?.name || to
         });
 
         // confirm ringing to caller
@@ -1199,6 +1316,20 @@ async function handle(ws, msg) {
         }, 30 * 1000);
 
         pendingCalls.get(callId).keepaliveInterval = keepaliveInterval;
+
+        // ── Web Push: wake the callee's closed browser ────────────────
+        // sendPushNotification resolves the phone number → OCP address via
+        // numberToOcp (populated when the user last registered), then fans out
+        // to every subscription stored for that OCP.  It is a no-op when the
+        // callee has never registered on this server or has no stored subs.
+        // Expired subscriptions (HTTP 410/404) are pruned automatically.
+        await sendPushNotification(to, {
+          type:     'incoming_call',
+          callId,
+          from:     callerMeta.number,
+          fromName: callerMeta.name,
+          handle:   callerMeta.name || callerMeta.number
+        });
 
         const notified = await smartNotify(to, callerMeta.name, link, callerCountry);
 
