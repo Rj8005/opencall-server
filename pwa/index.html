@@ -1117,13 +1117,25 @@ input::placeholder { color: var(--text-muted); }
     history.replaceState(null, '', location.pathname);
     console.log('[Push] Wake-to-call for callId:', _ap);
   }
-  // /u/<handle-or-ocp> — QR scan / share link opens this page to add a contact
+  // /u/<handle-or-ocp> path — legacy direct rewrite (kept for backward compat)
   if (location.pathname.startsWith('/u/')) {
     const _addTarget = decodeURIComponent(location.pathname.slice(3));
     if (_addTarget) {
       window._pendingAddHandle = _addTarget;
       history.replaceState(null, '', '/');
-      console.log('[OCP] Add-by-URL for:', _addTarget);
+      console.log('[OCP] Add-by-URL (path) for:', _addTarget);
+    }
+  }
+  // ?add=<id>&ocp=<ocp>[&call=1] — deep-link from connect.html after QR scan/tap
+  {
+    const _sp   = new URLSearchParams(location.search);
+    const _addId  = _sp.get('add');
+    const _addOcp = _sp.get('ocp');
+    const _callNow = _sp.get('call') === '1';
+    if (_addId || _addOcp) {
+      window._pendingDeepLink = { id: _addId, ocp: _addOcp, call: _callNow };
+      history.replaceState(null, '', '/');
+      console.log('[OCP] Deep-link: add', _addId, 'ocp', _addOcp, 'call', _callNow);
     }
   }
 })();
@@ -3146,12 +3158,30 @@ async function onMessage(msg) {
         }
         _updateHandleDisplay();
       }
-      // /u/<handle> QR link opened — resolve and save contact after registration
+      // /u/<handle> QR link opened (legacy path) — resolve and save contact
       if (window._pendingAddHandle) {
         const _h = window._pendingAddHandle;
         window._pendingAddHandle = null;
         _pendingHandleCall = { handle: _h, action: 'add' };
         await wsSend({ type: 'resolve_handle', handle: _h.startsWith('@') ? _h.slice(1) : _h });
+      }
+      // Deep-link from connect.html (?add=&ocp=&call=)
+      if (window._pendingDeepLink) {
+        const { id, ocp, call: callNow } = window._pendingDeepLink;
+        window._pendingDeepLink = null;
+        if (ocp) {
+          saveContact({ ocp, name: id || ocp, number: null });
+          console.log('[OCP] Deep-link contact saved:', id || ocp);
+        }
+        if (callNow && ocp) {
+          _callPeerName = id || null;
+          showCallingScreen(id || ocp);
+          setConnectionStatus('routing');
+          await initRatchetSession(ocp);
+          await wsSend({ type: 'call', to: ocp });
+        } else if (ocp) {
+          toast((id || ocp) + ' added to contacts');
+        }
       }
 
       // Wake-to-call path: the service worker opened /index.html?answer=<callId>

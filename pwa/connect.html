@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#060a10">
+<title>Connect on OpenCall</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:#060a10;color:#c8dff5;
+  font-family:'DM Mono',monospace;
+  min-height:100dvh;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:24px 16px;
+}
+.card{
+  background:rgba(13,31,53,.85);
+  border:1px solid rgba(99,180,255,.12);
+  border-radius:20px;padding:28px 24px;
+  width:100%;max-width:360px;
+  display:flex;flex-direction:column;align-items:center;gap:14px;
+  box-shadow:0 8px 40px rgba(0,0,0,.4);
+}
+.logo{font-size:11px;color:rgba(99,180,255,.4);letter-spacing:1.5px;margin-bottom:4px}
+.avatar{
+  width:72px;height:72px;border-radius:50%;
+  background:rgba(99,180,255,.12);border:1px solid rgba(99,180,255,.2);
+  display:flex;align-items:center;justify-content:center;
+  font-size:28px;color:#63b4ff;font-family:'Syne',sans-serif;font-weight:700;
+}
+.name{font-size:22px;font-weight:700;font-family:'Syne',sans-serif;color:#e8f4ff;text-align:center}
+.code{font-size:13px;color:#63b4ff;letter-spacing:1px}
+.tagline{font-size:12px;color:rgba(99,180,255,.5);text-align:center;line-height:1.5}
+.btn{
+  width:100%;padding:13px;border:0;border-radius:12px;
+  font-size:15px;font-weight:700;font-family:'Syne',sans-serif;cursor:pointer;
+  transition:opacity .15s;
+}
+.btn:active{opacity:.75}
+.btn-primary{background:#63b4ff;color:#03161b}
+.btn-secondary{
+  background:rgba(99,180,255,.1);color:#63b4ff;
+  border:1px solid rgba(99,180,255,.2);
+}
+.spinner{
+  width:32px;height:32px;border-radius:50%;
+  border:3px solid rgba(99,180,255,.15);
+  border-top-color:#63b4ff;
+  animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.err{color:rgba(255,100,100,.8);font-size:13px;text-align:center;line-height:1.5}
+a.home{color:rgba(99,180,255,.5);font-size:11px;text-decoration:none;margin-top:8px}
+</style>
+</head>
+<body>
+
+<div class="card" id="card">
+  <div class="logo">OPENCALL</div>
+
+  <!-- Loading -->
+  <div id="st-loading" style="display:flex;flex-direction:column;align-items:center;gap:14px;padding:20px 0">
+    <div class="spinner"></div>
+    <div style="font-size:12px;color:rgba(99,180,255,.45)" id="loading-label">Looking up…</div>
+  </div>
+
+  <!-- Found -->
+  <div id="st-found" style="display:none;flex-direction:column;align-items:center;gap:14px;width:100%">
+    <div class="avatar" id="found-avatar">?</div>
+    <div class="name" id="found-name"></div>
+    <div class="code" id="found-code"></div>
+    <div class="tagline">Tap a button to connect on OpenCall —<br>no carrier, no cost.</div>
+    <button class="btn btn-primary" id="btn-call">📞 Call now</button>
+    <button class="btn btn-secondary" id="btn-add">＋ Add to contacts</button>
+  </div>
+
+  <!-- Not found -->
+  <div id="st-notfound" style="display:none;flex-direction:column;align-items:center;gap:14px">
+    <div class="err">No OpenCall user found for<br><strong id="notfound-id"></strong></div>
+    <a class="btn btn-secondary" href="/" style="text-align:center;text-decoration:none;display:block">Open OpenCall</a>
+  </div>
+
+  <!-- Error -->
+  <div id="st-error" style="display:none;flex-direction:column;align-items:center;gap:14px">
+    <div class="err">Could not reach the OpenCall server.<br>Check your connection and try again.</div>
+    <button class="btn btn-secondary" onclick="location.reload()">Retry</button>
+  </div>
+</div>
+<a class="home" href="/">opencall.net</a>
+
+<script>
+(function() {
+  const params  = new URLSearchParams(location.search);
+  const rawId   = (params.get('id') || '').trim();
+  const WS_URL  = (function() {
+    try { return localStorage.getItem('server_url') || ''; } catch { return ''; }
+  })() || 'wss://opencall-server-pqfe.onrender.com';
+  const APP_BASE = location.origin;
+
+  function show(id) {
+    ['st-loading','st-found','st-notfound','st-error'].forEach(s => {
+      const el = document.getElementById(s);
+      if (el) el.style.display = (s === id) ? 'flex' : 'none';
+    });
+  }
+
+  function deepLink(ocp, extra) {
+    const p = new URLSearchParams({ add: rawId, ocp });
+    if (extra) p.set('call', '1');
+    return APP_BASE + '/index.html?' + p.toString();
+  }
+
+  function renderFound(handle, ocp) {
+    const displayName = handle ? '@' + handle : (ocp || rawId);
+    const initial     = (handle || rawId || '?')[0].toUpperCase();
+    document.getElementById('found-avatar').textContent = initial;
+    document.getElementById('found-name').textContent   = displayName;
+    // Show numeric ID or truncated ocp as subtitle
+    const isNumeric = /^OCP-\d{4}-\d{4}$/i.test(rawId);
+    document.getElementById('found-code').textContent =
+      isNumeric ? rawId.toUpperCase()
+                : (ocp ? ocp.slice(0, 20) + '…' : '');
+    document.getElementById('btn-call').onclick = () => {
+      location.href = deepLink(ocp, true);
+    };
+    document.getElementById('btn-add').onclick = () => {
+      location.href = deepLink(ocp, false);
+    };
+    show('st-found');
+  }
+
+  if (!rawId) {
+    show('st-notfound');
+    document.getElementById('notfound-id').textContent = '(no ID provided)';
+    return;
+  }
+
+  // Bare ocp: address — skip resolution, render directly
+  if (rawId.startsWith('ocp:')) {
+    renderFound(null, rawId);
+    return;
+  }
+
+  document.getElementById('loading-label').textContent = 'Looking up ' + rawId + '…';
+
+  let done = false;
+  let ws;
+  try { ws = new WebSocket(WS_URL); } catch(e) { show('st-error'); return; }
+
+  const timeout = setTimeout(() => {
+    if (!done) { done = true; show('st-error'); try { ws.close(); } catch {} }
+  }, 12000);
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type:   'resolve_handle',
+      handle: rawId.startsWith('@') ? rawId.slice(1) : rawId
+    }));
+  };
+
+  ws.onmessage = (ev) => {
+    if (done) return;
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'handle_resolved') {
+      done = true; clearTimeout(timeout);
+      ws.close();
+      renderFound(msg.handle, msg.ocp);
+    } else if (msg.type === 'handle_not_found') {
+      done = true; clearTimeout(timeout);
+      ws.close();
+      show('st-notfound');
+      document.getElementById('notfound-id').textContent = rawId;
+    }
+  };
+
+  ws.onerror = () => {
+    if (!done) { done = true; clearTimeout(timeout); show('st-error'); }
+  };
+  ws.onclose = () => {
+    if (!done) { done = true; clearTimeout(timeout); show('st-error'); }
+  };
+})();
+</script>
+</body>
+</html>
