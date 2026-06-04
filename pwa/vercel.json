@@ -1,6 +1,7 @@
 {
   "rewrites": [
-    { "source": "/answer", "destination": "/answer.html" },
-    { "source": "/relay",  "destination": "/relay.html"  }
+    { "source": "/answer",  "destination": "/answer.html" },
+    { "source": "/relay",   "destination": "/relay.html"  },
+    { "source": "/u/:path*","destination": "/index.html"  }
   ]
 }

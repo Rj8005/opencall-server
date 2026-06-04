@@ -64,6 +64,23 @@ export function publicKeyToOcp(publicKey) {
     .join('');
 }
 
+/**
+ * Sign an arbitrary raw string with the identity's Ed25519 private key.
+ * Returns a URL-safe base64 signature string.
+ * Used for handle claims: sign "claim:<handle>:<ocp>" then send to server.
+ *
+ * @param {{ privateKeyJwk: object }} identity
+ * @param {string} text  — the exact string to sign (not JSON-encoded)
+ * @returns {Promise<string>}
+ */
+export async function signRaw(identity, text) {
+  const key = await crypto.subtle.importKey(
+    'jwk', identity.privateKeyJwk, { name: 'Ed25519' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(text));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+}
+
 // ── Self-test ──────────────────────────────────────────────────────────────
 // Runs at module load. Generates a fresh phrase, derives twice, asserts equal.
 (function selfTest() {

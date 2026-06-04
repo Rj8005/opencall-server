@@ -747,6 +747,47 @@ input::placeholder { color: var(--text-muted); }
         <span id="ocp-addr-dialer">ocp:loading...</span>
         <span class="copy-btn" onclick="copyOCPAddress()">copy</span>
       </div>
+      <!-- OCP code + handle row -->
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <span id="ocp-code-display"
+              style="font-family:'DM Mono',monospace;font-size:13px;
+                     color:var(--blue);letter-spacing:.5px">—</span>
+        <span id="ocp-handle-display"
+              style="font-family:'DM Mono',monospace;font-size:11px;
+                     color:var(--text-secondary)"></span>
+        <span onclick="showMyOcpCard()"
+              style="margin-left:auto;font-size:10px;color:rgba(99,180,255,.55);
+                     cursor:pointer;font-family:'DM Mono',monospace;
+                     text-decoration:underline;text-underline-offset:2px">share ↗</span>
+      </div>
+      <!-- Handle claim form — hidden once a handle is set -->
+      <div id="handle-claim-row"
+           style="display:flex;gap:6px;align-items:center;margin-top:8px;">
+        <input id="inp-handle" placeholder="@handle  (a-z 0-9 _ , 3-20)" maxlength="20"
+               style="flex:1;padding:6px 10px;background:var(--bg-field);
+                      border:1px solid var(--border);border-radius:var(--radius-sm);
+                      color:#c8dff5;font-family:'DM Mono',monospace;font-size:11px;
+                      outline:none;">
+        <button onclick="claimHandle()"
+                style="padding:6px 12px;background:var(--blue-dim);
+                       border:1px solid var(--blue-border);border-radius:var(--radius-sm);
+                       color:var(--blue);font-size:11px;font-family:'Syne',sans-serif;
+                       font-weight:700;cursor:pointer;white-space:nowrap;">Claim</button>
+      </div>
+    </div>
+
+    <!-- Add-by-handle row -->
+    <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+      <input id="inp-add-contact" placeholder="@handle or OCP-XXXX-XXXX to add" maxlength="30"
+             style="flex:1;padding:7px 10px;background:var(--bg-card);
+                    border:1px solid var(--border);border-radius:var(--radius-sm);
+                    color:#c8dff5;font-family:'DM Mono',monospace;font-size:11px;
+                    outline:none;">
+      <button onclick="addByHandle()"
+              style="padding:7px 12px;background:var(--blue-dim);
+                     border:1px solid var(--blue-border);border-radius:var(--radius-sm);
+                     color:var(--blue);font-size:11px;font-family:'Syne',sans-serif;
+                     font-weight:700;cursor:pointer;white-space:nowrap;">Add</button>
     </div>
 
     <div class="dial-display">
@@ -1075,6 +1116,15 @@ input::placeholder { color: var(--text-muted); }
     window._pendingAnswerCallId = _ap;
     history.replaceState(null, '', location.pathname);
     console.log('[Push] Wake-to-call for callId:', _ap);
+  }
+  // /u/<handle-or-ocp> — QR scan / share link opens this page to add a contact
+  if (location.pathname.startsWith('/u/')) {
+    const _addTarget = decodeURIComponent(location.pathname.slice(3));
+    if (_addTarget) {
+      window._pendingAddHandle = _addTarget;
+      history.replaceState(null, '', '/');
+      console.log('[OCP] Add-by-URL for:', _addTarget);
+    }
   }
 })();
 
@@ -1787,6 +1837,113 @@ async function signMessage(identity, messageObj) {
   return btoa(String.fromCharCode(...new Uint8Array(signature)));
 }
 
+// Sign a raw string (not JSON-encoded) with the identity's Ed25519 key.
+// Used for handle claims: sign "claim:<handle>:<ocp>".
+async function signRaw(identity, text) {
+  const key = await crypto.subtle.importKey(
+    'jwk', identity.privateKeyJwk, { name: 'Ed25519' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(text));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+}
+
+// ── Handle / OCP-code UI helpers ───────────────────────────
+function _updateHandleDisplay() {
+  const codeEl   = document.getElementById('ocp-code-display');
+  const handleEl = document.getElementById('ocp-handle-display');
+  const claimRow = document.getElementById('handle-claim-row');
+  if (codeEl)   codeEl.textContent   = myNumericId || '—';
+  if (handleEl) handleEl.textContent = myHandle ? '@' + myHandle : '';
+  if (claimRow) claimRow.style.display = myHandle ? 'none' : 'flex';
+}
+
+async function claimHandle() {
+  const raw = (document.getElementById('inp-handle')?.value || '').trim().toLowerCase();
+  if (!raw) return;
+  if (!/^[a-z0-9_]{3,20}$/.test(raw)) {
+    return toast('Handle must be 3-20 chars: a-z, 0-9, underscore only');
+  }
+  if (!myIdentity) return toast('Identity not ready');
+  const ocp = myIdentity.ocp_address;
+  const sig = await signRaw(myIdentity, `claim:${raw}:${ocp}`);
+  await wsSend({
+    type:       'claim_handle',
+    ocp,
+    handle:     raw,
+    sig,
+    public_key: JSON.stringify(myIdentity.publicKeyJwk)
+  });
+}
+
+function showMyOcpCard() {
+  const identifier = myHandle || myNumericId || myIdentity?.ocp_address;
+  if (!identifier) return;
+  const shareLink  = location.origin + '/u/' + encodeURIComponent(myHandle || myNumericId || myIdentity?.ocp_address);
+
+  let box = document.getElementById('ocp-id-card-modal');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'ocp-id-card-modal';
+    box.style.cssText = 'position:fixed;inset:0;z-index:10001;display:flex;flex-direction:column;' +
+      'align-items:center;justify-content:center;gap:14px;background:rgba(5,8,15,.95);';
+    document.body.appendChild(box);
+  }
+  box.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.textContent = 'Your OCP ID';
+  title.style.cssText = 'color:var(--blue);font-family:"Syne",sans-serif;font-size:14px;font-weight:700;letter-spacing:.8px;';
+  box.appendChild(title);
+
+  if (myHandle) {
+    const hEl = document.createElement('div');
+    hEl.textContent = '@' + myHandle;
+    hEl.style.cssText = 'color:#c8dff5;font-family:"DM Mono",monospace;font-size:20px;font-weight:600;';
+    box.appendChild(hEl);
+  }
+
+  if (myNumericId) {
+    const nEl = document.createElement('div');
+    nEl.textContent = myNumericId;
+    nEl.style.cssText = 'color:var(--blue);font-family:"DM Mono",monospace;font-size:16px;letter-spacing:2px;';
+    box.appendChild(nEl);
+  }
+
+  const qrImg = document.createElement('img');
+  qrImg.src = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(shareLink);
+  qrImg.alt = 'Scan to add';
+  qrImg.style.cssText = 'width:220px;height:220px;border-radius:12px;background:#fff;padding:8px;';
+  box.appendChild(qrImg);
+
+  const caption = document.createElement('div');
+  caption.textContent = 'Scan to add me on OpenCall';
+  caption.style.cssText = 'color:var(--text-secondary);font-family:"DM Mono",monospace;font-size:11px;';
+  box.appendChild(caption);
+
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = 'Copy link';
+  copyBtn.style.cssText = 'padding:10px 24px;border:1px solid var(--blue-border);border-radius:24px;' +
+    'background:var(--blue-dim);color:var(--blue);font-weight:700;cursor:pointer;';
+  copyBtn.onclick = () => { navigator.clipboard?.writeText(shareLink); toast('Link copied!'); };
+  box.appendChild(copyBtn);
+
+  const close = document.createElement('button');
+  close.textContent = 'Close';
+  close.style.cssText = 'padding:10px 24px;border:0;border-radius:24px;background:transparent;' +
+    'color:#667;cursor:pointer;font-size:13px;';
+  close.onclick = () => box.remove();
+  box.appendChild(close);
+}
+
+async function addByHandle() {
+  const val = (document.getElementById('inp-add-contact')?.value || '').trim();
+  if (!val) return;
+  if (!ws || ws.readyState !== 1) return toast('Not connected');
+  _pendingHandleCall = { handle: val, action: 'add' };
+  const stripped = val.startsWith('@') ? val.slice(1) : val;
+  await wsSend({ type: 'resolve_handle', handle: stripped });
+}
+
 async function encryptMessage(identity, recipientPublicKeyB64, bodyObj) {
   // Use ECDH with P-256 for encryption (Web Crypto supported)
   const ephemeralKey = await crypto.subtle.generateKey(
@@ -2402,6 +2559,9 @@ let callWith      = null;
 let callMode      = null;       // "direct" | "relay"
 let pendingCall   = null;
 let _callPeerName = null;       // display name of the remote party, captured at call setup
+let myHandle      = null;       // @handle if claimed, e.g. "alice"
+let myNumericId   = null;       // OCP-XXXX-XXXX numeric ID
+let _pendingHandleCall = null;  // { handle, action:'call'|'add' } while awaiting resolve_handle
 let isMuted       = false;
 let isSpeaker     = false;
 let isVideo       = false;
@@ -2969,6 +3129,31 @@ async function onMessage(msg) {
       // has not been granted or dismissed previously).
       _initPushHint();
 
+      // Handle layer: restore handle from server echo or local cache, then
+      // request (or confirm) the numeric ID.
+      if (myIdentity) {
+        if (msg.handle) {
+          myHandle = msg.handle;
+          localStorage.setItem('ocp_handle', msg.handle);
+        } else {
+          myHandle = localStorage.getItem('ocp_handle') || null;
+        }
+        const cachedId = localStorage.getItem('ocp_numeric_id');
+        if (cachedId) {
+          myNumericId = cachedId;
+        } else {
+          wsSend({ type: 'claim_numeric_id', ocp: myIdentity.ocp_address });
+        }
+        _updateHandleDisplay();
+      }
+      // /u/<handle> QR link opened — resolve and save contact after registration
+      if (window._pendingAddHandle) {
+        const _h = window._pendingAddHandle;
+        window._pendingAddHandle = null;
+        _pendingHandleCall = { handle: _h, action: 'add' };
+        await wsSend({ type: 'resolve_handle', handle: _h.startsWith('@') ? _h.slice(1) : _h });
+      }
+
       // Wake-to-call path: the service worker opened /index.html?answer=<callId>
       // after the user tapped a push notification. The callId was captured
       // synchronously before initFlow() ran; send join_call now that we have a
@@ -3044,6 +3229,53 @@ async function onMessage(msg) {
       console.log('[WRTC] video_toggle received — state:', msg.state);
       if (msg.state === 'on'  && !isVideo) await toggleVideo(true);
       if (msg.state === 'off' &&  isVideo) await toggleVideo(true);
+      break;
+
+    case 'numeric_id_assigned':
+      myNumericId = msg.id;
+      localStorage.setItem('ocp_numeric_id', msg.id);
+      _updateHandleDisplay();
+      break;
+
+    case 'handle_claimed':
+      myHandle = msg.handle;
+      localStorage.setItem('ocp_handle', msg.handle);
+      _updateHandleDisplay();
+      toast('@' + msg.handle + ' is yours!');
+      break;
+
+    case 'handle_taken':
+      toast('@' + msg.handle + ' is taken — try another');
+      break;
+
+    case 'handle_error':
+      toast('Handle error: ' + (msg.reason || 'unknown'));
+      break;
+
+    case 'handle_resolved': {
+      const _p = _pendingHandleCall;
+      _pendingHandleCall = null;
+      if (!_p) break;
+      if (_p.action === 'add') {
+        saveContact({ ocp: msg.ocp, name: msg.handle || msg.ocp, number: null });
+        const addInp = document.getElementById('inp-add-contact');
+        if (addInp) addInp.value = '';
+        toast(('@' + msg.handle || msg.ocp) + ' added to contacts');
+      } else {
+        // Route call to the resolved OCP address
+        _callPeerName = msg.handle || null;
+        showCallingScreen(msg.handle || msg.ocp);
+        setConnectionStatus('routing');
+        await initRatchetSession(msg.ocp);
+        await wsSend({ type: 'call', to: msg.ocp });
+      }
+      break;
+    }
+
+    case 'handle_not_found':
+      _pendingHandleCall = null;
+      showDialHint('No one found with that handle/code.', true);
+      toast('No one found with that handle/code.');
       break;
 
     case 'unavailable':
@@ -4722,6 +4954,20 @@ async function doCall() {
     showDialHint('Enter a number to call', true);
     return;
   }
+  if (!ws || ws.readyState !== 1) return toast('Not connected to server');
+
+  // Handle / numeric-ID / bare OCP address — bypass E.164 validation
+  const isHandle    = to.startsWith('@');
+  const isNumericId = /^OCP-\d{4}-\d{4}$/i.test(to);
+  const isOcpAddr   = to.startsWith('ocp:');
+  if (isHandle || isNumericId || isOcpAddr) {
+    const stripped = isHandle ? to.slice(1) : to;
+    showDialHint('Looking up ' + to + '…', false);
+    _pendingHandleCall = { handle: to, action: 'call' };
+    await wsSend({ type: 'resolve_handle', handle: stripped });
+    return;
+  }
+
   if (!to.startsWith('+')) {
     showDialHint('Add country code: +91, +1, +44...', true);
     return;
@@ -4730,7 +4976,6 @@ async function doCall() {
     showDialHint('Number too short', true);
     return;
   }
-  if (!ws || ws.readyState !== 1) return toast('Not connected to server');
 
   // DHT lookup: hint-only — does NOT gate routing (server decides relay vs invite)
   if (dhtReady && to.startsWith('+')) {
