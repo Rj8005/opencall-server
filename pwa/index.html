@@ -2197,7 +2197,7 @@ function _pushServerBase() {
   const wsUrl = (ws?.url)
     || localStorage.getItem('server_url')
     || 'wss://opencall-server-pqfe.onrender.com';
-  return wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+  return wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://').replace(/\/$/, '');
 }
 
 // Core subscribe-and-register flow.
