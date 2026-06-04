@@ -72,6 +72,13 @@ const handles     = new Map();
 const ocpToHandle = new Map();
 const ocpRegistry = new Map();
 
+// Offline chat inbox — holds encrypted messages for users who are currently
+// disconnected.  Only ciphertext stored; server cannot read content.
+// Flushed to the user when they reconnect (register).
+// Format: ocp_address → Array<{ from, fromName, ciphertext, msgId, ts }>
+const offlineChatInbox = new Map();
+const OFFLINE_INBOX_MAX = 50; // per-user cap
+
 // WhatsApp Web.js stubs — set waReady=true and assign waClient after
 // calling require('whatsapp-web.js') and authenticating
 let waReady  = false;
@@ -1099,6 +1106,19 @@ async function handle(ws, msg) {
       // Keep OCP address → live WS for handle-routed calls
       if (msg.from) ocpRegistry.set(msg.from, ws);
 
+      // Flush any queued offline chat messages for this OCP address
+      if (msg.from) {
+        const queued = offlineChatInbox.get(msg.from);
+        if (queued?.length) {
+          for (const m of queued) {
+            send(ws, { type: 'chat_msg', from: m.from, fromName: m.fromName,
+                       ciphertext: m.ciphertext, msgId: m.msgId, ts: m.ts });
+          }
+          offlineChatInbox.delete(msg.from);
+          log('💬', `flushed ${queued.length} queued chat(s) to`, msg.from.slice(0, 20) + '…');
+        }
+      }
+
       // Send back the handle (if any) so the client can display it
       const handle = msg.from ? (ocpToHandle.get(msg.from) || null) : null;
       send(ws, { type: "registered", number, name, handle });
@@ -1993,18 +2013,42 @@ async function handle(ws, msg) {
     case 'chat_msg': {
       const { to, from, ciphertext, msgId, ts } = msg;
       if (!to || !ciphertext || !msgId) break;
-      // Resolve recipient: ocp: address → ocpRegistry, handle → resolve → ocpRegistry, phone → registry
-      let recipientWs = null;
+
+      // Resolve recipient ocp address
+      let recipientOcp = null;
+      let recipientWs  = null;
       if (to.startsWith('ocp:')) {
-        recipientWs = ocpRegistry.get(to);
+        recipientOcp = to;
+        recipientWs  = ocpRegistry.get(to);
       } else {
-        const ocp = resolveToOcp(to);
-        recipientWs = ocp ? ocpRegistry.get(ocp) : registry.get(to);
+        recipientOcp = resolveToOcp(to);
+        recipientWs  = recipientOcp ? ocpRegistry.get(recipientOcp) : registry.get(to);
       }
+
+      const senderMeta = metadata.get(ws);
+      const fromName   = senderMeta?.name || null;
+
       if (recipientWs && recipientWs.readyState === 1) {
-        send(recipientWs, { type: 'chat_msg', from, ciphertext, msgId, ts: ts || Date.now() });
+        // ── Online: deliver immediately ──────────────────────
+        send(recipientWs, { type: 'chat_msg', from, fromName, ciphertext, msgId, ts: ts || Date.now() });
         send(ws, { type: 'chat_sent', msgId });
-        log('💬', `chat ${(from||'?').slice(0,16)}… → ${(to||'?').slice(0,16)}…`);
+        log('💬', `chat ${(from||'?').slice(0,16)}… → ${(to||'?').slice(0,16)}… (live)`);
+      } else if (recipientOcp) {
+        // ── Offline: queue + push ────────────────────────────
+        const inbox = offlineChatInbox.get(recipientOcp) || [];
+        if (inbox.length < OFFLINE_INBOX_MAX) {
+          inbox.push({ from, fromName, ciphertext, msgId, ts: ts || Date.now() });
+          offlineChatInbox.set(recipientOcp, inbox);
+        }
+        // Web Push nudge — no plaintext, just a "new message" wake signal
+        sendPushNotification(recipientOcp, {
+          type:     'chat_message',
+          from:     from || '',
+          fromName: fromName || '',
+          preview:  'New message'
+        });
+        send(ws, { type: 'chat_queued', msgId });
+        log('💬', `chat queued for offline user ${recipientOcp.slice(0,20)}… (${inbox.length} in inbox)`);
       } else {
         send(ws, { type: 'chat_undelivered', msgId });
       }

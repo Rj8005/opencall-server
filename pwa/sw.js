@@ -39,6 +39,25 @@ self.addEventListener('push', e => {
   try { data = e.data.json(); } catch {}
   console.log('[SW] push received', data.type, 'callId:', data.callId);
 
+  // ── Chat message nudge ────────────────────────────────────
+  if (data.type === 'chat_message') {
+    const from        = data.from     || '';
+    const displayName = data.fromName || from.slice(0, 20) || 'Someone';
+    e.waitUntil(self.registration.showNotification(
+      '💬 New message from ' + displayName,
+      {
+        body:    'New message',   // no plaintext — server can't read ciphertext
+        icon:    '/icon-192.png',
+        badge:   '/icon-192.png',
+        tag:     'chat-' + from,  // one notification per sender
+        renotify: true,
+        data:    { openChat: from }
+      }
+    ));
+    return;
+  }
+
+  // ── Incoming call notification ────────────────────────────
   // Title is fixed per spec; body surfaces the caller's handle/name/number.
   const title = '📞 Incoming OCP call';
   const body  = data.handle || data.fromName || data.from || 'Unknown caller';
@@ -66,9 +85,26 @@ self.addEventListener('push', e => {
 self.addEventListener('notificationclick', e => {
   e.notification.close();
 
-  const callId = e.notification.data?.callId;
-  const action = e.action;
-  console.log('[SW] notification clicked -> opening callId', callId, 'action:', action);
+  const callId   = e.notification.data?.callId;
+  const openChat = e.notification.data?.openChat;
+  const action   = e.action;
+  console.log('[SW] notification clicked -> openChat:', openChat, 'callId:', callId, 'action:', action);
+
+  // Chat notification: open the app focused on that contact's thread
+  if (openChat) {
+    const targetUrl = '/index.html?chat=' + encodeURIComponent(openChat);
+    e.waitUntil(
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+        const existing = clients.find(c => c.url.includes('/index.html') || c.url.endsWith('/'));
+        if (existing) {
+          return existing.navigate(targetUrl).then(w => w && w.focus()).catch(() => existing.focus());
+        }
+        return self.clients.openWindow(targetUrl);
+      })
+    );
+    return;
+  }
+
   // Target URL: open/focus the app pre-loaded with the call to answer.
   const targetUrl = callId ? '/index.html?answer=' + callId : '/';
 

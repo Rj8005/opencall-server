@@ -1148,6 +1148,15 @@ input::placeholder { color: var(--text-muted); }
     history.replaceState(null, '', location.pathname);
     console.log('[Push] Wake-to-call for callId:', _ap);
   }
+  // ?chat=<ocp> — opened from a chat push notification tap
+  {
+    const _chatOcp = new URLSearchParams(location.search).get('chat');
+    if (_chatOcp) {
+      window._pendingOpenChat = decodeURIComponent(_chatOcp);
+      history.replaceState(null, '', '/');
+      console.log('[OCP] Open-chat from push:', window._pendingOpenChat);
+    }
+  }
   // /u/<handle-or-ocp> path — legacy direct rewrite (kept for backward compat)
   if (location.pathname.startsWith('/u/')) {
     const _addTarget = decodeURIComponent(location.pathname.slice(3));
@@ -2289,22 +2298,27 @@ function openOcpChat(peerOcp, peerName) {
   document.getElementById('ocpInput').focus();
 }
 
-async function sendOcpMessage() {
+// peerOcp / text are optional — when supplied the call comes from the
+// "leave a message" panel rather than the chat UI.
+// peerOcp / text are optional overrides — supplied by the leave-a-message panel.
+// When omitted, values are read from activeOcpChat and #ocpInput as usual.
+async function sendOcpMessage(peerOcp, text) {
   const input = document.getElementById('ocpInput');
-  const text  = (input.value || '').trim();
-  if (!text || !activeOcpChat) return;
+  const targetOcp = peerOcp || activeOcpChat?.peerOcp;
+  const body      = text   || (input?.value || '').trim();
+  if (!targetOcp || !body) return;
   if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
-  const { peerOcp } = activeOcpChat;
   const msgId = 'cm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
   const ts    = Date.now();
-  addOcpBubble('out', text, msgId, 'sending', ts);
-  input.value = ''; input.style.height = 'auto';
-  if (!ocpChatStore.has(peerOcp)) ocpChatStore.set(peerOcp, { messages: [] });
-  ocpChatStore.get(peerOcp).messages.push({ dir: 'out', text, msgId, status: 'sending', ts });
+  // Only append bubble to open chat panel if that peer's thread is active
+  if (activeOcpChat?.peerOcp === targetOcp) addOcpBubble('out', body, msgId, 'sending', ts);
+  if (!peerOcp && input) { input.value = ''; input.style.height = 'auto'; }
+  if (!ocpChatStore.has(targetOcp)) ocpChatStore.set(targetOcp, { messages: [] });
+  ocpChatStore.get(targetOcp).messages.push({ dir: 'out', text: body, msgId, status: 'sending', ts });
   saveOcpChats();
-  await initChatSession(peerOcp);
-  const ciphertext = await ratchetEncrypt('chat:' + peerOcp, { text, ts });
-  await wsSend({ type: 'chat_msg', to: peerOcp, from: myIdentity?.ocp_address, ciphertext, msgId, ts });
+  await initChatSession(targetOcp);
+  const ciphertext = await ratchetEncrypt('chat:' + targetOcp, { text: body, ts });
+  await wsSend({ type: 'chat_msg', to: targetOcp, from: myIdentity?.ocp_address, ciphertext, msgId, ts });
 }
 
 function addOcpBubble(dir, text, msgId, status, ts) {
@@ -2317,8 +2331,9 @@ function addOcpBubble(dir, text, msgId, status, ts) {
   const timeStr = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
   const st = status || 'sent';
   const tickText = st === 'delivered' ? '✓✓'
+                 : st === 'queued'    ? '⏳'
                  : (st === 'sending' || st === 'pending') ? '…'
-                 : st === 'failed' ? '✗' : '✓';
+                 : st === 'failed'   ? '✗' : '✓';
   const tickHtml = dir === 'out'
     ? `<span class="tick st-${st}" id="otick_${msgId}">${tickText}</span>`
     : '';
@@ -2333,8 +2348,9 @@ function setOcpStatus(msgId, status) {
   if (tick) {
     tick.className   = 'tick st-' + (status === 'failed' ? 'failed' : status);
     tick.textContent = status === 'delivered' ? '✓✓'
+                     : status === 'queued'    ? '⏳'
                      : (status === 'sending' || status === 'pending') ? '…'
-                     : status === 'failed' ? '✗' : '✓';
+                     : status === 'failed'   ? '✗' : '✓';
   }
   if (!activeOcpChat) return;
   const thread = ocpChatStore.get(activeOcpChat.peerOcp);
@@ -3327,6 +3343,13 @@ async function onMessage(msg) {
         }
         _updateHandleDisplay();
       }
+      // chat push notification tapped — open that contact's thread
+      if (window._pendingOpenChat) {
+        const _co = window._pendingOpenChat;
+        window._pendingOpenChat = null;
+        const _ct = loadContacts().find(c => c.ocp === _co);
+        setTimeout(() => openOcpChat(_co, _ct?.name), 400);
+      }
       // /u/<handle> QR link opened (legacy path) — resolve and save contact
       if (window._pendingAddHandle) {
         const _h = window._pendingAddHandle;
@@ -3418,11 +3441,16 @@ async function onMessage(msg) {
       endCall();
       break;
 
-    case 'hangup':
-      console.log('[CALL] hangup received — tearing down');
-      toast('Call ended');
+    case 'hangup': {
+      console.log('[CALL] hangup received — tearing down, reason:', msg.reason);
+      // Capture peer before endCall() clears state
+      const _hPeer = (msg.reason === 'no_answer' && callWith?.startsWith('ocp:'))
+        ? { ocp: callWith, name: _callPeerName } : null;
+      toast(msg.reason === 'no_answer' ? 'No answer' : 'Call ended');
       endCall();
+      if (_hPeer) setTimeout(() => _offerLeaveMessage(_hPeer.ocp, _hPeer.name), 500);
       break;
+    }
 
     case 'video_toggle':
       console.log('[WRTC] video_toggle received — state:', msg.state);
@@ -3508,14 +3536,23 @@ async function onMessage(msg) {
       setOcpStatus(msg.msgId, 'delivered');
       break;
 
+    case 'chat_queued':
+      setOcpStatus(msg.msgId, 'queued');
+      break;
+
     case 'chat_undelivered':
       setOcpStatus(msg.msgId, 'pending');
       break;
 
-    case 'unavailable':
+    case 'unavailable': {
+      // Capture peer before endCall() clears state
+      const _uPeer = callWith?.startsWith('ocp:')
+        ? { ocp: callWith, name: _callPeerName } : null;
       endCall();
       showInviteBanner(msg.number);
+      if (_uPeer) setTimeout(() => _offerLeaveMessage(_uPeer.ocp, _uPeer.name), 500);
       break;
+    }
 
     case 'no_relay':
       toast('No relay available for this number');
@@ -5438,6 +5475,75 @@ function _showPostCallNudge() {
 
   banner.appendChild(btnRow);
   document.body.appendChild(banner);
+}
+
+// Show a "leave a message" card after an unanswered / offline OCP call.
+// Only offered when the peer is reachable by OCP key (so the queued chat path works).
+function _offerLeaveMessage(peerOcp, peerName) {
+  if (!peerOcp) return;
+  document.getElementById('ocp-leave-msg-card')?.remove();
+
+  if (!document.getElementById('_ocp-backup-anim')) {
+    const st = document.createElement('style');
+    st.id = '_ocp-backup-anim';
+    st.textContent = '@keyframes _bannerUp{from{transform:translateY(100%);opacity:0}' +
+      'to{transform:translateY(0);opacity:1}}';
+    document.head.appendChild(st);
+  }
+
+  const card = document.createElement('div');
+  card.id = 'ocp-leave-msg-card';
+  card.style.cssText = 'position:fixed;bottom:44px;left:0;right:0;z-index:15002;' +
+    'padding:12px 14px;background:rgba(13,31,53,.97);' +
+    'border-top:1px solid rgba(99,180,255,.2);' +
+    'animation:_bannerUp .3s ease;';
+
+  const label = document.createElement('div');
+  label.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#c8dff5;' +
+    'margin-bottom:8px;line-height:1.5;';
+  label.textContent = '💬 They\'re not available — leave a message' +
+    (peerName ? ' for ' + peerName : '') + ':';
+  card.appendChild(label);
+
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;align-items:flex-end;';
+
+  const ta = document.createElement('textarea');
+  ta.placeholder = 'Your message…';
+  ta.rows = 2;
+  ta.maxLength = 1000;
+  ta.style.cssText = 'flex:1;padding:8px 10px;background:var(--bg-field);' +
+    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
+    'color:#c8dff5;font-family:"DM Mono",monospace;font-size:12px;' +
+    'outline:none;resize:none;line-height:1.4;';
+  row.appendChild(ta);
+
+  const sendBtn = document.createElement('button');
+  sendBtn.textContent = 'Send';
+  sendBtn.style.cssText = 'padding:8px 14px;background:var(--blue-dim);' +
+    'border:1px solid var(--blue-border);border-radius:var(--radius-sm);' +
+    'color:var(--blue);font-weight:700;font-size:12px;font-family:"Syne",sans-serif;' +
+    'cursor:pointer;white-space:nowrap;flex-shrink:0;';
+  sendBtn.onclick = async () => {
+    const text = ta.value.trim();
+    if (!text) return;
+    sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+    await sendOcpMessage(peerOcp, text);
+    toast('Message sent — delivered when they come online.');
+    card.remove();
+  };
+  row.appendChild(sendBtn);
+
+  const dismissBtn = document.createElement('button');
+  dismissBtn.textContent = 'Later';
+  dismissBtn.style.cssText = 'padding:8px 10px;background:transparent;color:#667;border:0;' +
+    'font-size:12px;font-family:"DM Mono",monospace;cursor:pointer;flex-shrink:0;';
+  dismissBtn.onclick = () => card.remove();
+  row.appendChild(dismissBtn);
+
+  card.appendChild(row);
+  document.body.appendChild(card);
+  ta.focus();
 }
 
 function endCall() {
