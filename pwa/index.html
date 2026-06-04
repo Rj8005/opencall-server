@@ -3014,6 +3014,7 @@ let isMuted       = false;
 let isSpeaker     = false;
 let isVideo       = false;
 let videoStream   = null;
+let _makingOffer  = false;  // true while createOffer→setLocalDescription is in flight
 let timerInterval = null;
 let timerSecs     = 0;
 let audioCtx      = null;
@@ -3705,6 +3706,10 @@ async function onMessage(msg) {
 
     case 'video_toggle':
       console.log('[WRTC] video_toggle received — state:', msg.state);
+      if (_makingOffer) {
+        console.log('[WRTC] renegotiation skipped (not stable) — video_toggle debounced');
+        break;
+      }
       if (msg.state === 'on'  && !isVideo) await toggleVideo(true);
       if (msg.state === 'off' &&  isVideo) await toggleVideo(true);
       break;
@@ -5909,6 +5914,7 @@ function endCall() {
   updateVideoLayout(false);
   const vidBtn = document.getElementById('btn-video');
   if (vidBtn) { vidBtn.innerHTML = '&#127909;'; vidBtn.classList.remove('active'); }
+  _makingOffer = false;
   if (pc) { pc.close(); pc = null; }
   if (peerConnection) { peerConnection.close(); peerConnection = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
@@ -6149,7 +6155,12 @@ async function toggleSpeaker() {
 async function toggleVideo(_mirrored = false) {
   // Video is only meaningful on direct/link WebRTC path (not phone relay).
   if (!pc || pc.signalingState === 'closed') {
-    toast('Video not available'); return;
+    if (!_mirrored) toast('Video not available'); return;
+  }
+  // Don't start a new toggle if a renegotiation is already in flight.
+  if (!_mirrored && _makingOffer) {
+    console.log('[WRTC] renegotiation skipped (not stable) — toggleVideo debounced');
+    return;
   }
   if (isVideo) {
     isVideo = false;
@@ -6158,7 +6169,6 @@ async function toggleVideo(_mirrored = false) {
     if (sender) await sender.replaceTrack(null);
     document.getElementById('local-video').srcObject = null;
     updateVideoLayout(false);
-    await sendReOffer();
   } else {
     try {
       videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -6175,19 +6185,33 @@ async function toggleVideo(_mirrored = false) {
       pc.addTrack(vTrack, videoStream);
     }
     updateVideoLayout(true);
-    await sendReOffer();
   }
   if (!_mirrored) {
+    // Initiating side: send the offer first, then signal the peer.
+    // The peer's mirrored toggleVideo prepares their track WITHOUT re-offering,
+    // so when our offer arrives the peer answers with their track included.
+    await sendReOffer();
     wsSend({ type: 'video_toggle', state: isVideo ? 'on' : 'off', callId, to: callWith });
   }
+  // _mirrored=true: track is prepared; the initiator's offer is already on its way.
+  // Calling sendReOffer() here would cause glare — skip it.
   const btn = document.getElementById('btn-video');
   btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
   btn.classList.toggle('active', isVideo);
-  toast(isVideo ? 'Video on' : 'Video off');
+  if (!_mirrored) toast(isVideo ? 'Video on' : 'Video off');
 }
 
 async function sendReOffer() {
   if (!pc || pc.signalingState === 'closed') return;
+  if (pc.signalingState !== 'stable') {
+    console.log('[WRTC] renegotiation skipped (not stable) | state:', pc.signalingState);
+    return;
+  }
+  if (_makingOffer) {
+    console.log('[WRTC] renegotiation skipped (offer already in flight)');
+    return;
+  }
+  _makingOffer = true;
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -6199,6 +6223,8 @@ async function sendReOffer() {
     console.log('[WRTC] re-offer sent | callMode:', callMode);
   } catch(e) {
     console.warn('[WRTC] sendReOffer failed:', e.message);
+  } finally {
+    _makingOffer = false;
   }
 }
 

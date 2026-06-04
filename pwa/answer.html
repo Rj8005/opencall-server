@@ -667,6 +667,7 @@ let isMuted       = false;
 let isSpeaker     = false;
 let isVideo       = false;
 let videoStream   = null;
+let _makingOffer  = false;  // true while createOffer→setLocalDescription is in flight
 let userAnswered      = false;
 let pendingOffer      = null;
 let pendingCallId     = null;
@@ -1019,6 +1020,10 @@ async function onMessage(event) {
 
     case 'video_toggle':
       console.log('[WRTC] video_toggle received — state:', msg.state);
+      if (_makingOffer) {
+        console.log('[WRTC] renegotiation skipped (not stable) — video_toggle debounced');
+        break;
+      }
       if (msg.state === 'on'  && !isVideo) await toggleVideo(true);
       if (msg.state === 'off' &&  isVideo) await toggleVideo(true);
       break;
@@ -1216,6 +1221,10 @@ async function toggleSpeaker() {
 
 async function toggleVideo(_mirrored = false) {
   if (!pc || pc.signalingState === 'closed') return;
+  if (!_mirrored && _makingOffer) {
+    console.log('[WRTC] renegotiation skipped (not stable) — toggleVideo debounced');
+    return;
+  }
   if (isVideo) {
     isVideo = false;
     if (videoStream) { videoStream.getVideoTracks().forEach(t => t.stop()); videoStream = null; }
@@ -1223,7 +1232,6 @@ async function toggleVideo(_mirrored = false) {
     if (sender) await sender.replaceTrack(null);
     document.getElementById('local-video').srcObject = null;
     updateVideoLayout(false);
-    await sendReOffer();
   } else {
     try {
       videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -1240,11 +1248,12 @@ async function toggleVideo(_mirrored = false) {
       pc.addTrack(vTrack, videoStream);
     }
     updateVideoLayout(true);
-    await sendReOffer();
   }
   if (!_mirrored) {
+    await sendReOffer();
     wsSend({ type: 'video_toggle', state: isVideo ? 'on' : 'off', callId, to: callerNumber });
   }
+  // _mirrored=true: track prepared, no re-offer — initiator's offer is already en route.
   const btn = document.getElementById('ans-video');
   btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
   btn.classList.toggle('active', isVideo);
@@ -1252,6 +1261,15 @@ async function toggleVideo(_mirrored = false) {
 
 async function sendReOffer() {
   if (!pc || pc.signalingState === 'closed') return;
+  if (pc.signalingState !== 'stable') {
+    console.log('[WRTC] renegotiation skipped (not stable) | state:', pc.signalingState);
+    return;
+  }
+  if (_makingOffer) {
+    console.log('[WRTC] renegotiation skipped (offer already in flight)');
+    return;
+  }
+  _makingOffer = true;
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -1264,6 +1282,8 @@ async function sendReOffer() {
     console.log('[WRTC] re-offer sent | callId:', callId);
   } catch(e) {
     console.warn('[WRTC] sendReOffer failed:', e.message);
+  } finally {
+    _makingOffer = false;
   }
 }
 
@@ -1318,6 +1338,7 @@ function cleanupMedia() {
   updateVideoLayout(false);
   const vidBtn = document.getElementById('ans-video');
   if (vidBtn) { vidBtn.innerHTML = '&#127909;'; vidBtn.classList.remove('active'); }
+  _makingOffer = false;
   if (pc)          { try { pc.close(); } catch(e) {} pc = null; }
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   if (ws && ws.readyState <= 1) { try { ws.close(); } catch(e) {} ws = null; }
