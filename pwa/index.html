@@ -1770,6 +1770,17 @@ async function backupIdentity() {
   secB.appendChild(ksErr);
   secB.appendChild(dlBtn);
 
+  // Thread history opt-in checkbox
+  const threadRow = document.createElement('label');
+  threadRow.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;' +
+    'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin-bottom:12px;';
+  const threadCb = document.createElement('input');
+  threadCb.type = 'checkbox';
+  threadCb.style.cssText = 'width:15px;height:15px;accent-color:var(--blue,#63b4ff);cursor:pointer;';
+  threadRow.appendChild(threadCb);
+  threadRow.appendChild(document.createTextNode('Include conversation history (calls + messages)'));
+  secB.insertBefore(threadRow, dlBtn);
+
   dlBtn.onclick = async () => {
     ksErr.textContent = '';
     const pass = pw1.value;
@@ -1785,10 +1796,20 @@ async function backupIdentity() {
         { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
         km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
       const iv   = crypto.getRandomValues(new Uint8Array(12));
+      // Build payload: always include identity; optionally include threads
+      const payload = { identity };
+      if (threadCb.checked) {
+        const threads = {};
+        for (const [ocp, t] of ocpThreads)
+          threads[ocp] = { peerOcp: ocp, peerName: t.peerName || null,
+                           messages: t.messages.slice(-500) };
+        payload.threads = threads;
+      }
       const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv },
-        key, new TextEncoder().encode(JSON.stringify(identity)));
+        key, new TextEncoder().encode(JSON.stringify(payload)));
       const b64  = arr => btoa(String.fromCharCode(...new Uint8Array(arr)));
-      const pkg  = { version: 2, salt: b64(salt), iv: b64(iv), data: b64(ct) };
+      const pkg  = { version: 3, salt: b64(salt), iv: b64(iv), data: b64(ct),
+                     hasThreads: threadCb.checked };
       const blob = new Blob([JSON.stringify(pkg)], { type: 'application/json' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
@@ -1834,41 +1855,44 @@ async function importIdentity() {
 
     try {
       const salt  = Uint8Array.from(atob(backup.salt),  c => c.charCodeAt(0));
-      const nonce = Uint8Array.from(atob(backup.nonce), c => c.charCodeAt(0));
+      // 'nonce' (v1) and 'iv' (v2/v3) are the same field, different names
+      const ivB64 = backup.iv || backup.nonce;
+      const nonce = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
       const data  = Uint8Array.from(atob(backup.data),  c => c.charCodeAt(0));
 
       const keyMaterial = await crypto.subtle.importKey(
-        'raw',
-        new TextEncoder().encode(passphrase),
-        { name: 'PBKDF2' },
-        false,
-        ['deriveKey']
+        'raw', new TextEncoder().encode(passphrase),
+        { name: 'PBKDF2' }, false, ['deriveKey']
       );
+      const iterations = backup.version >= 2 ? 250000 : 100000;
       const encryptionKey = await crypto.subtle.deriveKey(
-        {
-          name: 'PBKDF2',
-          salt,
-          iterations: 100000,
-          hash: 'SHA-256'
-        },
-        keyMaterial,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['decrypt']
+        { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+        keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
       );
       const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: nonce },
-        encryptionKey,
-        data
+        { name: 'AES-GCM', iv: nonce }, encryptionKey, data
       );
-      const identity = JSON.parse(new TextDecoder().decode(decrypted));
+      const parsed = JSON.parse(new TextDecoder().decode(decrypted));
+      // v3 payload: { identity, threads? }; v1/v2: the identity object directly
+      const identity = parsed.identity || parsed;
       await saveIdentity(identity);
       myIdentity = identity;
       const _r = document.getElementById('ocp-address-display');
       const _d = document.getElementById('ocp-addr-dialer');
       if (_r) _r.textContent = identity.ocp_address;
       if (_d) _d.textContent = identity.ocp_address;
-      toast('Identity imported successfully');
+      // Restore conversation history if present
+      if (parsed.threads) {
+        ocpThreads.clear();
+        for (const [ocp, thread] of Object.entries(parsed.threads)) {
+          ocpThreads.set(ocp, { peerOcp: ocp, peerName: thread.peerName || null,
+                                messages: thread.messages || [] });
+        }
+        saveOcpThreads();
+        toast('Identity + conversation history imported');
+      } else {
+        toast('Identity imported successfully');
+      }
     } catch(e) {
       toast('Wrong passphrase or corrupted file');
     }
@@ -2247,26 +2271,42 @@ function clearRatchetSession(withNumber) {
 // Stored under the 'chat:<ocp>' namespace to never collide with call sessions.
 
 let activeOcpChat  = null;                // { peerOcp, peerName }
-const ocpChatStore = new Map();           // peerOcp → { messages:[] }
+// Unified per-contact conversation store. Key = peerOcp.
+// Each thread: { peerOcp, peerName, messages:[ {dir, text, msgId, ts, status, kind} ] }
+// kind: 'chat' | 'call' | 'note'  (call + note are system entries, not sent over wire)
+const ocpThreads = new Map();
 
-function loadOcpChats() {
+function loadOcpThreads() {
   try {
-    const raw = localStorage.getItem('ocp_e2e_chats');
+    // Prefer new key; fall back to old key for migration
+    const raw = localStorage.getItem('ocp_threads')
+              || localStorage.getItem('ocp_e2e_chats');
     if (!raw) return;
     for (const [ocp, thread] of Object.entries(JSON.parse(raw))) {
-      ocpChatStore.set(ocp, thread);
+      ocpThreads.set(ocp, { peerOcp: ocp, peerName: thread.peerName || null,
+                             messages: thread.messages || [] });
+    }
+    // One-time migration: remove old key
+    if (localStorage.getItem('ocp_e2e_chats') && !localStorage.getItem('ocp_threads')) {
+      saveOcpThreads();
+      localStorage.removeItem('ocp_e2e_chats');
     }
   } catch(e) {}
 }
+// Legacy alias so existing call-sites work unchanged
+const loadOcpChats = loadOcpThreads;
 
-function saveOcpChats() {
+function saveOcpThreads() {
   try {
     const obj = {};
-    for (const [ocp, t] of ocpChatStore)
-      obj[ocp] = { messages: t.messages.slice(-200) };
-    localStorage.setItem('ocp_e2e_chats', JSON.stringify(obj));
+    for (const [ocp, t] of ocpThreads)
+      obj[ocp] = { peerOcp: ocp, peerName: t.peerName || null,
+                   messages: t.messages.slice(-500) };
+    localStorage.setItem('ocp_threads', JSON.stringify(obj));
   } catch(e) {}
 }
+// Legacy alias
+const saveOcpChats = saveOcpThreads;
 
 // Derive a shared AES-GCM key from sorted(myOcp, peerOcp) via SHA-256.
 // Idempotent: initialises once per chat session, stored as 'chat:<peerOcp>'.
@@ -2289,11 +2329,14 @@ async function initChatSession(peerOcp) {
 function openOcpChat(peerOcp, peerName) {
   if (!peerOcp) return;
   activeOcpChat = { peerOcp, peerName: peerName || peerOcp };
+  // Ensure thread exists and peerName is kept fresh
+  if (!ocpThreads.has(peerOcp)) ocpThreads.set(peerOcp, { peerOcp, peerName: peerName || null, messages: [] });
+  else if (peerName) ocpThreads.get(peerOcp).peerName = peerName;
   document.getElementById('ocpChatName').textContent = peerName || peerOcp;
   const msgList = document.getElementById('ocpMsgs');
-  msgList.innerHTML = '<li class="sysmsg">End-to-end encrypted · messages stored locally</li>';
-  const thread = ocpChatStore.get(peerOcp);
-  if (thread) thread.messages.forEach(m => addOcpBubble(m.dir, m.text, m.msgId, m.status, m.ts));
+  msgList.innerHTML = '<li class="sysmsg">End-to-end encrypted · stored locally</li>';
+  const thread = ocpThreads.get(peerOcp);
+  if (thread) thread.messages.forEach(m => addOcpBubble(m.dir, m.text, m.msgId, m.status, m.ts, m.kind));
   document.getElementById('ocpChat').classList.add('open');
   document.getElementById('ocpInput').focus();
 }
@@ -2313,22 +2356,56 @@ async function sendOcpMessage(peerOcp, text) {
   // Only append bubble to open chat panel if that peer's thread is active
   if (activeOcpChat?.peerOcp === targetOcp) addOcpBubble('out', body, msgId, 'sending', ts);
   if (!peerOcp && input) { input.value = ''; input.style.height = 'auto'; }
-  if (!ocpChatStore.has(targetOcp)) ocpChatStore.set(targetOcp, { messages: [] });
-  ocpChatStore.get(targetOcp).messages.push({ dir: 'out', text: body, msgId, status: 'sending', ts });
+  if (!ocpThreads.has(targetOcp)) ocpThreads.set(targetOcp, { messages: [] });
+  ocpThreads.get(targetOcp).messages.push({ dir: 'out', text: body, msgId, status: 'sending', ts });
   saveOcpChats();
   await initChatSession(targetOcp);
   const ciphertext = await ratchetEncrypt('chat:' + targetOcp, { text: body, ts });
   await wsSend({ type: 'chat_msg', to: targetOcp, from: myIdentity?.ocp_address, ciphertext, msgId, ts });
 }
 
-function addOcpBubble(dir, text, msgId, status, ts) {
+function addOcpBubble(dir, text, msgId, status, ts, kind) {
   const msgList = document.getElementById('ocpMsgs');
   if (!msgList) return;
   const li = document.createElement('li');
-  li.className   = 'bubble ' + dir;
   li.dataset.msgId = msgId;
   const d = ts ? new Date(ts) : new Date();
   const timeStr = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+
+  if (kind === 'call') {
+    // System entry: call ended
+    li.className = 'sysmsg';
+    li.textContent = text + '  ·  ' + timeStr;
+    msgList.appendChild(li);
+    msgList.scrollTop = msgList.scrollHeight;
+    return;
+  }
+
+  if (kind === 'note') {
+    // Collapsible AI transcript entry
+    li.className = 'sysmsg';
+    li.style.cssText = 'text-align:left;cursor:pointer;padding:8px 10px;' +
+      'background:rgba(245,166,35,.05);border:1px solid rgba(245,166,35,.15);' +
+      'border-radius:8px;margin:4px 0;';
+    const lines = text.split('\n');
+    const header = document.createElement('div');
+    header.style.cssText = 'font-size:10px;color:var(--amber,#f5a623);letter-spacing:.5px;' +
+      'text-transform:uppercase;margin-bottom:4px;';
+    header.textContent = '📝 AI Notes · ' + timeStr;
+    const body = document.createElement('div');
+    body.style.cssText = 'font-size:11px;color:var(--text-secondary);line-height:1.5;' +
+      'font-family:"DM Mono",monospace;display:none;margin-top:6px;white-space:pre-wrap;';
+    body.textContent = text;
+    li.appendChild(header);
+    li.appendChild(body);
+    li.onclick = () => { body.style.display = body.style.display === 'none' ? 'block' : 'none'; };
+    msgList.appendChild(li);
+    msgList.scrollTop = msgList.scrollHeight;
+    return;
+  }
+
+  // Regular chat bubble
+  li.className = 'bubble ' + dir;
   const st = status || 'sent';
   const tickText = st === 'delivered' ? '✓✓'
                  : st === 'queued'    ? '⏳'
@@ -2353,7 +2430,7 @@ function setOcpStatus(msgId, status) {
                      : status === 'failed'   ? '✗' : '✓';
   }
   if (!activeOcpChat) return;
-  const thread = ocpChatStore.get(activeOcpChat.peerOcp);
+  const thread = ocpThreads.get(activeOcpChat.peerOcp);
   if (!thread) return;
   const m = thread.messages.find(m => m.msgId === msgId);
   if (m) { m.status = status; saveOcpChats(); }
@@ -3511,8 +3588,8 @@ async function onMessage(msg) {
       await initChatSession(from);
       const plain = await ratchetDecrypt('chat:' + from, ciphertext);
       const text  = plain?.text || '[could not decrypt]';
-      if (!ocpChatStore.has(from)) ocpChatStore.set(from, { messages: [] });
-      const thread = ocpChatStore.get(from);
+      if (!ocpThreads.has(from)) ocpThreads.set(from, { messages: [] });
+      const thread = ocpThreads.get(from);
       if (!thread.messages.find(m => m.msgId === msgId)) {
         thread.messages.push({ dir: 'in', text, msgId, status: 'delivered', ts: msgTs || Date.now() });
         saveOcpChats();
@@ -5546,7 +5623,51 @@ function _offerLeaveMessage(peerOcp, peerName) {
   ta.focus();
 }
 
+// Append a call-ended system entry (and optional AI transcript) to the
+// peer's conversation thread so the chat history acts as call memory.
+function _recordCallInThread(peerOcp, peerName, durationSecs, transcript) {
+  if (!peerOcp || durationSecs < 2) return; // skip trivial/failed connections
+  if (!ocpThreads.has(peerOcp))
+    ocpThreads.set(peerOcp, { peerOcp, peerName: peerName || null, messages: [] });
+  const thread = ocpThreads.get(peerOcp);
+  if (peerName) thread.peerName = peerName;
+  const now = Date.now();
+  const mins = String(Math.floor(durationSecs / 60)).padStart(2, '0');
+  const secs = String(durationSecs % 60).padStart(2, '0');
+  // Call-ended marker
+  thread.messages.push({
+    kind: 'call', dir: 'sys',
+    text: '📞 Call · ' + mins + ':' + secs,
+    msgId: 'call_' + now, ts: now, status: 'sys'
+  });
+  // AI Notes transcript (if any)
+  if (transcript && transcript.length) {
+    const body = transcript.map(l => (l.speaker || '?') + ': ' + l.text).join('\n');
+    thread.messages.push({
+      kind: 'note', dir: 'sys',
+      text: body,
+      msgId: 'note_' + now, ts: now, status: 'sys'
+    });
+  }
+  saveOcpThreads();
+  // Live-update if chat panel for this peer is open
+  if (activeOcpChat?.peerOcp === peerOcp) {
+    addOcpBubble('sys', '📞 Call · ' + mins + ':' + secs,
+                 'call_' + now, 'sys', now, 'call');
+    if (transcript?.length) {
+      const body = transcript.map(l => (l.speaker || '?') + ': ' + l.text).join('\n');
+      addOcpBubble('sys', body, 'note_' + now, 'sys', now, 'note');
+    }
+  }
+}
+
 function endCall() {
+  // Capture call state before anything is cleared
+  const _ecPeerOcp    = callWith?.startsWith('ocp:') ? callWith : null;
+  const _ecPeerName   = _callPeerName;
+  const _ecDuration   = timerSecs;          // grabbed before stopTimer() resets it
+  const _ecTranscript = aiTranscript.slice(); // copy before it's cleared
+
   // AI Notes cleanup — stop recognition and offer transcript download
   _stopTranscription();
   _offerTranscriptDownload();
@@ -5595,6 +5716,8 @@ function endCall() {
   document.getElementById('inp-dial').value = '+';
   syncDialDisplay();
   show('dialer');
+  // Record call + transcript in the contact's thread (call memory)
+  if (_ecPeerOcp) _recordCallInThread(_ecPeerOcp, _ecPeerName, _ecDuration, _ecTranscript);
   _maybeShowBackupNudge();
   maybePostCallNudge();
 }
@@ -6328,7 +6451,7 @@ function showSmsBadge(from, text) {
 }
 
 loadThreadsStore();
-loadOcpChats();
+loadOcpThreads();
 </script>
 
 </body>
