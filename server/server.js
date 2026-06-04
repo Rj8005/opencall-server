@@ -1987,6 +1987,49 @@ async function handle(ws, msg) {
       break;
     }
 
+    // ── CHAT_MSG ─────────────────────────────────────────────
+    // Route an E2E-encrypted chat message to the recipient.
+    // msg: { to, from, ciphertext, msgId, ts }
+    case 'chat_msg': {
+      const { to, from, ciphertext, msgId, ts } = msg;
+      if (!to || !ciphertext || !msgId) break;
+      // Resolve recipient: ocp: address → ocpRegistry, handle → resolve → ocpRegistry, phone → registry
+      let recipientWs = null;
+      if (to.startsWith('ocp:')) {
+        recipientWs = ocpRegistry.get(to);
+      } else {
+        const ocp = resolveToOcp(to);
+        recipientWs = ocp ? ocpRegistry.get(ocp) : registry.get(to);
+      }
+      if (recipientWs && recipientWs.readyState === 1) {
+        send(recipientWs, { type: 'chat_msg', from, ciphertext, msgId, ts: ts || Date.now() });
+        send(ws, { type: 'chat_sent', msgId });
+        log('💬', `chat ${(from||'?').slice(0,16)}… → ${(to||'?').slice(0,16)}…`);
+      } else {
+        send(ws, { type: 'chat_undelivered', msgId });
+      }
+      break;
+    }
+
+    // ── CHAT_DELIVERED ───────────────────────────────────────
+    // Recipient confirms it received and decrypted a chat message.
+    // msg: { to, msgId }  (to = original sender's ocp)
+    case 'chat_delivered': {
+      const { to, msgId } = msg;
+      if (!to || !msgId) break;
+      let senderWs = null;
+      if (to.startsWith('ocp:')) {
+        senderWs = ocpRegistry.get(to);
+      } else {
+        const ocp = resolveToOcp(to);
+        senderWs = ocp ? ocpRegistry.get(ocp) : registry.get(to);
+      }
+      if (senderWs && senderWs.readyState === 1) {
+        send(senderWs, { type: 'chat_delivered', msgId });
+      }
+      break;
+    }
+
     default:
       send(ws, { type: "error", reason: `unknown_type:${msg.type}` });
   }

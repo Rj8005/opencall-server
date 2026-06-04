@@ -504,6 +504,17 @@ input::placeholder { color: var(--text-muted); }
 #screen-register { display: block; }
 #screen-dialer   { display: none; }
 
+/* ── OCP E2E Chat overlay (same layout as SMS chat) ── */
+#ocpChat {
+  display: none;
+  position: fixed; inset: 0;
+  background: var(--bg-deep);
+  z-index: 201;
+  flex-direction: column;
+  overflow: hidden;
+}
+#ocpChat.open { display: flex; }
+
 /* ── SMS Chat overlay ── */
 #smsChat {
   display: none;
@@ -1079,6 +1090,26 @@ input::placeholder { color: var(--text-muted); }
   <div class="composer">
     <textarea id="smsInput" class="field" placeholder="Message…" rows="1" maxlength="1530"></textarea>
     <button id="smsSend" class="send" title="Send">&#8593;</button>
+  </div>
+</section>
+
+<section id="ocpChat">
+  <div class="ring-3" aria-hidden="true"></div>
+  <div class="ring-4" aria-hidden="true"></div>
+  <div class="chat-head">
+    <button class="chat-back" id="ocpChatBack" title="Back">&#8592;</button>
+    <div class="chat-peer">
+      <div id="ocpChatName" class="chat-num"></div>
+      <div class="chat-country" style="color:rgba(99,180,255,.4);">E2E encrypted</div>
+    </div>
+    <div style="font-size:9px;color:rgba(99,180,255,.3);letter-spacing:.5px;text-transform:uppercase;flex-shrink:0">OCP Chat</div>
+  </div>
+  <ul id="ocpMsgs" class="msgs">
+    <li class="sysmsg">End-to-end encrypted · messages stored locally</li>
+  </ul>
+  <div class="composer">
+    <textarea id="ocpInput" class="field" placeholder="Message…" rows="1" maxlength="2000"></textarea>
+    <button id="ocpSend" class="send" title="Send">&#8593;</button>
   </div>
 </section>
 
@@ -2200,6 +2231,135 @@ function clearRatchetSession(withNumber) {
   console.log('[OCP] Ratchet session cleared for', withNumber);
 }
 
+// ── OCP E2E Chat ───────────────────────────────────────────────────────────
+// Key insight: the call ratchet uses RANDOM keys per side (no key exchange).
+// Chat derives a DETERMINISTIC shared key from the sorted OCP address pair
+// so both parties independently arrive at the same AES-GCM key.
+// Stored under the 'chat:<ocp>' namespace to never collide with call sessions.
+
+let activeOcpChat  = null;                // { peerOcp, peerName }
+const ocpChatStore = new Map();           // peerOcp → { messages:[] }
+
+function loadOcpChats() {
+  try {
+    const raw = localStorage.getItem('ocp_e2e_chats');
+    if (!raw) return;
+    for (const [ocp, thread] of Object.entries(JSON.parse(raw))) {
+      ocpChatStore.set(ocp, thread);
+    }
+  } catch(e) {}
+}
+
+function saveOcpChats() {
+  try {
+    const obj = {};
+    for (const [ocp, t] of ocpChatStore)
+      obj[ocp] = { messages: t.messages.slice(-200) };
+    localStorage.setItem('ocp_e2e_chats', JSON.stringify(obj));
+  } catch(e) {}
+}
+
+// Derive a shared AES-GCM key from sorted(myOcp, peerOcp) via SHA-256.
+// Idempotent: initialises once per chat session, stored as 'chat:<peerOcp>'.
+async function initChatSession(peerOcp) {
+  if (!myIdentity || !peerOcp) return;
+  const key_id = 'chat:' + peerOcp;
+  if (ratchetSessions.has(key_id)) return;
+  const myOcp = myIdentity.ocp_address;
+  const [a, b] = [myOcp, peerOcp].sort();
+  const material = new TextEncoder().encode('ocp-chat-v1:' + a + ':' + b);
+  const digest   = await crypto.subtle.digest('SHA-256', material);
+  const key = await crypto.subtle.importKey(
+    'raw', digest, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+  ratchetSessions.set(key_id, {
+    sendKey: key, recvKey: key, sendCount: 0, recvCount: 0, createdAt: Date.now()
+  });
+}
+
+function openOcpChat(peerOcp, peerName) {
+  if (!peerOcp) return;
+  activeOcpChat = { peerOcp, peerName: peerName || peerOcp };
+  document.getElementById('ocpChatName').textContent = peerName || peerOcp;
+  const msgList = document.getElementById('ocpMsgs');
+  msgList.innerHTML = '<li class="sysmsg">End-to-end encrypted · messages stored locally</li>';
+  const thread = ocpChatStore.get(peerOcp);
+  if (thread) thread.messages.forEach(m => addOcpBubble(m.dir, m.text, m.msgId, m.status, m.ts));
+  document.getElementById('ocpChat').classList.add('open');
+  document.getElementById('ocpInput').focus();
+}
+
+async function sendOcpMessage() {
+  const input = document.getElementById('ocpInput');
+  const text  = (input.value || '').trim();
+  if (!text || !activeOcpChat) return;
+  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
+  const { peerOcp } = activeOcpChat;
+  const msgId = 'cm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+  const ts    = Date.now();
+  addOcpBubble('out', text, msgId, 'sending', ts);
+  input.value = ''; input.style.height = 'auto';
+  if (!ocpChatStore.has(peerOcp)) ocpChatStore.set(peerOcp, { messages: [] });
+  ocpChatStore.get(peerOcp).messages.push({ dir: 'out', text, msgId, status: 'sending', ts });
+  saveOcpChats();
+  await initChatSession(peerOcp);
+  const ciphertext = await ratchetEncrypt('chat:' + peerOcp, { text, ts });
+  await wsSend({ type: 'chat_msg', to: peerOcp, from: myIdentity?.ocp_address, ciphertext, msgId, ts });
+}
+
+function addOcpBubble(dir, text, msgId, status, ts) {
+  const msgList = document.getElementById('ocpMsgs');
+  if (!msgList) return;
+  const li = document.createElement('li');
+  li.className   = 'bubble ' + dir;
+  li.dataset.msgId = msgId;
+  const d = ts ? new Date(ts) : new Date();
+  const timeStr = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+  const st = status || 'sent';
+  const tickText = st === 'delivered' ? '✓✓'
+                 : (st === 'sending' || st === 'pending') ? '…'
+                 : st === 'failed' ? '✗' : '✓';
+  const tickHtml = dir === 'out'
+    ? `<span class="tick st-${st}" id="otick_${msgId}">${tickText}</span>`
+    : '';
+  li.innerHTML = escHtml(text) +
+    `<div class="meta"><span class="ts">${timeStr}</span>${tickHtml}</div>`;
+  msgList.appendChild(li);
+  msgList.scrollTop = msgList.scrollHeight;
+}
+
+function setOcpStatus(msgId, status) {
+  const tick = document.getElementById('otick_' + msgId);
+  if (tick) {
+    tick.className   = 'tick st-' + (status === 'failed' ? 'failed' : status);
+    tick.textContent = status === 'delivered' ? '✓✓'
+                     : (status === 'sending' || status === 'pending') ? '…'
+                     : status === 'failed' ? '✗' : '✓';
+  }
+  if (!activeOcpChat) return;
+  const thread = ocpChatStore.get(activeOcpChat.peerOcp);
+  if (!thread) return;
+  const m = thread.messages.find(m => m.msgId === msgId);
+  if (m) { m.status = status; saveOcpChats(); }
+}
+
+(function wireOcpChat() {
+  document.getElementById('ocpChatBack').onclick = () => {
+    document.getElementById('ocpChat').classList.remove('open');
+    activeOcpChat = null;
+  };
+  const inp  = document.getElementById('ocpInput');
+  const send = document.getElementById('ocpSend');
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendOcpMessage(); }
+  });
+  inp.addEventListener('input', () => {
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
+  });
+  send.addEventListener('click', sendOcpMessage);
+})();
+
 // ── Missed Call Landing Page ──────────────────────────────
 
 function checkMissedCallRoute() {
@@ -2351,22 +2511,31 @@ function renderContacts() {
       const label  = c.name || c.number || c.ocp || '?';
       const sub    = (c.name && c.number && c.name !== c.number) ? c.number : '';
       const target = c.number || c.ocp || '';
-      return `<div onclick="callContact('${target.replace(/'/g,"\\'")}','${label.replace(/'/g,"\\'")}')"
-        style="display:flex;align-items:center;gap:10px;padding:8px 10px;
-               border-radius:var(--radius-sm);cursor:pointer;
-               border-bottom:1px solid var(--border)">
+      const safeLabel  = label.replace(/'/g,"\\'");
+      const safeTarget = target.replace(/'/g,"\\'");
+      const safeOcp    = (c.ocp || '').replace(/'/g,"\\'");
+      const chatBtn = c.ocp
+        ? `<div onclick="openOcpChat('${safeOcp}','${safeLabel}')"
+               title="Chat" style="color:var(--blue);font-size:15px;opacity:.65;
+                                   cursor:pointer;padding:4px 2px;flex-shrink:0">&#128172;</div>`
+        : '';
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;
+               border-radius:var(--radius-sm);border-bottom:1px solid var(--border)">
         <div style="width:32px;height:32px;border-radius:50%;background:var(--blue-dim);
                     border:1px solid var(--blue-border);display:flex;align-items:center;
                     justify-content:center;font-size:13px;color:var(--blue);flex-shrink:0">
           ${label[0].toUpperCase()}
         </div>
-        <div style="flex:1;min-width:0">
+        <div style="flex:1;min-width:0;cursor:pointer"
+             onclick="callContact('${safeTarget}','${safeLabel}')">
           <div style="font-family:'Syne',sans-serif;font-size:13px;color:#c8dff5;
                       white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
           ${sub ? `<div style="font-family:'DM Mono',monospace;font-size:10px;
                                color:var(--text-secondary)">${sub}</div>` : ''}
         </div>
-        <div style="color:var(--blue);font-size:18px;opacity:.7">&#9742;</div>
+        ${chatBtn}
+        <div onclick="callContact('${safeTarget}','${safeLabel}')"
+             style="color:var(--blue);font-size:18px;opacity:.7;cursor:pointer;flex-shrink:0">&#9742;</div>
       </div>`;
     }).join('');
 }
@@ -3306,6 +3475,41 @@ async function onMessage(msg) {
       _pendingHandleCall = null;
       showDialHint('No one found with that handle/code.', true);
       toast('No one found with that handle/code.');
+      break;
+
+    case 'chat_msg': {
+      const { from, ciphertext, msgId, ts: msgTs } = msg;
+      if (!from || !ciphertext || !msgId) break;
+      await initChatSession(from);
+      const plain = await ratchetDecrypt('chat:' + from, ciphertext);
+      const text  = plain?.text || '[could not decrypt]';
+      if (!ocpChatStore.has(from)) ocpChatStore.set(from, { messages: [] });
+      const thread = ocpChatStore.get(from);
+      if (!thread.messages.find(m => m.msgId === msgId)) {
+        thread.messages.push({ dir: 'in', text, msgId, status: 'delivered', ts: msgTs || Date.now() });
+        saveOcpChats();
+      }
+      if (activeOcpChat?.peerOcp === from) {
+        addOcpBubble('in', text, msgId, 'delivered', msgTs);
+      } else {
+        const contacts = loadContacts();
+        const ct = contacts.find(c => c.ocp === from);
+        toast((ct?.name || from.slice(0,20) + '…') + ': ' + text.slice(0, 60));
+      }
+      await wsSend({ type: 'chat_delivered', to: from, msgId });
+      break;
+    }
+
+    case 'chat_sent':
+      setOcpStatus(msg.msgId, 'sent');
+      break;
+
+    case 'chat_delivered':
+      setOcpStatus(msg.msgId, 'delivered');
+      break;
+
+    case 'chat_undelivered':
+      setOcpStatus(msg.msgId, 'pending');
       break;
 
     case 'unavailable':
@@ -6018,6 +6222,7 @@ function showSmsBadge(from, text) {
 }
 
 loadThreadsStore();
+loadOcpChats();
 </script>
 
 </body>
