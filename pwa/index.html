@@ -4,11 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#060a10">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="OpenCall">
 <title>OpenCall</title>
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="/manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -772,6 +773,12 @@ input::placeholder { color: var(--text-muted); }
       <div class="btn-aux" id="btn-backspace" title="Backspace">&#9003;</div>
       <div class="btn-call" id="btn-call" title="Call">&#9742;</div>
       <div class="btn-aux" id="btn-sms-invite" title="Send SMS invite">&#9993;</div>
+    </div>
+
+    <!-- Recent contacts list — auto-saved when a call reaches ICE connected -->
+    <div id="contacts-list" style="display:none;margin-top:4px;
+         background:var(--bg-card);border:1px solid var(--border);
+         border-radius:var(--radius-md);overflow:hidden">
     </div>
 
     <!-- Push opt-in nudge — shown after first registration if permission not yet granted.
@@ -2115,14 +2122,92 @@ async function answerMissedCall() {
 
 // ── Install hint + PWA prompt ──────────────────────────────
 let _deferredInstallPrompt = null;
+let deferredInstallPrompt  = null;   // public alias used by triggerInstall()
 
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   _deferredInstallPrompt = e;
+  deferredInstallPrompt  = e;
+  console.log('[PWA] install prompt captured');
   // Show install button inside the hint card if it's visible
   const btn = document.getElementById('btn-pwa-install');
   if (btn) btn.style.display = 'block';
 });
+
+window.addEventListener('appinstalled', () => {
+  console.log('[PWA] installed');
+  localStorage.setItem('ocp_installed', '1');
+  deferredInstallPrompt  = null;
+  _deferredInstallPrompt = null;
+});
+
+async function triggerInstall() {
+  if (!deferredInstallPrompt) return false;
+  deferredInstallPrompt.prompt();
+  const { outcome } = await deferredInstallPrompt.userChoice;
+  console.log('[PWA] install choice:', outcome);
+  deferredInstallPrompt  = null;
+  _deferredInstallPrompt = null;
+  return outcome === 'accepted';
+}
+
+// ── Contacts store ─────────────────────────────────────────
+function loadContacts() {
+  try { return JSON.parse(localStorage.getItem('ocp_contacts') || '[]'); }
+  catch { return []; }
+}
+function saveContacts(list) {
+  localStorage.setItem('ocp_contacts', JSON.stringify(list));
+}
+function saveContact({ ocp, name, number }) {
+  if (!ocp && !number) return;
+  const list = loadContacts();
+  const idx  = list.findIndex(c => (c.ocp && c.ocp === ocp) || (!ocp && c.number === number));
+  const entry = { ocp: ocp || null, name: name || number || ocp, number: number || null, lastCall: Date.now() };
+  if (idx >= 0) list[idx] = entry; else list.push(entry);
+  saveContacts(list);
+  console.log('[CONTACTS] saved peer', entry.name || entry.ocp);
+  renderContacts();
+}
+
+function renderContacts() {
+  const el = document.getElementById('contacts-list');
+  if (!el) return;
+  const list = loadContacts().sort((a, b) => b.lastCall - a.lastCall).slice(0, 8);
+  if (!list.length) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = '<div style="font-size:10px;color:var(--text-muted);letter-spacing:.8px;' +
+    'text-transform:uppercase;margin-bottom:8px">Recent</div>' +
+    list.map(c => {
+      const label  = c.name || c.number || c.ocp || '?';
+      const sub    = (c.name && c.number && c.name !== c.number) ? c.number : '';
+      const target = c.number || c.ocp || '';
+      return `<div onclick="callContact('${target.replace(/'/g,"\\'")}','${label.replace(/'/g,"\\'")}')"
+        style="display:flex;align-items:center;gap:10px;padding:8px 10px;
+               border-radius:var(--radius-sm);cursor:pointer;
+               border-bottom:1px solid var(--border)">
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--blue-dim);
+                    border:1px solid var(--blue-border);display:flex;align-items:center;
+                    justify-content:center;font-size:13px;color:var(--blue);flex-shrink:0">
+          ${label[0].toUpperCase()}
+        </div>
+        <div style="flex:1;min-width:0">
+          <div style="font-family:'Syne',sans-serif;font-size:13px;color:#c8dff5;
+                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
+          ${sub ? `<div style="font-family:'DM Mono',monospace;font-size:10px;
+                               color:var(--text-secondary)">${sub}</div>` : ''}
+        </div>
+        <div style="color:var(--blue);font-size:18px;opacity:.7">&#9742;</div>
+      </div>`;
+    }).join('');
+}
+
+function callContact(target, label) {
+  if (!target) return;
+  document.getElementById('inp-dial').value = target;
+  syncDialDisplay();
+  doCall();
+}
 
 function _initInstallHint() {
   // Don't show if already running as installed PWA
@@ -2316,6 +2401,7 @@ let callId        = null;
 let callWith      = null;
 let callMode      = null;       // "direct" | "relay"
 let pendingCall   = null;
+let _callPeerName = null;       // display name of the remote party, captured at call setup
 let isMuted       = false;
 let isSpeaker     = false;
 let isVideo       = false;
@@ -2890,6 +2976,7 @@ async function onMessage(msg) {
       if (window._pendingAnswerCallId) {
         const _cid = window._pendingAnswerCallId;
         window._pendingAnswerCallId = null;
+        console.log('[CLIENT] resumed via push for callId', _cid);
         // Small delay so the dialer screen settles before the overlay fires
         setTimeout(() => {
           wsSend({ type: 'join_call', callId: _cid });
@@ -2899,9 +2986,10 @@ async function onMessage(msg) {
       break;
 
     case 'ringing':
-      callId   = msg.callId;
-      callWith = msg.to;
-      callMode = msg.mode;
+      callId        = msg.callId;
+      callWith      = msg.to;
+      callMode      = msg.mode;
+      _callPeerName = null;       // outgoing call — name unknown until they answer
       document.getElementById('call-status-detail').textContent = 'Ringing...';
       document.getElementById('call-timer').textContent = '0:00';
       document.getElementById('caller-name-display').textContent = msg.to;
@@ -2932,9 +3020,10 @@ async function onMessage(msg) {
       break;
 
     case 'incoming_call':
-      pendingCall = msg;
-      callWith    = msg.from;
-      callMode    = 'direct';
+      pendingCall   = msg;
+      callWith      = msg.from;
+      callMode      = 'direct';
+      _callPeerName = msg.fromName || null;
       showIncomingOverlay(msg.fromName || 'Unknown', msg.from);
       startRingtone();
       break;
@@ -2946,8 +3035,15 @@ async function onMessage(msg) {
       break;
 
     case 'hangup':
+      console.log('[CALL] hangup received — tearing down');
       toast('Call ended');
       endCall();
+      break;
+
+    case 'video_toggle':
+      console.log('[WRTC] video_toggle received — state:', msg.state);
+      if (msg.state === 'on'  && !isVideo) await toggleVideo(true);
+      if (msg.state === 'off' &&  isVideo) await toggleVideo(true);
       break;
 
     case 'unavailable':
@@ -3032,7 +3128,7 @@ async function onMessage(msg) {
           LOG.webrtc('ICE connection state: ' + pc.iceConnectionState);
           if (pc.iceConnectionState === 'connected') {
             LOG.webrtc('✅ ICE CONNECTED — audio tunnel established');
-            _iceWasConnected = true;
+            _markIceConnected();
           }
           if (pc.iceConnectionState === 'failed') {
             LOG.err('❌ ICE FAILED — audio tunnel could not be established');
@@ -3263,7 +3359,9 @@ async function onMessage(msg) {
         LOG.webrtc('ICE state: ' + state);
         if (state === 'connected' || state === 'completed') {
           LOG.webrtc('✅ WebRTC connected to relay B!');
-          _iceWasConnected = true;
+          _markIceConnected();
+          const peerNum = (callWith && !callWith.startsWith('link:')) ? callWith : null;
+          if (peerNum) saveContact({ ocp: null, name: _callPeerName || peerNum, number: peerNum });
           showActiveCallOverlay();
           startTimer();
           setConnectionStatus('calling');
@@ -4702,6 +4800,8 @@ async function doHangup() {
 
   if (currentCallId) {
     await wsSend({ type: 'call.hangup', callId: currentCallId });
+  } else if (callId) {
+    await wsSend({ type: 'hangup', callId, with: callWith });
   }
   currentCallId = null;
 
@@ -4710,6 +4810,11 @@ async function doHangup() {
   setConnectionStatus('online');
 }
 // ── Post-call backup nudge ─────────────────────────────────
+function _markIceConnected() {
+  _iceWasConnected = true;
+  localStorage.setItem('ocp_had_call', '1');
+}
+
 function _maybeShowBackupNudge() {
   if (_backupNudgeShown) return;
   if (!_iceWasConnected)  return;
@@ -4758,6 +4863,101 @@ function _showBackupBanner() {
   laterBtn.onclick = () => banner.remove();
   banner.appendChild(laterBtn);
 
+  document.body.appendChild(banner);
+}
+
+function maybePostCallNudge() {
+  if (!_iceWasConnected) return;
+  if (localStorage.getItem('ocp_nudge_done') === '1') return;
+
+  // Delay slightly more than the backup banner (400ms) so they don't overlap.
+  setTimeout(() => {
+    // Don't stack on top of the backup banner if it appeared simultaneously.
+    if (document.getElementById('ocp-backup-banner')) return;
+    _showPostCallNudge();
+  }, 600);
+}
+
+function _showPostCallNudge() {
+  document.getElementById('ocp-postcall-nudge')?.remove();
+
+  if (!document.getElementById('_ocp-backup-anim')) {
+    const st = document.createElement('style');
+    st.id = '_ocp-backup-anim';
+    st.textContent = '@keyframes _bannerUp{from{transform:translateY(100%);opacity:0}' +
+      'to{transform:translateY(0);opacity:1}}';
+    document.head.appendChild(st);
+  }
+
+  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+                       navigator.standalone;
+
+  // Don't show if already installed as PWA and push is already granted — nothing to do.
+  if (isStandalone && Notification.permission === 'granted') {
+    localStorage.setItem('ocp_nudge_done', '1');
+    return;
+  }
+
+  const banner = document.createElement('div');
+  banner.id = 'ocp-postcall-nudge';
+  banner.style.cssText = 'position:fixed;bottom:44px;left:0;right:0;z-index:15001;' +
+    'padding:12px 14px;background:rgba(13,31,53,.97);' +
+    'border-top:1px solid rgba(99,180,255,.2);' +
+    'animation:_bannerUp .3s ease;';
+
+  const dismiss = () => {
+    localStorage.setItem('ocp_nudge_done', '1');
+    banner.remove();
+  };
+
+  const txt = document.createElement('div');
+  txt.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;' +
+    'color:#c8dff5;line-height:1.5;margin-bottom:10px;';
+
+  if (isIos && !isStandalone) {
+    txt.textContent = '📲 Tap Share → Add to Home Screen to get call alerts ' +
+      '— even when the app is closed.';
+  } else {
+    txt.textContent = '📲 Add OpenCall to your home screen so people can reach ' +
+      'you anytime — even when it\'s closed.';
+  }
+  banner.appendChild(txt);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;';
+
+  const laterBtn = document.createElement('button');
+  laterBtn.textContent = 'Later';
+  laterBtn.style.cssText = 'flex:1;padding:8px;background:transparent;' +
+    'border:1px solid rgba(99,180,255,.2);border-radius:8px;' +
+    'color:#667;font-size:12px;font-family:"DM Mono",monospace;cursor:pointer;';
+  laterBtn.onclick = dismiss;
+  btnRow.appendChild(laterBtn);
+
+  // iOS Safari without install prompt: show instructions, no action button needed.
+  if (!(isIos && !isStandalone)) {
+    const goBtn = document.createElement('button');
+    goBtn.textContent = 'Add & enable calls';
+    goBtn.style.cssText = 'flex:2;padding:8px;background:var(--blue-dim);' +
+      'border:1px solid var(--blue-border);border-radius:8px;' +
+      'color:var(--blue);font-weight:700;font-size:12px;' +
+      'font-family:"Syne",sans-serif;cursor:pointer;';
+    goBtn.onclick = async () => {
+      goBtn.disabled = true;
+      goBtn.textContent = 'Setting up…';
+      // a) PWA install prompt — fires inside the user-gesture click
+      if (deferredInstallPrompt) await triggerInstall();
+      // b) Push permission + subscribe — also inside the same user gesture
+      await enablePushNotifications();
+      // c) Done
+      dismiss();
+      toast('You\'re all set — people can reach you anytime.');
+    };
+    btnRow.appendChild(goBtn);
+  }
+
+  banner.appendChild(btnRow);
   document.body.appendChild(banner);
 }
 
@@ -4811,6 +5011,7 @@ function endCall() {
   syncDialDisplay();
   show('dialer');
   _maybeShowBackupNudge();
+  maybePostCallNudge();
 }
 
 // ── WebRTC ─────────────────────────────────────────────────
@@ -4840,6 +5041,7 @@ async function initWebRTC(isCaller) {
       const rv = document.getElementById('remote-video');
       rv.srcObject = new MediaStream([e.track]);
       rv.play().catch(err => console.warn('[WRTC] remote-video play blocked:', err.message));
+      console.log('[WRTC] remote video attached');
       updateVideoLayout(true);
       return;
     }
@@ -4883,7 +5085,9 @@ async function initWebRTC(isCaller) {
   pc.oniceconnectionstatechange = () => {
     console.log('[WRTC] iceConnectionState (initWebRTC):', pc?.iceConnectionState);
     if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
-      _iceWasConnected = true;
+      _markIceConnected();
+      const peerNum = (callWith && !callWith.startsWith('link:')) ? callWith : null;
+      if (peerNum) saveContact({ ocp: null, name: _callPeerName || peerNum, number: peerNum });
     }
     if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
       toast('Connection lost');
@@ -5030,7 +5234,7 @@ async function toggleSpeaker() {
   toast(isSpeaker ? 'Speaker on' : 'Earpiece');
 }
 
-async function toggleVideo() {
+async function toggleVideo(_mirrored = false) {
   // Video is only meaningful on direct/link WebRTC path (not phone relay).
   if (!pc || pc.signalingState === 'closed') {
     toast('Video not available'); return;
@@ -5060,6 +5264,9 @@ async function toggleVideo() {
     }
     updateVideoLayout(true);
     await sendReOffer();
+  }
+  if (!_mirrored) {
+    wsSend({ type: 'video_toggle', state: isVideo ? 'on' : 'off', callId, to: callWith });
   }
   const btn = document.getElementById('btn-video');
   btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
@@ -5197,6 +5404,7 @@ function showScreen(name) {
   if (name === 'dialer') {
     const inp = document.getElementById('inp-dial');
     if (inp && !inp.value) { inp.value = '+'; syncDialDisplay(); }
+    renderContacts();
   }
 }
 

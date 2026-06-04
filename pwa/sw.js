@@ -37,6 +37,7 @@ self.addEventListener('fetch', event => {
 self.addEventListener('push', e => {
   let data = {};
   try { data = e.data.json(); } catch {}
+  console.log('[SW] push received', data.type, 'callId:', data.callId);
 
   // Title is fixed per spec; body surfaces the caller's handle/name/number.
   const title = '📞 Incoming OCP call';
@@ -67,6 +68,7 @@ self.addEventListener('notificationclick', e => {
 
   const callId = e.notification.data?.callId;
   const action = e.action;
+  console.log('[SW] notification clicked -> opening callId', callId, 'action:', action);
   // Target URL: open/focus the app pre-loaded with the call to answer.
   const targetUrl = callId ? '/index.html?answer=' + callId : '/';
 
