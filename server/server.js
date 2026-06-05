@@ -1005,7 +1005,7 @@ async function handle(ws, msg) {
   // (ai_note_line) between both parties on a call, by callId.
   // TODO: swap window.SpeechRecognition on the client for Whisper/Deepgram
   // for better accuracy and non-Chrome browser support.
-  if (msg.type === 'ai_notes' || msg.type === 'ai_note_line') {
+  if (msg.type === 'ai_notes' || msg.type === 'ai_note_line' || msg.type === 'screen_share') {
     const call = msg.callId ? pendingCalls.get(msg.callId) : null;
     if (call) {
       const role   = getCallRole(ws, call);

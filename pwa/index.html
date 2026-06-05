@@ -310,6 +310,24 @@ body::after {
   border-color: rgba(245,166,35,0.4);
   color: var(--amber);
 }
+.cbtn-screen {
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.cbtn-screen.active {
+  background: rgba(99,180,255,0.15);
+  border-color: rgba(99,180,255,0.4);
+  color: var(--blue);
+}
+#screen-share-badge {
+  display: none; position: absolute; top: 14px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.65); color: #fff;
+  font-size: 11px; letter-spacing: 0.4px;
+  padding: 4px 12px; border-radius: 12px;
+  pointer-events: none; z-index: 102; white-space: nowrap;
+}
+#remote-video.screen-share { object-fit: contain; }
 /* ── AI Notes banner + transcript panel ── */
 .ai-notes-banner {
   display: none;
@@ -1015,6 +1033,7 @@ input::placeholder { color: var(--text-muted); }
         <div class="cbtn cbtn-end" id="btn-hangup" title="End call" onclick="doHangup()">&#9742;</div>
         <div class="cbtn cbtn-spk" id="btn-speaker" title="Speaker" onclick="toggleSpeaker()">&#128266;</div>
         <div class="cbtn cbtn-ainotes" id="btn-ai-notes" title="AI Notes" onclick="toggleAiNotes()">&#128221;</div>
+        <div class="cbtn cbtn-screen" id="btn-screen" title="Share screen" onclick="toggleScreenShare()">&#128253;</div>
       </div>
     </div>
 
@@ -1183,6 +1202,7 @@ input::placeholder { color: var(--text-muted); }
 <div id="video-container">
   <video id="remote-video" autoplay playsinline></video>
   <video id="local-video"  autoplay muted playsinline></video>
+  <div id="screen-share-badge">&#128253; Screen share</div>
 </div>
 
 <div id="toast"></div>
@@ -2560,8 +2580,10 @@ let callMode      = null;       // "direct" | "relay"
 let pendingCall   = null;
 let isMuted       = false;
 let isSpeaker     = false;
-let isVideo       = false;
-let videoStream   = null;
+let isVideo          = false;
+let videoStream      = null;
+let isScreenSharing  = false;
+let screenStream     = null;
 let timerInterval = null;
 let timerSecs     = 0;
 let audioCtx      = null;
@@ -3710,6 +3732,19 @@ async function onMessage(msg) {
     case 'ai_note_line': {
       aiTranscript.push({ speaker: msg.speaker, text: msg.text, ts: msg.ts });
       _appendAiLine(msg.speaker, msg.text, msg.ts);
+      break;
+    }
+
+    case 'screen_share': {
+      const badge = document.getElementById('screen-share-badge');
+      const rv    = document.getElementById('remote-video');
+      if (msg.active) {
+        if (badge) badge.style.display = 'block';
+        if (rv)    rv.classList.add('screen-share');
+      } else {
+        if (badge) badge.style.display = 'none';
+        if (rv)    rv.classList.remove('screen-share');
+      }
       break;
     }
 
@@ -5124,10 +5159,17 @@ function endCall() {
   document.getElementById('country-selector')?.remove();
   window._selectedCountry = null;
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
-  isVideo = false;
+  if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
+  isVideo = false; isScreenSharing = false;
   updateVideoLayout(false);
-  const vidBtn = document.getElementById('btn-video');
-  if (vidBtn) { vidBtn.innerHTML = '&#127909;'; vidBtn.classList.remove('active'); }
+  const vidBtn    = document.getElementById('btn-video');
+  const screenBtn = document.getElementById('btn-screen');
+  if (vidBtn)    { vidBtn.innerHTML    = '&#127909;'; vidBtn.classList.remove('active'); }
+  if (screenBtn) { screenBtn.innerHTML = '&#128253;'; screenBtn.classList.remove('active'); }
+  const badge = document.getElementById('screen-share-badge');
+  const rv    = document.getElementById('remote-video');
+  if (badge) badge.style.display = 'none';
+  if (rv)    rv.classList.remove('screen-share');
   if (pc) { pc.close(); pc = null; }
   if (peerConnection) { peerConnection.close(); peerConnection = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
@@ -5422,6 +5464,81 @@ function updateVideoLayout(on) {
 
 function toggleKeypad() {
   document.getElementById('ctrl-kp')?.classList.toggle('active');
+}
+
+// ── Screen share ────────────────────────────────────────────
+async function toggleScreenShare() {
+  if (!pc || pc.signalingState === 'closed') {
+    toast('Screen sharing requires an active call'); return;
+  }
+
+  const btn = document.getElementById('btn-screen');
+
+  if (isScreenSharing) {
+    // ── Stop ──────────────────────────────────────────────
+    isScreenSharing = false;
+    if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
+
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) {
+      if (isVideo && videoStream) {
+        // Camera was on — restore it (replaceTrack, no renegotiation)
+        await sender.replaceTrack(videoStream.getVideoTracks()[0]);
+        document.getElementById('local-video').srcObject = videoStream;
+      } else {
+        // Camera was off — null the slot, collapse video layout locally
+        await sender.replaceTrack(null);
+        document.getElementById('local-video').srcObject = null;
+        updateVideoLayout(false);
+      }
+    }
+    _signalScreenShare(false);
+    if (btn) { btn.innerHTML = '&#128253;'; btn.classList.remove('active'); }
+    toast('Screen sharing stopped');
+
+  } else {
+    // ── Start ─────────────────────────────────────────────
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    } catch { toast('Screen share cancelled'); return; }
+
+    isScreenSharing = true;
+    screenStream    = stream;
+    const screenTrack = stream.getVideoTracks()[0];
+
+    // Browser's native "Stop sharing" bar fires 'ended' on the track
+    screenTrack.addEventListener('ended', () => { if (isScreenSharing) toggleScreenShare(); });
+
+    document.getElementById('local-video').srcObject = stream;
+    updateVideoLayout(true);
+
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) {
+      // Video slot already exists — swap track in-place, no renegotiation needed
+      await sender.replaceTrack(screenTrack);
+    } else {
+      // No video track yet — add it and renegotiate (same path as toggleVideo)
+      pc.addTrack(screenTrack, stream);
+      // Glare guard: don't send a new offer if we already have a pending one
+      if (pc.signalingState === 'stable') await sendReOffer();
+    }
+    _signalScreenShare(true);
+    if (btn) { btn.innerHTML = '&#9209;'; btn.classList.add('active'); }
+    toast('Sharing screen');
+  }
+}
+
+function _signalScreenShare(active) {
+  if (!callWith && !callId) return;
+  const msg = { type: 'screen_share', active };
+  if (callMode === 'link') {
+    msg.callId = callId;
+  } else {
+    msg.to     = callWith;
+    msg.callId = callId;
+  }
+  wsSend(msg);
 }
 
 // ── WS helper ──────────────────────────────────────────────
