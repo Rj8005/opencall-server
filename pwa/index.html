@@ -1051,6 +1051,9 @@ input::placeholder { color: var(--text-muted); }
       <div class="chat-num">Messages</div>
       <div class="chat-country">OCP &middot; plaintext for now</div>
     </div>
+    <button id="ocpNewChat" title="New chat"
+      style="background:none;border:none;color:var(--green);font-size:24px;
+             line-height:1;cursor:pointer;padding:0 4px;flex-shrink:0">+</button>
   </div>
   <ul id="ocpThreadList" class="ocp-thread-list"></ul>
 </section>
@@ -3543,7 +3546,7 @@ async function onMessage(msg) {
     // ── OCP-to-OCP chat ───────────────────────────────────────
     case 'chat_msg': {
       const peerOcp = msg.from;
-      const inMsgId = 'ocp_' + Date.now();
+      const inMsgId = msg.msgId || ('ocp_in_' + Date.now());
       const t = findOrCreateOcpThread(peerOcp, msg.fromName || peerOcp?.slice(0, 20));
       t.messages.push({ dir: 'in', text: msg.text, msgId: inMsgId, ts: msg.ts || Date.now(), status: 'received' });
       saveOcpThreads();
@@ -5702,6 +5705,16 @@ document.getElementById('ocpInboxBack').onclick = function() {
   document.getElementById('ocpInbox').classList.remove('open');
 };
 
+document.getElementById('ocpNewChat').addEventListener('click', () => {
+  const addr = (prompt('Paste peer OCP address (ocp:…)') || '').trim();
+  if (!addr.startsWith('ocp:') || addr.length < 10) {
+    if (addr) toast('Enter a valid ocp:… address');
+    return;
+  }
+  document.getElementById('ocpInbox').classList.remove('open');
+  openOcpChat(addr, addr.slice(4, 16) + '…');
+});
+
 // ── Per-thread chat view ───────────────────────────────────────
 function openOcpChat(peerOcp, peerName) {
   activeOcpThread = {
@@ -5765,12 +5778,11 @@ function updateOcpStatus(msgId, status) {
     tick.className   = 'tick st-' + status;
     tick.textContent = txt;
   }
-  // Persist into the store
-  if (!activeOcpThread) return;
-  const t = ocpThreadsStore.find(t => t.peerOcp === activeOcpThread.peerOcp);
-  if (!t) return;
-  const m = t.messages.find(m => m.msgId === msgId);
-  if (m) { m.status = status; saveOcpThreads(); }
+  // Persist into whichever thread owns this msgId (chat may be closed)
+  for (const t of ocpThreadsStore) {
+    const m = t.messages.find(m => m.msgId === msgId);
+    if (m) { m.status = status; saveOcpThreads(); break; }
+  }
 }
 
 // ── Send ──────────────────────────────────────────────────────
