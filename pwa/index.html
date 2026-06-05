@@ -4,12 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#060a10">
-<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="OpenCall">
 <title>OpenCall</title>
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -504,17 +503,6 @@ input::placeholder { color: var(--text-muted); }
 #screen-register { display: block; }
 #screen-dialer   { display: none; }
 
-/* ── OCP E2E Chat overlay (same layout as SMS chat) ── */
-#ocpChat {
-  display: none;
-  position: fixed; inset: 0;
-  background: var(--bg-deep);
-  z-index: 201;
-  flex-direction: column;
-  overflow: hidden;
-}
-#ocpChat.open { display: flex; }
-
 /* ── SMS Chat overlay ── */
 #smsChat {
   display: none;
@@ -616,16 +604,42 @@ input::placeholder { color: var(--text-muted); }
 }
 .send:hover    { background: rgba(29,158,117,0.25); }
 .send:disabled { opacity: 0.4; cursor: default; }
-#ocpMic.recording {
-  background: rgba(255,70,70,.18) !important;
-  border-color: rgba(255,100,100,.5) !important;
-  color: #ff6464 !important;
-  animation: micPulse .7s ease-in-out infinite;
+
+/* ── OCP Inbox + OCP Chat overlays ── */
+#ocpInbox, #ocpChat {
+  display: none;
+  position: fixed; inset: 0;
+  background: var(--bg-deep);
+  z-index: 200;
+  flex-direction: column;
+  overflow: hidden;
 }
-@keyframes micPulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(1.08)} }
-.voice-bubble { display:flex;align-items:center;gap:8px;min-width:140px; }
-.voice-bubble audio { flex:1;height:32px;min-width:0; }
-.voice-dur { font-size:10px;color:var(--text-muted);font-family:'DM Mono',monospace;flex-shrink:0; }
+#ocpInbox.open, #ocpChat.open { display: flex; }
+.ocp-thread-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+.ocp-thread-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.ocp-thread-item:active { background: rgba(255,255,255,.04); }
+.ocp-thread-avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--blue-dim);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 700; color: var(--blue);
+  flex-shrink: 0;
+}
+.ocp-thread-body { flex: 1; min-width: 0; }
+.ocp-thread-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.ocp-thread-preview {
+  font-size: 11px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;
+}
+.ocp-empty {
+  padding: 48px 24px; text-align: center;
+  color: var(--text-muted); font-size: 13px; line-height: 1.6;
+}
 </style>
 </head>
 <body>
@@ -768,47 +782,6 @@ input::placeholder { color: var(--text-muted); }
         <span id="ocp-addr-dialer">ocp:loading...</span>
         <span class="copy-btn" onclick="copyOCPAddress()">copy</span>
       </div>
-      <!-- OCP code + handle row -->
-      <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
-        <span id="ocp-code-display"
-              style="font-family:'DM Mono',monospace;font-size:13px;
-                     color:var(--blue);letter-spacing:.5px">—</span>
-        <span id="ocp-handle-display"
-              style="font-family:'DM Mono',monospace;font-size:11px;
-                     color:var(--text-secondary)"></span>
-        <span onclick="showMyOcpCard()"
-              style="margin-left:auto;font-size:10px;color:rgba(99,180,255,.55);
-                     cursor:pointer;font-family:'DM Mono',monospace;
-                     text-decoration:underline;text-underline-offset:2px">share ↗</span>
-      </div>
-      <!-- Handle claim form — hidden once a handle is set -->
-      <div id="handle-claim-row"
-           style="display:flex;gap:6px;align-items:center;margin-top:8px;">
-        <input id="inp-handle" placeholder="@handle  (a-z 0-9 _ , 3-20)" maxlength="20"
-               style="flex:1;padding:6px 10px;background:var(--bg-field);
-                      border:1px solid var(--border);border-radius:var(--radius-sm);
-                      color:#c8dff5;font-family:'DM Mono',monospace;font-size:11px;
-                      outline:none;">
-        <button onclick="claimHandle()"
-                style="padding:6px 12px;background:var(--blue-dim);
-                       border:1px solid var(--blue-border);border-radius:var(--radius-sm);
-                       color:var(--blue);font-size:11px;font-family:'Syne',sans-serif;
-                       font-weight:700;cursor:pointer;white-space:nowrap;">Claim</button>
-      </div>
-    </div>
-
-    <!-- Add-by-handle row -->
-    <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-      <input id="inp-add-contact" placeholder="@handle or OCP-XXXX-XXXX to add" maxlength="30"
-             style="flex:1;padding:7px 10px;background:var(--bg-card);
-                    border:1px solid var(--border);border-radius:var(--radius-sm);
-                    color:#c8dff5;font-family:'DM Mono',monospace;font-size:11px;
-                    outline:none;">
-      <button onclick="addByHandle()"
-              style="padding:7px 12px;background:var(--blue-dim);
-                     border:1px solid var(--blue-border);border-radius:var(--radius-sm);
-                     color:var(--blue);font-size:11px;font-family:'Syne',sans-serif;
-                     font-weight:700;cursor:pointer;white-space:nowrap;">Add</button>
     </div>
 
     <div class="dial-display">
@@ -835,12 +808,6 @@ input::placeholder { color: var(--text-muted); }
       <div class="btn-aux" id="btn-backspace" title="Backspace">&#9003;</div>
       <div class="btn-call" id="btn-call" title="Call">&#9742;</div>
       <div class="btn-aux" id="btn-sms-invite" title="Send SMS invite">&#9993;</div>
-    </div>
-
-    <!-- Recent contacts list — auto-saved when a call reaches ICE connected -->
-    <div id="contacts-list" style="display:none;margin-top:4px;
-         background:var(--bg-card);border:1px solid var(--border);
-         border-radius:var(--radius-md);overflow:hidden">
     </div>
 
     <!-- Push opt-in nudge — shown after first registration if permission not yet granted.
@@ -1076,6 +1043,39 @@ input::placeholder { color: var(--text-muted); }
   </div>
 </div>
 
+<!-- ══════════════ OCP INBOX (thread list) ══════════════ -->
+<section id="ocpInbox">
+  <div class="chat-head">
+    <button class="chat-back" id="ocpInboxBack" title="Back">&#8592;</button>
+    <div class="chat-peer">
+      <div class="chat-num">Messages</div>
+      <div class="chat-country">OCP &middot; plaintext for now</div>
+    </div>
+  </div>
+  <ul id="ocpThreadList" class="ocp-thread-list"></ul>
+</section>
+
+<!-- ══════════════ OCP CHAT (per-thread view) ══════════════ -->
+<section id="ocpChat">
+  <div class="ring-3" aria-hidden="true"></div>
+  <div class="ring-4" aria-hidden="true"></div>
+  <div class="chat-head">
+    <button class="chat-back" id="ocpChatBack" title="Back">&#8592;</button>
+    <div class="chat-peer">
+      <div id="ocpHName" class="chat-num"></div>
+      <div id="ocpHSub" class="chat-country"></div>
+    </div>
+    <div style="font-size:9px;color:var(--text-muted);letter-spacing:0.5px;text-transform:uppercase;flex-shrink:0">OCP</div>
+  </div>
+  <ul id="ocpMsgs" class="msgs">
+    <li class="sysmsg">Today</li>
+  </ul>
+  <div class="composer">
+    <textarea id="ocpInput" class="field" placeholder="Message…" rows="1"></textarea>
+    <button id="ocpSend" class="send" title="Send">&#8593;</button>
+  </div>
+</section>
+
 <!-- ══════════════ SMS CHAT OVERLAY ══════════════ -->
 <section id="smsChat">
   <div class="ring-3" aria-hidden="true"></div>
@@ -1100,28 +1100,6 @@ input::placeholder { color: var(--text-muted); }
   <div class="composer">
     <textarea id="smsInput" class="field" placeholder="Message…" rows="1" maxlength="1530"></textarea>
     <button id="smsSend" class="send" title="Send">&#8593;</button>
-  </div>
-</section>
-
-<section id="ocpChat">
-  <div class="ring-3" aria-hidden="true"></div>
-  <div class="ring-4" aria-hidden="true"></div>
-  <div class="chat-head">
-    <button class="chat-back" id="ocpChatBack" title="Back">&#8592;</button>
-    <div class="chat-peer">
-      <div id="ocpChatName" class="chat-num"></div>
-      <div class="chat-country" style="color:rgba(99,180,255,.4);">E2E encrypted</div>
-    </div>
-    <div style="font-size:9px;color:rgba(99,180,255,.3);letter-spacing:.5px;text-transform:uppercase;flex-shrink:0">OCP Chat</div>
-  </div>
-  <ul id="ocpMsgs" class="msgs">
-    <li class="sysmsg">End-to-end encrypted · messages stored locally</li>
-  </ul>
-  <div class="composer">
-    <textarea id="ocpInput" class="field" placeholder="Message…" rows="1" maxlength="2000"></textarea>
-    <button id="ocpMic"  class="send" title="Hold to record voice note"
-            style="background:var(--bg-card);border-color:var(--border);">&#127908;</button>
-    <button id="ocpSend" class="send" title="Send">&#8593;</button>
   </div>
 </section>
 
@@ -1159,36 +1137,6 @@ input::placeholder { color: var(--text-muted); }
     window._pendingAnswerCallId = _ap;
     history.replaceState(null, '', location.pathname);
     console.log('[Push] Wake-to-call for callId:', _ap);
-  }
-  // ?chat=<ocp> — opened from a chat push notification tap
-  {
-    const _chatOcp = new URLSearchParams(location.search).get('chat');
-    if (_chatOcp) {
-      window._pendingOpenChat = decodeURIComponent(_chatOcp);
-      history.replaceState(null, '', '/');
-      console.log('[OCP] Open-chat from push:', window._pendingOpenChat);
-    }
-  }
-  // /u/<handle-or-ocp> path — legacy direct rewrite (kept for backward compat)
-  if (location.pathname.startsWith('/u/')) {
-    const _addTarget = decodeURIComponent(location.pathname.slice(3));
-    if (_addTarget) {
-      window._pendingAddHandle = _addTarget;
-      history.replaceState(null, '', '/');
-      console.log('[OCP] Add-by-URL (path) for:', _addTarget);
-    }
-  }
-  // ?add=<id>&ocp=<ocp>[&call=1] — deep-link from connect.html after QR scan/tap
-  {
-    const _sp   = new URLSearchParams(location.search);
-    const _addId  = _sp.get('add');
-    const _addOcp = _sp.get('ocp');
-    const _callNow = _sp.get('call') === '1';
-    if (_addId || _addOcp) {
-      window._pendingDeepLink = { id: _addId, ocp: _addOcp, call: _callNow };
-      history.replaceState(null, '', '/');
-      console.log('[OCP] Deep-link: add', _addId, 'ocp', _addOcp, 'call', _callNow);
-    }
   }
 })();
 
@@ -1782,17 +1730,6 @@ async function backupIdentity() {
   secB.appendChild(ksErr);
   secB.appendChild(dlBtn);
 
-  // Thread history opt-in checkbox
-  const threadRow = document.createElement('label');
-  threadRow.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;' +
-    'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin-bottom:12px;';
-  const threadCb = document.createElement('input');
-  threadCb.type = 'checkbox';
-  threadCb.style.cssText = 'width:15px;height:15px;accent-color:var(--blue,#63b4ff);cursor:pointer;';
-  threadRow.appendChild(threadCb);
-  threadRow.appendChild(document.createTextNode('Include conversation history (calls + messages)'));
-  secB.insertBefore(threadRow, dlBtn);
-
   dlBtn.onclick = async () => {
     ksErr.textContent = '';
     const pass = pw1.value;
@@ -1808,20 +1745,10 @@ async function backupIdentity() {
         { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
         km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
       const iv   = crypto.getRandomValues(new Uint8Array(12));
-      // Build payload: always include identity; optionally include threads
-      const payload = { identity };
-      if (threadCb.checked) {
-        const threads = {};
-        for (const [ocp, t] of ocpThreads)
-          threads[ocp] = { peerOcp: ocp, peerName: t.peerName || null,
-                           messages: t.messages.slice(-500) };
-        payload.threads = threads;
-      }
       const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv },
-        key, new TextEncoder().encode(JSON.stringify(payload)));
+        key, new TextEncoder().encode(JSON.stringify(identity)));
       const b64  = arr => btoa(String.fromCharCode(...new Uint8Array(arr)));
-      const pkg  = { version: 3, salt: b64(salt), iv: b64(iv), data: b64(ct),
-                     hasThreads: threadCb.checked };
+      const pkg  = { version: 2, salt: b64(salt), iv: b64(iv), data: b64(ct) };
       const blob = new Blob([JSON.stringify(pkg)], { type: 'application/json' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
@@ -1867,44 +1794,41 @@ async function importIdentity() {
 
     try {
       const salt  = Uint8Array.from(atob(backup.salt),  c => c.charCodeAt(0));
-      // 'nonce' (v1) and 'iv' (v2/v3) are the same field, different names
-      const ivB64 = backup.iv || backup.nonce;
-      const nonce = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+      const nonce = Uint8Array.from(atob(backup.nonce), c => c.charCodeAt(0));
       const data  = Uint8Array.from(atob(backup.data),  c => c.charCodeAt(0));
 
       const keyMaterial = await crypto.subtle.importKey(
-        'raw', new TextEncoder().encode(passphrase),
-        { name: 'PBKDF2' }, false, ['deriveKey']
+        'raw',
+        new TextEncoder().encode(passphrase),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveKey']
       );
-      const iterations = backup.version >= 2 ? 250000 : 100000;
       const encryptionKey = await crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
-        keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+        {
+          name: 'PBKDF2',
+          salt,
+          iterations: 100000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt']
       );
       const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: nonce }, encryptionKey, data
+        { name: 'AES-GCM', iv: nonce },
+        encryptionKey,
+        data
       );
-      const parsed = JSON.parse(new TextDecoder().decode(decrypted));
-      // v3 payload: { identity, threads? }; v1/v2: the identity object directly
-      const identity = parsed.identity || parsed;
+      const identity = JSON.parse(new TextDecoder().decode(decrypted));
       await saveIdentity(identity);
       myIdentity = identity;
       const _r = document.getElementById('ocp-address-display');
       const _d = document.getElementById('ocp-addr-dialer');
       if (_r) _r.textContent = identity.ocp_address;
       if (_d) _d.textContent = identity.ocp_address;
-      // Restore conversation history if present
-      if (parsed.threads) {
-        ocpThreads.clear();
-        for (const [ocp, thread] of Object.entries(parsed.threads)) {
-          ocpThreads.set(ocp, { peerOcp: ocp, peerName: thread.peerName || null,
-                                messages: thread.messages || [] });
-        }
-        saveOcpThreads();
-        toast('Identity + conversation history imported');
-      } else {
-        toast('Identity imported successfully');
-      }
+      toast('Identity imported successfully');
     } catch(e) {
       toast('Wrong passphrase or corrupted file');
     }
@@ -1923,113 +1847,6 @@ async function signMessage(identity, messageObj) {
   const messageBytes = new TextEncoder().encode(JSON.stringify(messageObj));
   const signature = await crypto.subtle.sign('Ed25519', privateKey, messageBytes);
   return btoa(String.fromCharCode(...new Uint8Array(signature)));
-}
-
-// Sign a raw string (not JSON-encoded) with the identity's Ed25519 key.
-// Used for handle claims: sign "claim:<handle>:<ocp>".
-async function signRaw(identity, text) {
-  const key = await crypto.subtle.importKey(
-    'jwk', identity.privateKeyJwk, { name: 'Ed25519' }, false, ['sign']
-  );
-  const sig = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(text));
-  return btoa(String.fromCharCode(...new Uint8Array(sig)));
-}
-
-// ── Handle / OCP-code UI helpers ───────────────────────────
-function _updateHandleDisplay() {
-  const codeEl   = document.getElementById('ocp-code-display');
-  const handleEl = document.getElementById('ocp-handle-display');
-  const claimRow = document.getElementById('handle-claim-row');
-  if (codeEl)   codeEl.textContent   = myNumericId || '—';
-  if (handleEl) handleEl.textContent = myHandle ? '@' + myHandle : '';
-  if (claimRow) claimRow.style.display = myHandle ? 'none' : 'flex';
-}
-
-async function claimHandle() {
-  const raw = (document.getElementById('inp-handle')?.value || '').trim().toLowerCase();
-  if (!raw) return;
-  if (!/^[a-z0-9_]{3,20}$/.test(raw)) {
-    return toast('Handle must be 3-20 chars: a-z, 0-9, underscore only');
-  }
-  if (!myIdentity) return toast('Identity not ready');
-  const ocp = myIdentity.ocp_address;
-  const sig = await signRaw(myIdentity, `claim:${raw}:${ocp}`);
-  await wsSend({
-    type:       'claim_handle',
-    ocp,
-    handle:     raw,
-    sig,
-    public_key: JSON.stringify(myIdentity.publicKeyJwk)
-  });
-}
-
-function showMyOcpCard() {
-  const identifier = myHandle || myNumericId || myIdentity?.ocp_address;
-  if (!identifier) return;
-  const shareLink  = location.origin + '/u/' + encodeURIComponent(myHandle || myNumericId || myIdentity?.ocp_address);
-
-  let box = document.getElementById('ocp-id-card-modal');
-  if (!box) {
-    box = document.createElement('div');
-    box.id = 'ocp-id-card-modal';
-    box.style.cssText = 'position:fixed;inset:0;z-index:10001;display:flex;flex-direction:column;' +
-      'align-items:center;justify-content:center;gap:14px;background:rgba(5,8,15,.95);';
-    document.body.appendChild(box);
-  }
-  box.innerHTML = '';
-
-  const title = document.createElement('div');
-  title.textContent = 'Your OCP ID';
-  title.style.cssText = 'color:var(--blue);font-family:"Syne",sans-serif;font-size:14px;font-weight:700;letter-spacing:.8px;';
-  box.appendChild(title);
-
-  if (myHandle) {
-    const hEl = document.createElement('div');
-    hEl.textContent = '@' + myHandle;
-    hEl.style.cssText = 'color:#c8dff5;font-family:"DM Mono",monospace;font-size:20px;font-weight:600;';
-    box.appendChild(hEl);
-  }
-
-  if (myNumericId) {
-    const nEl = document.createElement('div');
-    nEl.textContent = myNumericId;
-    nEl.style.cssText = 'color:var(--blue);font-family:"DM Mono",monospace;font-size:16px;letter-spacing:2px;';
-    box.appendChild(nEl);
-  }
-
-  const qrImg = document.createElement('img');
-  qrImg.src = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(shareLink);
-  qrImg.alt = 'Scan to add';
-  qrImg.style.cssText = 'width:220px;height:220px;border-radius:12px;background:#fff;padding:8px;';
-  box.appendChild(qrImg);
-
-  const caption = document.createElement('div');
-  caption.textContent = 'Scan to add me on OpenCall';
-  caption.style.cssText = 'color:var(--text-secondary);font-family:"DM Mono",monospace;font-size:11px;';
-  box.appendChild(caption);
-
-  const copyBtn = document.createElement('button');
-  copyBtn.textContent = 'Copy link';
-  copyBtn.style.cssText = 'padding:10px 24px;border:1px solid var(--blue-border);border-radius:24px;' +
-    'background:var(--blue-dim);color:var(--blue);font-weight:700;cursor:pointer;';
-  copyBtn.onclick = () => { navigator.clipboard?.writeText(shareLink); toast('Link copied!'); };
-  box.appendChild(copyBtn);
-
-  const close = document.createElement('button');
-  close.textContent = 'Close';
-  close.style.cssText = 'padding:10px 24px;border:0;border-radius:24px;background:transparent;' +
-    'color:#667;cursor:pointer;font-size:13px;';
-  close.onclick = () => box.remove();
-  box.appendChild(close);
-}
-
-async function addByHandle() {
-  const val = (document.getElementById('inp-add-contact')?.value || '').trim();
-  if (!val) return;
-  if (!ws || ws.readyState !== 1) return toast('Not connected');
-  _pendingHandleCall = { handle: val, action: 'add' };
-  const stripped = val.startsWith('@') ? val.slice(1) : val;
-  await wsSend({ type: 'resolve_handle', handle: stripped });
 }
 
 async function encryptMessage(identity, recipientPublicKeyB64, bodyObj) {
@@ -2276,357 +2093,6 @@ function clearRatchetSession(withNumber) {
   console.log('[OCP] Ratchet session cleared for', withNumber);
 }
 
-// ── OCP E2E Chat ───────────────────────────────────────────────────────────
-// Key insight: the call ratchet uses RANDOM keys per side (no key exchange).
-// Chat derives a DETERMINISTIC shared key from the sorted OCP address pair
-// so both parties independently arrive at the same AES-GCM key.
-// Stored under the 'chat:<ocp>' namespace to never collide with call sessions.
-
-let activeOcpChat  = null;                // { peerOcp, peerName }
-// Unified per-contact conversation store. Key = peerOcp.
-// Each thread: { peerOcp, peerName, messages:[ {dir, text, msgId, ts, status, kind} ] }
-// kind: 'chat' | 'call' | 'note'  (call + note are system entries, not sent over wire)
-const ocpThreads = new Map();
-
-function loadOcpThreads() {
-  try {
-    // Prefer new key; fall back to old key for migration
-    const raw = localStorage.getItem('ocp_threads')
-              || localStorage.getItem('ocp_e2e_chats');
-    if (!raw) return;
-    for (const [ocp, thread] of Object.entries(JSON.parse(raw))) {
-      ocpThreads.set(ocp, { peerOcp: ocp, peerName: thread.peerName || null,
-                             messages: thread.messages || [] });
-    }
-    // One-time migration: remove old key
-    if (localStorage.getItem('ocp_e2e_chats') && !localStorage.getItem('ocp_threads')) {
-      saveOcpThreads();
-      localStorage.removeItem('ocp_e2e_chats');
-    }
-  } catch(e) {}
-}
-// Legacy alias so existing call-sites work unchanged
-const loadOcpChats = loadOcpThreads;
-
-function saveOcpThreads() {
-  try {
-    const obj = {};
-    for (const [ocp, t] of ocpThreads)
-      obj[ocp] = { peerOcp: ocp, peerName: t.peerName || null,
-                   messages: t.messages.slice(-500) };
-    localStorage.setItem('ocp_threads', JSON.stringify(obj));
-  } catch(e) {}
-}
-// Legacy alias
-const saveOcpChats = saveOcpThreads;
-
-// Derive a shared AES-GCM key from sorted(myOcp, peerOcp) via SHA-256.
-// Idempotent: initialises once per chat session, stored as 'chat:<peerOcp>'.
-async function initChatSession(peerOcp) {
-  if (!myIdentity || !peerOcp) return;
-  const key_id = 'chat:' + peerOcp;
-  if (ratchetSessions.has(key_id)) return;
-  const myOcp = myIdentity.ocp_address;
-  const [a, b] = [myOcp, peerOcp].sort();
-  const material = new TextEncoder().encode('ocp-chat-v1:' + a + ':' + b);
-  const digest   = await crypto.subtle.digest('SHA-256', material);
-  const key = await crypto.subtle.importKey(
-    'raw', digest, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
-  );
-  ratchetSessions.set(key_id, {
-    sendKey: key, recvKey: key, sendCount: 0, recvCount: 0, createdAt: Date.now()
-  });
-}
-
-function openOcpChat(peerOcp, peerName) {
-  if (!peerOcp) return;
-  activeOcpChat = { peerOcp, peerName: peerName || peerOcp };
-  // Ensure thread exists and peerName is kept fresh
-  if (!ocpThreads.has(peerOcp)) ocpThreads.set(peerOcp, { peerOcp, peerName: peerName || null, messages: [] });
-  else if (peerName) ocpThreads.get(peerOcp).peerName = peerName;
-  document.getElementById('ocpChatName').textContent = peerName || peerOcp;
-  const msgList = document.getElementById('ocpMsgs');
-  msgList.innerHTML = '<li class="sysmsg">End-to-end encrypted · stored locally</li>';
-  const thread = ocpThreads.get(peerOcp);
-  if (thread) thread.messages.forEach(m => addOcpBubble(m.dir, m.text, m.msgId, m.status, m.ts, m.kind));
-  document.getElementById('ocpChat').classList.add('open');
-  document.getElementById('ocpInput').focus();
-}
-
-// peerOcp / text are optional — when supplied the call comes from the
-// "leave a message" panel rather than the chat UI.
-// peerOcp / text are optional overrides — supplied by the leave-a-message panel.
-// When omitted, values are read from activeOcpChat and #ocpInput as usual.
-async function sendOcpMessage(peerOcp, text) {
-  const input = document.getElementById('ocpInput');
-  const targetOcp = peerOcp || activeOcpChat?.peerOcp;
-  const body      = text   || (input?.value || '').trim();
-  if (!targetOcp || !body) return;
-  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
-  const msgId = 'cm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-  const ts    = Date.now();
-  // Only append bubble to open chat panel if that peer's thread is active
-  if (activeOcpChat?.peerOcp === targetOcp) addOcpBubble('out', body, msgId, 'sending', ts);
-  if (!peerOcp && input) { input.value = ''; input.style.height = 'auto'; }
-  if (!ocpThreads.has(targetOcp)) ocpThreads.set(targetOcp, { messages: [] });
-  ocpThreads.get(targetOcp).messages.push({ dir: 'out', text: body, msgId, status: 'sending', ts });
-  saveOcpChats();
-  await initChatSession(targetOcp);
-  const ciphertext = await ratchetEncrypt('chat:' + targetOcp, { text: body, ts });
-  await wsSend({ type: 'chat_msg', to: targetOcp, from: myIdentity?.ocp_address, ciphertext, msgId, ts });
-}
-
-// extraData is used for voice notes: { blobUrl, durationMs }
-function addOcpBubble(dir, text, msgId, status, ts, kind, extraData) {
-  const msgList = document.getElementById('ocpMsgs');
-  if (!msgList) return;
-  const li = document.createElement('li');
-  li.dataset.msgId = msgId;
-  const d = ts ? new Date(ts) : new Date();
-  const timeStr = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
-
-  if (kind === 'voice') {
-    li.className = 'bubble ' + dir;
-    const blobUrl = extraData?.blobUrl || _voiceBlobUrls.get(msgId) || null;
-    const durMs   = extraData?.durationMs || 0;
-    const durStr  = durMs ? (Math.floor(durMs/60000) + ':' + String(Math.floor((durMs%60000)/1000)).padStart(2,'0')) : '';
-    const st = status || 'sent';
-    const tickText = st === 'delivered' ? '✓✓' : st === 'queued' ? '⏳'
-                   : (st === 'sending' || st === 'pending') ? '…' : st === 'failed' ? '✗' : '✓';
-    const tickHtml = dir === 'out' ? `<span class="tick st-${st}" id="otick_${msgId}">${tickText}</span>` : '';
-    if (blobUrl) {
-      // Audio available in this session
-      const audioEl = document.createElement('audio');
-      audioEl.preload = 'metadata';
-      audioEl.src     = blobUrl;
-      audioEl.controls = true;
-      audioEl.style.cssText = 'width:100%;max-width:200px;height:32px;vertical-align:middle;';
-      li.innerHTML = `<div class="voice-bubble"></div><div class="meta"><span class="ts">${timeStr}</span>${tickHtml}</div>`;
-      li.querySelector('.voice-bubble').appendChild(audioEl);
-      if (durStr) {
-        const durEl = document.createElement('span');
-        durEl.className = 'voice-dur'; durEl.textContent = durStr;
-        li.querySelector('.voice-bubble').appendChild(durEl);
-      }
-    } else {
-      // Restored from thread — audio not in memory; show placeholder
-      li.innerHTML = `<span style="color:var(--text-secondary)">🎤 Voice note${durStr ? ' · ' + durStr : ''}</span>` +
-        `<div class="meta"><span class="ts">${timeStr}</span>${tickHtml}</div>`;
-    }
-    msgList.appendChild(li);
-    msgList.scrollTop = msgList.scrollHeight;
-    return;
-  }
-
-  if (kind === 'call') {
-    // System entry: call ended
-    li.className = 'sysmsg';
-    li.textContent = text + '  ·  ' + timeStr;
-    msgList.appendChild(li);
-    msgList.scrollTop = msgList.scrollHeight;
-    return;
-  }
-
-  if (kind === 'note') {
-    // Collapsible AI transcript entry
-    li.className = 'sysmsg';
-    li.style.cssText = 'text-align:left;cursor:pointer;padding:8px 10px;' +
-      'background:rgba(245,166,35,.05);border:1px solid rgba(245,166,35,.15);' +
-      'border-radius:8px;margin:4px 0;';
-    const lines = text.split('\n');
-    const header = document.createElement('div');
-    header.style.cssText = 'font-size:10px;color:var(--amber,#f5a623);letter-spacing:.5px;' +
-      'text-transform:uppercase;margin-bottom:4px;';
-    header.textContent = '📝 AI Notes · ' + timeStr;
-    const body = document.createElement('div');
-    body.style.cssText = 'font-size:11px;color:var(--text-secondary);line-height:1.5;' +
-      'font-family:"DM Mono",monospace;display:none;margin-top:6px;white-space:pre-wrap;';
-    body.textContent = text;
-    li.appendChild(header);
-    li.appendChild(body);
-    li.onclick = () => { body.style.display = body.style.display === 'none' ? 'block' : 'none'; };
-    msgList.appendChild(li);
-    msgList.scrollTop = msgList.scrollHeight;
-    return;
-  }
-
-  // Regular chat bubble
-  li.className = 'bubble ' + dir;
-  const st = status || 'sent';
-  const tickText = st === 'delivered' ? '✓✓'
-                 : st === 'queued'    ? '⏳'
-                 : (st === 'sending' || st === 'pending') ? '…'
-                 : st === 'failed'   ? '✗' : '✓';
-  const tickHtml = dir === 'out'
-    ? `<span class="tick st-${st}" id="otick_${msgId}">${tickText}</span>`
-    : '';
-  li.innerHTML = escHtml(text) +
-    `<div class="meta"><span class="ts">${timeStr}</span>${tickHtml}</div>`;
-  msgList.appendChild(li);
-  msgList.scrollTop = msgList.scrollHeight;
-}
-
-function setOcpStatus(msgId, status) {
-  const tick = document.getElementById('otick_' + msgId);
-  if (tick) {
-    tick.className   = 'tick st-' + (status === 'failed' ? 'failed' : status);
-    tick.textContent = status === 'delivered' ? '✓✓'
-                     : status === 'queued'    ? '⏳'
-                     : (status === 'sending' || status === 'pending') ? '…'
-                     : status === 'failed'   ? '✗' : '✓';
-  }
-  if (!activeOcpChat) return;
-  const thread = ocpThreads.get(activeOcpChat.peerOcp);
-  if (!thread) return;
-  const m = thread.messages.find(m => m.msgId === msgId);
-  if (m) { m.status = status; saveOcpChats(); }
-}
-
-(function wireOcpChat() {
-  document.getElementById('ocpChatBack').onclick = () => {
-    document.getElementById('ocpChat').classList.remove('open');
-    activeOcpChat = null;
-    _cancelVoiceRecording();
-  };
-  const inp  = document.getElementById('ocpInput');
-  const send = document.getElementById('ocpSend');
-  inp.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendOcpMessage(); }
-  });
-  inp.addEventListener('input', () => {
-    inp.style.height = 'auto';
-    inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
-  });
-  send.addEventListener('click', sendOcpMessage);
-
-  const mic = document.getElementById('ocpMic');
-  // Hold-to-record on desktop; tap-to-start / tap-to-send on touch
-  let _touchRecording = false;
-  mic.addEventListener('pointerdown', e => {
-    if (e.pointerType === 'touch') {
-      e.preventDefault();
-      if (!_touchRecording) { _touchRecording = true; _startVoiceRecording(); }
-      else                  { _touchRecording = false; _stopVoiceRecording(); }
-    } else {
-      mic.setPointerCapture(e.pointerId);
-      _startVoiceRecording();
-    }
-  });
-  mic.addEventListener('pointerup', e => {
-    if (e.pointerType !== 'touch') _stopVoiceRecording();
-  });
-  mic.addEventListener('pointercancel', () => _cancelVoiceRecording());
-})();
-
-// ── Voice notes ────────────────────────────────────────────────────────────
-// In-memory blob URLs for the current session; not persisted (avoids filling
-// localStorage with binary data). Restored threads show a "🎤 Voice note"
-// placeholder if the audio isn't available in this session.
-const _voiceBlobUrls = new Map(); // msgId → blobURL
-
-let _voiceRecorder  = null;
-let _voiceChunks    = [];
-let _voiceStartMs   = 0;
-let _voiceAutoStop  = null;
-const VOICE_MAX_BYTES = 200_000;  // ~45-50 s of Opus; stays under the server cap
-const VOICE_MAX_MS    = 60_000;
-
-function _getBestMimeType() {
-  for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']) {
-    if (MediaRecorder.isTypeSupported(t)) return t;
-  }
-  return '';
-}
-
-async function _startVoiceRecording() {
-  if (_voiceRecorder) return;
-  if (!activeOcpChat) { toast('Open a chat first'); return; }
-  const mic = document.getElementById('ocpMic');
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = _getBestMimeType();
-    _voiceChunks  = [];
-    _voiceStartMs = Date.now();
-    _voiceRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-    _voiceRecorder.ondataavailable = e => { if (e.data.size) _voiceChunks.push(e.data); };
-    _voiceRecorder.onstop = () => {
-      stream.getTracks().forEach(t => t.stop());
-      const blob = new Blob(_voiceChunks, { type: _voiceRecorder.mimeType || 'audio/webm' });
-      _voiceChunks   = [];
-      _voiceRecorder = null;
-      if (blob.size > 4) _sendVoiceNote(blob, Date.now() - _voiceStartMs);
-    };
-    _voiceRecorder.start(200); // collect chunks every 200 ms
-    if (mic) mic.classList.add('recording');
-    _voiceAutoStop = setTimeout(_stopVoiceRecording, VOICE_MAX_MS);
-  } catch(e) {
-    toast('Microphone access denied');
-    _voiceRecorder = null;
-  }
-}
-
-function _stopVoiceRecording() {
-  clearTimeout(_voiceAutoStop);
-  _voiceAutoStop = null;
-  const mic = document.getElementById('ocpMic');
-  if (mic) mic.classList.remove('recording');
-  if (_voiceRecorder && _voiceRecorder.state !== 'inactive') {
-    _voiceRecorder.stop();
-  } else {
-    _voiceRecorder = null;
-  }
-}
-
-function _cancelVoiceRecording() {
-  clearTimeout(_voiceAutoStop);
-  _voiceAutoStop = null;
-  const mic = document.getElementById('ocpMic');
-  if (mic) mic.classList.remove('recording');
-  if (_voiceRecorder) {
-    _voiceRecorder.ondataavailable = null;
-    _voiceRecorder.onstop = null;
-    try { _voiceRecorder.stop(); } catch(e) {}
-    _voiceRecorder = null;
-  }
-  _voiceChunks = [];
-}
-
-async function _sendVoiceNote(blob, durationMs) {
-  if (!activeOcpChat) return;
-  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
-  const { peerOcp } = activeOcpChat;
-
-  if (blob.size > VOICE_MAX_BYTES) {
-    toast('Clip too long — try a shorter recording (max ~50 s)');
-    return;
-  }
-
-  // Convert blob → base64
-  const arrayBuf = await blob.arrayBuffer();
-  const audioB64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
-  const mimeType = blob.type || 'audio/webm';
-  const ts    = Date.now();
-  const msgId = 'vm_' + ts + '_' + Math.random().toString(36).slice(2, 6);
-
-  // Optimistic bubble using a local blob URL (in-memory only)
-  const blobUrl = URL.createObjectURL(blob);
-  _voiceBlobUrls.set(msgId, blobUrl);
-  addOcpBubble('out', '', msgId, 'sending', ts, 'voice', { blobUrl, durationMs });
-
-  // Persist marker (no audio data in localStorage)
-  if (!ocpThreads.has(peerOcp)) ocpThreads.set(peerOcp, { peerOcp, peerName: null, messages: [] });
-  ocpThreads.get(peerOcp).messages.push(
-    { dir: 'out', kind: 'voice', durationMs, msgId, ts, status: 'sending' }
-  );
-  saveOcpChats();
-
-  // Encrypt and send
-  await initChatSession(peerOcp);
-  const ciphertext = await ratchetEncrypt('chat:' + peerOcp, { audioB64, mimeType, durationMs, ts });
-  await wsSend({ type: 'chat_msg', to: peerOcp, from: myIdentity?.ocp_address,
-                 ciphertext, msgId, ts, kind: 'voice' });
-}
-
 // ── Missed Call Landing Page ──────────────────────────────
 
 function checkMissedCallRoute() {
@@ -2718,145 +2184,14 @@ async function answerMissedCall() {
 
 // ── Install hint + PWA prompt ──────────────────────────────
 let _deferredInstallPrompt = null;
-let deferredInstallPrompt  = null;   // public alias used by triggerInstall()
 
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   _deferredInstallPrompt = e;
-  deferredInstallPrompt  = e;
-  console.log('[PWA] install prompt captured');
   // Show install button inside the hint card if it's visible
   const btn = document.getElementById('btn-pwa-install');
   if (btn) btn.style.display = 'block';
 });
-
-window.addEventListener('appinstalled', () => {
-  console.log('[PWA] installed');
-  localStorage.setItem('ocp_installed', '1');
-  deferredInstallPrompt  = null;
-  _deferredInstallPrompt = null;
-});
-
-async function triggerInstall() {
-  if (!deferredInstallPrompt) return false;
-  deferredInstallPrompt.prompt();
-  const { outcome } = await deferredInstallPrompt.userChoice;
-  console.log('[PWA] install choice:', outcome);
-  deferredInstallPrompt  = null;
-  _deferredInstallPrompt = null;
-  return outcome === 'accepted';
-}
-
-// ── Contacts store ─────────────────────────────────────────
-function loadContacts() {
-  try { return JSON.parse(localStorage.getItem('ocp_contacts') || '[]'); }
-  catch { return []; }
-}
-function saveContacts(list) {
-  localStorage.setItem('ocp_contacts', JSON.stringify(list));
-}
-function saveContact({ ocp, name, number }) {
-  if (!ocp && !number) return;
-  const list = loadContacts();
-  const idx  = list.findIndex(c => (c.ocp && c.ocp === ocp) || (!ocp && c.number === number));
-  const entry = { ocp: ocp || null, name: name || number || ocp, number: number || null, lastCall: Date.now() };
-  if (idx >= 0) list[idx] = entry; else list.push(entry);
-  saveContacts(list);
-  console.log('[CONTACTS] saved peer', entry.name || entry.ocp);
-  renderContacts();
-}
-
-function renderContacts() {
-  const el = document.getElementById('contacts-list');
-  if (!el) return;
-  const list = loadContacts().sort((a, b) => b.lastCall - a.lastCall).slice(0, 8);
-  if (!list.length) { el.style.display = 'none'; return; }
-  el.style.display = 'block';
-  el.innerHTML = '<div style="font-size:10px;color:var(--text-muted);letter-spacing:.8px;' +
-    'text-transform:uppercase;margin-bottom:8px">Recent</div>' +
-    list.map(c => {
-      const label  = c.name || c.number || c.ocp || '?';
-      const sub    = (c.name && c.number && c.name !== c.number) ? c.number : '';
-      const target = c.number || c.ocp || '';
-      const safeLabel  = label.replace(/'/g,"\\'");
-      const safeTarget = target.replace(/'/g,"\\'");
-      const safeOcp    = (c.ocp || '').replace(/'/g,"\\'");
-      // OCP contacts: row tap → chat; non-OCP: row tap → call
-      const rowClick = c.ocp
-        ? `openOcpChat('${safeOcp}','${safeLabel}')`
-        : `callContact('${safeTarget}','${safeLabel}')`;
-      const rightIcon = c.ocp
-        // OCP contact: show both a chat indicator and a call button
-        ? `<div onclick="openOcpChat('${safeOcp}','${safeLabel}')"
-               title="Message" style="color:var(--blue);font-size:14px;opacity:.7;
-                                      cursor:pointer;padding:4px 3px;flex-shrink:0">&#128172;</div>
-           <div onclick="event.stopPropagation();callContact('${safeTarget}','${safeLabel}')"
-                title="Call" style="color:var(--blue);font-size:18px;opacity:.7;
-                                    cursor:pointer;flex-shrink:0">&#9742;</div>`
-        // Phone-only contact: just a call button
-        : `<div style="color:var(--blue);font-size:18px;opacity:.7;flex-shrink:0">&#9742;</div>`;
-      return `<div onclick="${rowClick}"
-        style="display:flex;align-items:center;gap:10px;padding:8px 10px;
-               border-radius:var(--radius-sm);border-bottom:1px solid var(--border);cursor:pointer">
-        <div style="width:32px;height:32px;border-radius:50%;background:var(--blue-dim);
-                    border:1px solid var(--blue-border);display:flex;align-items:center;
-                    justify-content:center;font-size:13px;color:var(--blue);flex-shrink:0">
-          ${label[0].toUpperCase()}
-        </div>
-        <div style="flex:1;min-width:0">
-          <div style="font-family:'Syne',sans-serif;font-size:13px;color:#c8dff5;
-                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
-          ${sub ? `<div style="font-family:'DM Mono',monospace;font-size:10px;
-                               color:var(--text-secondary)">${sub}</div>` : ''}
-        </div>
-        ${rightIcon}
-      </div>`;
-    }).join('');
-}
-
-function callContact(target, label) {
-  if (!target) return;
-  document.getElementById('inp-dial').value = target;
-  syncDialDisplay();
-  doCall();
-}
-
-// Open an OCP chat from the dialer's current input value (✉ button).
-// Handles @handle, OCP-XXXX-XXXX, ocp:... addresses, and plain phone numbers.
-async function openChatFromDialer() {
-  const raw = (document.getElementById('inp-dial')?.value || '').trim();
-
-  if (!raw || raw === '+') {
-    toast('Enter a handle, OCP code, or number first');
-    return;
-  }
-  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
-
-  // Bare ocp: address — open directly
-  if (raw.startsWith('ocp:')) {
-    const ct = loadContacts().find(c => c.ocp === raw);
-    openOcpChat(raw, ct?.name || raw.slice(0, 24) + '…');
-    return;
-  }
-
-  // @handle or OCP-XXXX-XXXX — resolve to ocp key first
-  if (raw.startsWith('@') || /^OCP-\d{4}-\d{4}$/i.test(raw)) {
-    const stripped = raw.startsWith('@') ? raw.slice(1) : raw;
-    _pendingHandleCall = { handle: raw, action: 'chat' };
-    showDialHint('Looking up ' + raw + '…', false);
-    await wsSend({ type: 'resolve_handle', handle: stripped });
-    return;
-  }
-
-  // Phone number — look up in local contacts for a cached ocp key
-  const ct = loadContacts().find(c => c.number === raw || c.number === raw.replace(/\s/g,''));
-  if (ct?.ocp) {
-    openOcpChat(ct.ocp, ct.name || raw);
-    return;
-  }
-
-  toast('OCP chat needs an @handle or OCP code — plain numbers work after a call');
-}
 
 function _initInstallHint() {
   // Don't show if already running as installed PWA
@@ -2931,7 +2266,7 @@ function _pushServerBase() {
   const wsUrl = (ws?.url)
     || localStorage.getItem('server_url')
     || 'wss://opencall-server-pqfe.onrender.com';
-  return wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://').replace(/\/$/, '');
+  return wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
 }
 
 // Core subscribe-and-register flow.
@@ -3050,15 +2385,10 @@ let callId        = null;
 let callWith      = null;
 let callMode      = null;       // "direct" | "relay"
 let pendingCall   = null;
-let _callPeerName = null;       // display name of the remote party, captured at call setup
-let myHandle      = null;       // @handle if claimed, e.g. "alice"
-let myNumericId   = null;       // OCP-XXXX-XXXX numeric ID
-let _pendingHandleCall = null;  // { handle, action:'call'|'add' } while awaiting resolve_handle
 let isMuted       = false;
 let isSpeaker     = false;
 let isVideo       = false;
 let videoStream   = null;
-let _makingOffer  = false;  // true while createOffer→setLocalDescription is in flight
 let timerInterval = null;
 let timerSecs     = 0;
 let audioCtx      = null;
@@ -3480,7 +2810,6 @@ document.getElementById('btn-backspace')?.addEventListener('click', () => {
   doDelete(); syncDialDisplay();
 });
 document.getElementById('btn-call')?.addEventListener('click', doCall);
-document.getElementById('btn-sms-invite')?.addEventListener('click', openChatFromDialer);
 
 // ── screen router ──────────────────────────────────────────
 function show(id) {
@@ -3623,56 +2952,6 @@ async function onMessage(msg) {
       // has not been granted or dismissed previously).
       _initPushHint();
 
-      // Handle layer: restore handle from server echo or local cache, then
-      // request (or confirm) the numeric ID.
-      if (myIdentity) {
-        if (msg.handle) {
-          myHandle = msg.handle;
-          localStorage.setItem('ocp_handle', msg.handle);
-        } else {
-          myHandle = localStorage.getItem('ocp_handle') || null;
-        }
-        const cachedId = localStorage.getItem('ocp_numeric_id');
-        if (cachedId) {
-          myNumericId = cachedId;
-        } else {
-          wsSend({ type: 'claim_numeric_id', ocp: myIdentity.ocp_address });
-        }
-        _updateHandleDisplay();
-      }
-      // chat push notification tapped — open that contact's thread
-      if (window._pendingOpenChat) {
-        const _co = window._pendingOpenChat;
-        window._pendingOpenChat = null;
-        const _ct = loadContacts().find(c => c.ocp === _co);
-        setTimeout(() => openOcpChat(_co, _ct?.name), 400);
-      }
-      // /u/<handle> QR link opened (legacy path) — resolve and save contact
-      if (window._pendingAddHandle) {
-        const _h = window._pendingAddHandle;
-        window._pendingAddHandle = null;
-        _pendingHandleCall = { handle: _h, action: 'add' };
-        await wsSend({ type: 'resolve_handle', handle: _h.startsWith('@') ? _h.slice(1) : _h });
-      }
-      // Deep-link from connect.html (?add=&ocp=&call=)
-      if (window._pendingDeepLink) {
-        const { id, ocp, call: callNow } = window._pendingDeepLink;
-        window._pendingDeepLink = null;
-        if (ocp) {
-          saveContact({ ocp, name: id || ocp, number: null });
-          console.log('[OCP] Deep-link contact saved:', id || ocp);
-        }
-        if (callNow && ocp) {
-          _callPeerName = id || null;
-          showCallingScreen(id || ocp);
-          setConnectionStatus('routing');
-          await initRatchetSession(ocp);
-          await wsSend({ type: 'call', to: ocp });
-        } else if (ocp) {
-          toast((id || ocp) + ' added to contacts');
-        }
-      }
-
       // Wake-to-call path: the service worker opened /index.html?answer=<callId>
       // after the user tapped a push notification. The callId was captured
       // synchronously before initFlow() ran; send join_call now that we have a
@@ -3680,7 +2959,6 @@ async function onMessage(msg) {
       if (window._pendingAnswerCallId) {
         const _cid = window._pendingAnswerCallId;
         window._pendingAnswerCallId = null;
-        console.log('[CLIENT] resumed via push for callId', _cid);
         // Small delay so the dialer screen settles before the overlay fires
         setTimeout(() => {
           wsSend({ type: 'join_call', callId: _cid });
@@ -3690,10 +2968,9 @@ async function onMessage(msg) {
       break;
 
     case 'ringing':
-      callId        = msg.callId;
-      callWith      = msg.to;
-      callMode      = msg.mode;
-      _callPeerName = null;       // outgoing call — name unknown until they answer
+      callId   = msg.callId;
+      callWith = msg.to;
+      callMode = msg.mode;
       document.getElementById('call-status-detail').textContent = 'Ringing...';
       document.getElementById('call-timer').textContent = '0:00';
       document.getElementById('caller-name-display').textContent = msg.to;
@@ -3724,10 +3001,9 @@ async function onMessage(msg) {
       break;
 
     case 'incoming_call':
-      pendingCall   = msg;
-      callWith      = msg.from;
-      callMode      = 'direct';
-      _callPeerName = msg.fromName || null;
+      pendingCall = msg;
+      callWith    = msg.from;
+      callMode    = 'direct';
       showIncomingOverlay(msg.fromName || 'Unknown', msg.from);
       startRingtone();
       break;
@@ -3738,157 +3014,15 @@ async function onMessage(msg) {
       endCall();
       break;
 
-    case 'hangup': {
-      console.log('[CALL] hangup received — tearing down, reason:', msg.reason);
-      // Capture peer before endCall() clears state
-      const _hPeer = (msg.reason === 'no_answer' && callWith?.startsWith('ocp:'))
-        ? { ocp: callWith, name: _callPeerName } : null;
-      toast(msg.reason === 'no_answer' ? 'No answer' : 'Call ended');
+    case 'hangup':
+      toast('Call ended');
       endCall();
-      if (_hPeer) setTimeout(() => _offerLeaveMessage(_hPeer.ocp, _hPeer.name), 500);
-      break;
-    }
-
-    case 'video_toggle':
-      console.log('[WRTC] video_toggle received — state:', msg.state);
-      if (_makingOffer) {
-        console.log('[WRTC] renegotiation skipped (not stable) — video_toggle debounced');
-        break;
-      }
-      if (msg.state === 'on'  && !isVideo) await toggleVideo(true);
-      if (msg.state === 'off' &&  isVideo) await toggleVideo(true);
       break;
 
-    case 'numeric_id_assigned':
-      myNumericId = msg.id;
-      localStorage.setItem('ocp_numeric_id', msg.id);
-      _updateHandleDisplay();
-      break;
-
-    case 'handle_claimed':
-      myHandle = msg.handle;
-      localStorage.setItem('ocp_handle', msg.handle);
-      _updateHandleDisplay();
-      toast('@' + msg.handle + ' is yours!');
-      break;
-
-    case 'handle_taken':
-      toast('@' + msg.handle + ' is taken — try another');
-      break;
-
-    case 'handle_error':
-      toast('Handle error: ' + (msg.reason || 'unknown'));
-      break;
-
-    case 'handle_resolved': {
-      const _p = _pendingHandleCall;
-      _pendingHandleCall = null;
-      if (!_p) break;
-      if (_p.action === 'add') {
-        saveContact({ ocp: msg.ocp, name: msg.handle || msg.ocp, number: null });
-        const addInp = document.getElementById('inp-add-contact');
-        if (addInp) addInp.value = '';
-        toast(('@' + msg.handle || msg.ocp) + ' added to contacts');
-      } else if (_p.action === 'chat') {
-        // Resolved from openChatFromDialer — save contact then open thread
-        saveContact({ ocp: msg.ocp, name: msg.handle || msg.ocp, number: null });
-        showDialHint('Enter number to call', false);
-        openOcpChat(msg.ocp, msg.handle || msg.ocp);
-      } else {
-        // Route call to the resolved OCP address
-        _callPeerName = msg.handle || null;
-        showCallingScreen(msg.handle || msg.ocp);
-        setConnectionStatus('routing');
-        await initRatchetSession(msg.ocp);
-        await wsSend({ type: 'call', to: msg.ocp });
-      }
-      break;
-    }
-
-    case 'handle_not_found':
-      _pendingHandleCall = null;
-      showDialHint('No one found with that handle/code.', true);
-      toast('No one found with that handle/code.');
-      break;
-
-    case 'chat_msg': {
-      const { from, ciphertext, msgId, ts: msgTs, kind: msgKind } = msg;
-      if (!from || !ciphertext || !msgId) break;
-      await initChatSession(from);
-      const plain = await ratchetDecrypt('chat:' + from, ciphertext);
-      if (!ocpThreads.has(from)) ocpThreads.set(from, { peerOcp: from, peerName: null, messages: [] });
-      const thread = ocpThreads.get(from);
-      const contacts = loadContacts();
-      const ct = contacts.find(c => c.ocp === from);
-      const peerLabel = ct?.name || from.slice(0, 20) + '…';
-
-      if (!thread.messages.find(m => m.msgId === msgId)) {
-        if (msgKind === 'voice' && plain?.audioB64) {
-          // ── Inbound voice note ────────────────────────────
-          const { audioB64, mimeType, durationMs } = plain;
-          // Build blob URL for this session
-          const bytes   = Uint8Array.from(atob(audioB64), c => c.charCodeAt(0));
-          const blob    = new Blob([bytes], { type: mimeType || 'audio/webm' });
-          const blobUrl = URL.createObjectURL(blob);
-          _voiceBlobUrls.set(msgId, blobUrl);
-          // Store marker only — no audio binary in localStorage
-          thread.messages.push({ dir: 'in', kind: 'voice', durationMs: durationMs || 0,
-                                  msgId, ts: msgTs || Date.now(), status: 'delivered' });
-          saveOcpChats();
-          if (activeOcpChat?.peerOcp === from) {
-            addOcpBubble('in', '', msgId, 'delivered', msgTs, 'voice', { blobUrl, durationMs });
-          } else {
-            toast(peerLabel + ': 🎤 Voice note');
-          }
-        } else {
-          // ── Inbound text message ──────────────────────────
-          const text = plain?.text || '[could not decrypt]';
-          thread.messages.push({ dir: 'in', text, msgId, status: 'delivered',
-                                  ts: msgTs || Date.now(), kind: 'chat' });
-          saveOcpChats();
-          if (activeOcpChat?.peerOcp === from) {
-            addOcpBubble('in', text, msgId, 'delivered', msgTs, 'chat');
-          } else {
-            toast(peerLabel + ': ' + text.slice(0, 60));
-          }
-        }
-      }
-      await wsSend({ type: 'chat_delivered', to: from, msgId });
-      break;
-    }
-
-    case 'chat_error':
-      if (msg.reason === 'payload_too_large') {
-        setOcpStatus(msg.msgId, 'failed');
-        toast('Clip too long — try a shorter recording.');
-      }
-      break;
-
-    case 'chat_sent':
-      setOcpStatus(msg.msgId, 'sent');
-      break;
-
-    case 'chat_delivered':
-      setOcpStatus(msg.msgId, 'delivered');
-      break;
-
-    case 'chat_queued':
-      setOcpStatus(msg.msgId, 'queued');
-      break;
-
-    case 'chat_undelivered':
-      setOcpStatus(msg.msgId, 'pending');
-      break;
-
-    case 'unavailable': {
-      // Capture peer before endCall() clears state
-      const _uPeer = callWith?.startsWith('ocp:')
-        ? { ocp: callWith, name: _callPeerName } : null;
+    case 'unavailable':
       endCall();
       showInviteBanner(msg.number);
-      if (_uPeer) setTimeout(() => _offerLeaveMessage(_uPeer.ocp, _uPeer.name), 500);
       break;
-    }
 
     case 'no_relay':
       toast('No relay available for this number');
@@ -3967,7 +3101,7 @@ async function onMessage(msg) {
           LOG.webrtc('ICE connection state: ' + pc.iceConnectionState);
           if (pc.iceConnectionState === 'connected') {
             LOG.webrtc('✅ ICE CONNECTED — audio tunnel established');
-            _markIceConnected();
+            _iceWasConnected = true;
           }
           if (pc.iceConnectionState === 'failed') {
             LOG.err('❌ ICE FAILED — audio tunnel could not be established');
@@ -4198,9 +3332,7 @@ async function onMessage(msg) {
         LOG.webrtc('ICE state: ' + state);
         if (state === 'connected' || state === 'completed') {
           LOG.webrtc('✅ WebRTC connected to relay B!');
-          _markIceConnected();
-          const peerNum = (callWith && !callWith.startsWith('link:')) ? callWith : null;
-          if (peerNum) saveContact({ ocp: null, name: _callPeerName || peerNum, number: peerNum });
+          _iceWasConnected = true;
           showActiveCallOverlay();
           startTimer();
           setConnectionStatus('calling');
@@ -4405,6 +3537,38 @@ async function onMessage(msg) {
     case 'ai_note_line': {
       aiTranscript.push({ speaker: msg.speaker, text: msg.text, ts: msg.ts });
       _appendAiLine(msg.speaker, msg.text, msg.ts);
+      break;
+    }
+
+    // ── OCP-to-OCP chat ───────────────────────────────────────
+    case 'chat_msg': {
+      const peerOcp = msg.from;
+      const inMsgId = 'ocp_' + Date.now();
+      const t = findOrCreateOcpThread(peerOcp, msg.fromName || peerOcp?.slice(0, 20));
+      t.messages.push({ dir: 'in', text: msg.text, msgId: inMsgId, ts: msg.ts || Date.now(), status: 'received' });
+      saveOcpThreads();
+      if (ocpChatVisible() && activeOcpThread?.peerOcp === peerOcp) {
+        addOcpBubble('in', msg.text, inMsgId);
+      } else {
+        showOcpBadge(peerOcp, msg.text);
+      }
+      // Send delivery acknowledgement back to sender
+      if (msg.msgId) wsSend({ type: 'chat_delivered', to: peerOcp, msgId: msg.msgId });
+      break;
+    }
+
+    case 'chat_sent': {
+      updateOcpStatus(msg.msgId, 'sent');
+      break;
+    }
+
+    case 'chat_delivered': {
+      updateOcpStatus(msg.msgId, 'delivered');
+      break;
+    }
+
+    case 'chat_undelivered': {
+      updateOcpStatus(msg.msgId, 'pending');
       break;
     }
 
@@ -5561,20 +4725,6 @@ async function doCall() {
     showDialHint('Enter a number to call', true);
     return;
   }
-  if (!ws || ws.readyState !== 1) return toast('Not connected to server');
-
-  // Handle / numeric-ID / bare OCP address — bypass E.164 validation
-  const isHandle    = to.startsWith('@');
-  const isNumericId = /^OCP-\d{4}-\d{4}$/i.test(to);
-  const isOcpAddr   = to.startsWith('ocp:');
-  if (isHandle || isNumericId || isOcpAddr) {
-    const stripped = isHandle ? to.slice(1) : to;
-    showDialHint('Looking up ' + to + '…', false);
-    _pendingHandleCall = { handle: to, action: 'call' };
-    await wsSend({ type: 'resolve_handle', handle: stripped });
-    return;
-  }
-
   if (!to.startsWith('+')) {
     showDialHint('Add country code: +91, +1, +44...', true);
     return;
@@ -5583,6 +4733,7 @@ async function doCall() {
     showDialHint('Number too short', true);
     return;
   }
+  if (!ws || ws.readyState !== 1) return toast('Not connected to server');
 
   // DHT lookup: hint-only — does NOT gate routing (server decides relay vs invite)
   if (dhtReady && to.startsWith('+')) {
@@ -5652,8 +4803,6 @@ async function doHangup() {
 
   if (currentCallId) {
     await wsSend({ type: 'call.hangup', callId: currentCallId });
-  } else if (callId) {
-    await wsSend({ type: 'hangup', callId, with: callWith });
   }
   currentCallId = null;
 
@@ -5662,11 +4811,6 @@ async function doHangup() {
   setConnectionStatus('online');
 }
 // ── Post-call backup nudge ─────────────────────────────────
-function _markIceConnected() {
-  _iceWasConnected = true;
-  localStorage.setItem('ocp_had_call', '1');
-}
-
 function _maybeShowBackupNudge() {
   if (_backupNudgeShown) return;
   if (!_iceWasConnected)  return;
@@ -5718,215 +4862,7 @@ function _showBackupBanner() {
   document.body.appendChild(banner);
 }
 
-function maybePostCallNudge() {
-  if (!_iceWasConnected) return;
-  if (localStorage.getItem('ocp_nudge_done') === '1') return;
-
-  // Delay slightly more than the backup banner (400ms) so they don't overlap.
-  setTimeout(() => {
-    // Don't stack on top of the backup banner if it appeared simultaneously.
-    if (document.getElementById('ocp-backup-banner')) return;
-    _showPostCallNudge();
-  }, 600);
-}
-
-function _showPostCallNudge() {
-  document.getElementById('ocp-postcall-nudge')?.remove();
-
-  if (!document.getElementById('_ocp-backup-anim')) {
-    const st = document.createElement('style');
-    st.id = '_ocp-backup-anim';
-    st.textContent = '@keyframes _bannerUp{from{transform:translateY(100%);opacity:0}' +
-      'to{transform:translateY(0);opacity:1}}';
-    document.head.appendChild(st);
-  }
-
-  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
-                       navigator.standalone;
-
-  // Don't show if already installed as PWA and push is already granted — nothing to do.
-  if (isStandalone && Notification.permission === 'granted') {
-    localStorage.setItem('ocp_nudge_done', '1');
-    return;
-  }
-
-  const banner = document.createElement('div');
-  banner.id = 'ocp-postcall-nudge';
-  banner.style.cssText = 'position:fixed;bottom:44px;left:0;right:0;z-index:15001;' +
-    'padding:12px 14px;background:rgba(13,31,53,.97);' +
-    'border-top:1px solid rgba(99,180,255,.2);' +
-    'animation:_bannerUp .3s ease;';
-
-  const dismiss = () => {
-    localStorage.setItem('ocp_nudge_done', '1');
-    banner.remove();
-  };
-
-  const txt = document.createElement('div');
-  txt.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;' +
-    'color:#c8dff5;line-height:1.5;margin-bottom:10px;';
-
-  if (isIos && !isStandalone) {
-    txt.textContent = '📲 Tap Share → Add to Home Screen to get call alerts ' +
-      '— even when the app is closed.';
-  } else {
-    txt.textContent = '📲 Add OpenCall to your home screen so people can reach ' +
-      'you anytime — even when it\'s closed.';
-  }
-  banner.appendChild(txt);
-
-  const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:8px;';
-
-  const laterBtn = document.createElement('button');
-  laterBtn.textContent = 'Later';
-  laterBtn.style.cssText = 'flex:1;padding:8px;background:transparent;' +
-    'border:1px solid rgba(99,180,255,.2);border-radius:8px;' +
-    'color:#667;font-size:12px;font-family:"DM Mono",monospace;cursor:pointer;';
-  laterBtn.onclick = dismiss;
-  btnRow.appendChild(laterBtn);
-
-  // iOS Safari without install prompt: show instructions, no action button needed.
-  if (!(isIos && !isStandalone)) {
-    const goBtn = document.createElement('button');
-    goBtn.textContent = 'Add & enable calls';
-    goBtn.style.cssText = 'flex:2;padding:8px;background:var(--blue-dim);' +
-      'border:1px solid var(--blue-border);border-radius:8px;' +
-      'color:var(--blue);font-weight:700;font-size:12px;' +
-      'font-family:"Syne",sans-serif;cursor:pointer;';
-    goBtn.onclick = async () => {
-      goBtn.disabled = true;
-      goBtn.textContent = 'Setting up…';
-      // a) PWA install prompt — fires inside the user-gesture click
-      if (deferredInstallPrompt) await triggerInstall();
-      // b) Push permission + subscribe — also inside the same user gesture
-      await enablePushNotifications();
-      // c) Done
-      dismiss();
-      toast('You\'re all set — people can reach you anytime.');
-    };
-    btnRow.appendChild(goBtn);
-  }
-
-  banner.appendChild(btnRow);
-  document.body.appendChild(banner);
-}
-
-// Show a "leave a message" card after an unanswered / offline OCP call.
-// Only offered when the peer is reachable by OCP key (so the queued chat path works).
-function _offerLeaveMessage(peerOcp, peerName) {
-  if (!peerOcp) return;
-  document.getElementById('ocp-leave-msg-card')?.remove();
-
-  if (!document.getElementById('_ocp-backup-anim')) {
-    const st = document.createElement('style');
-    st.id = '_ocp-backup-anim';
-    st.textContent = '@keyframes _bannerUp{from{transform:translateY(100%);opacity:0}' +
-      'to{transform:translateY(0);opacity:1}}';
-    document.head.appendChild(st);
-  }
-
-  const card = document.createElement('div');
-  card.id = 'ocp-leave-msg-card';
-  card.style.cssText = 'position:fixed;bottom:44px;left:0;right:0;z-index:15002;' +
-    'padding:12px 14px;background:rgba(13,31,53,.97);' +
-    'border-top:1px solid rgba(99,180,255,.2);' +
-    'animation:_bannerUp .3s ease;';
-
-  const label = document.createElement('div');
-  label.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#c8dff5;' +
-    'margin-bottom:8px;line-height:1.5;';
-  label.textContent = '💬 They\'re not available — leave a message' +
-    (peerName ? ' for ' + peerName : '') + ':';
-  card.appendChild(label);
-
-  const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:8px;align-items:flex-end;';
-
-  const ta = document.createElement('textarea');
-  ta.placeholder = 'Your message…';
-  ta.rows = 2;
-  ta.maxLength = 1000;
-  ta.style.cssText = 'flex:1;padding:8px 10px;background:var(--bg-field);' +
-    'border:1px solid var(--border);border-radius:var(--radius-sm);' +
-    'color:#c8dff5;font-family:"DM Mono",monospace;font-size:12px;' +
-    'outline:none;resize:none;line-height:1.4;';
-  row.appendChild(ta);
-
-  const sendBtn = document.createElement('button');
-  sendBtn.textContent = 'Send';
-  sendBtn.style.cssText = 'padding:8px 14px;background:var(--blue-dim);' +
-    'border:1px solid var(--blue-border);border-radius:var(--radius-sm);' +
-    'color:var(--blue);font-weight:700;font-size:12px;font-family:"Syne",sans-serif;' +
-    'cursor:pointer;white-space:nowrap;flex-shrink:0;';
-  sendBtn.onclick = async () => {
-    const text = ta.value.trim();
-    if (!text) return;
-    sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
-    await sendOcpMessage(peerOcp, text);
-    toast('Message sent — delivered when they come online.');
-    card.remove();
-  };
-  row.appendChild(sendBtn);
-
-  const dismissBtn = document.createElement('button');
-  dismissBtn.textContent = 'Later';
-  dismissBtn.style.cssText = 'padding:8px 10px;background:transparent;color:#667;border:0;' +
-    'font-size:12px;font-family:"DM Mono",monospace;cursor:pointer;flex-shrink:0;';
-  dismissBtn.onclick = () => card.remove();
-  row.appendChild(dismissBtn);
-
-  card.appendChild(row);
-  document.body.appendChild(card);
-  ta.focus();
-}
-
-// Append a call-ended system entry (and optional AI transcript) to the
-// peer's conversation thread so the chat history acts as call memory.
-function _recordCallInThread(peerOcp, peerName, durationSecs, transcript) {
-  if (!peerOcp || durationSecs < 2) return; // skip trivial/failed connections
-  if (!ocpThreads.has(peerOcp))
-    ocpThreads.set(peerOcp, { peerOcp, peerName: peerName || null, messages: [] });
-  const thread = ocpThreads.get(peerOcp);
-  if (peerName) thread.peerName = peerName;
-  const now = Date.now();
-  const mins = String(Math.floor(durationSecs / 60)).padStart(2, '0');
-  const secs = String(durationSecs % 60).padStart(2, '0');
-  // Call-ended marker
-  thread.messages.push({
-    kind: 'call', dir: 'sys',
-    text: '📞 Call · ' + mins + ':' + secs,
-    msgId: 'call_' + now, ts: now, status: 'sys'
-  });
-  // AI Notes transcript (if any)
-  if (transcript && transcript.length) {
-    const body = transcript.map(l => (l.speaker || '?') + ': ' + l.text).join('\n');
-    thread.messages.push({
-      kind: 'note', dir: 'sys',
-      text: body,
-      msgId: 'note_' + now, ts: now, status: 'sys'
-    });
-  }
-  saveOcpThreads();
-  // Live-update if chat panel for this peer is open
-  if (activeOcpChat?.peerOcp === peerOcp) {
-    addOcpBubble('sys', '📞 Call · ' + mins + ':' + secs,
-                 'call_' + now, 'sys', now, 'call');
-    if (transcript?.length) {
-      const body = transcript.map(l => (l.speaker || '?') + ': ' + l.text).join('\n');
-      addOcpBubble('sys', body, 'note_' + now, 'sys', now, 'note');
-    }
-  }
-}
-
 function endCall() {
-  // Capture call state before anything is cleared
-  const _ecPeerOcp    = callWith?.startsWith('ocp:') ? callWith : null;
-  const _ecPeerName   = _callPeerName;
-  const _ecDuration   = timerSecs;          // grabbed before stopTimer() resets it
-  const _ecTranscript = aiTranscript.slice(); // copy before it's cleared
-
   // AI Notes cleanup — stop recognition and offer transcript download
   _stopTranscription();
   _offerTranscriptDownload();
@@ -5964,7 +4900,6 @@ function endCall() {
   updateVideoLayout(false);
   const vidBtn = document.getElementById('btn-video');
   if (vidBtn) { vidBtn.innerHTML = '&#127909;'; vidBtn.classList.remove('active'); }
-  _makingOffer = false;
   if (pc) { pc.close(); pc = null; }
   if (peerConnection) { peerConnection.close(); peerConnection = null; }
   if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
@@ -5976,10 +4911,7 @@ function endCall() {
   document.getElementById('inp-dial').value = '+';
   syncDialDisplay();
   show('dialer');
-  // Record call + transcript in the contact's thread (call memory)
-  if (_ecPeerOcp) _recordCallInThread(_ecPeerOcp, _ecPeerName, _ecDuration, _ecTranscript);
   _maybeShowBackupNudge();
-  maybePostCallNudge();
 }
 
 // ── WebRTC ─────────────────────────────────────────────────
@@ -6009,7 +4941,6 @@ async function initWebRTC(isCaller) {
       const rv = document.getElementById('remote-video');
       rv.srcObject = new MediaStream([e.track]);
       rv.play().catch(err => console.warn('[WRTC] remote-video play blocked:', err.message));
-      console.log('[WRTC] remote video attached');
       updateVideoLayout(true);
       return;
     }
@@ -6053,9 +4984,7 @@ async function initWebRTC(isCaller) {
   pc.oniceconnectionstatechange = () => {
     console.log('[WRTC] iceConnectionState (initWebRTC):', pc?.iceConnectionState);
     if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
-      _markIceConnected();
-      const peerNum = (callWith && !callWith.startsWith('link:')) ? callWith : null;
-      if (peerNum) saveContact({ ocp: null, name: _callPeerName || peerNum, number: peerNum });
+      _iceWasConnected = true;
     }
     if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
       toast('Connection lost');
@@ -6202,15 +5131,10 @@ async function toggleSpeaker() {
   toast(isSpeaker ? 'Speaker on' : 'Earpiece');
 }
 
-async function toggleVideo(_mirrored = false) {
+async function toggleVideo() {
   // Video is only meaningful on direct/link WebRTC path (not phone relay).
   if (!pc || pc.signalingState === 'closed') {
-    if (!_mirrored) toast('Video not available'); return;
-  }
-  // Don't start a new toggle if a renegotiation is already in flight.
-  if (!_mirrored && _makingOffer) {
-    console.log('[WRTC] renegotiation skipped (not stable) — toggleVideo debounced');
-    return;
+    toast('Video not available'); return;
   }
   if (isVideo) {
     isVideo = false;
@@ -6219,6 +5143,7 @@ async function toggleVideo(_mirrored = false) {
     if (sender) await sender.replaceTrack(null);
     document.getElementById('local-video').srcObject = null;
     updateVideoLayout(false);
+    await sendReOffer();
   } else {
     try {
       videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -6235,33 +5160,16 @@ async function toggleVideo(_mirrored = false) {
       pc.addTrack(vTrack, videoStream);
     }
     updateVideoLayout(true);
-  }
-  if (!_mirrored) {
-    // Initiating side: send the offer first, then signal the peer.
-    // The peer's mirrored toggleVideo prepares their track WITHOUT re-offering,
-    // so when our offer arrives the peer answers with their track included.
     await sendReOffer();
-    wsSend({ type: 'video_toggle', state: isVideo ? 'on' : 'off', callId, to: callWith });
   }
-  // _mirrored=true: track is prepared; the initiator's offer is already on its way.
-  // Calling sendReOffer() here would cause glare — skip it.
   const btn = document.getElementById('btn-video');
   btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
   btn.classList.toggle('active', isVideo);
-  if (!_mirrored) toast(isVideo ? 'Video on' : 'Video off');
+  toast(isVideo ? 'Video on' : 'Video off');
 }
 
 async function sendReOffer() {
   if (!pc || pc.signalingState === 'closed') return;
-  if (pc.signalingState !== 'stable') {
-    console.log('[WRTC] renegotiation skipped (not stable) | state:', pc.signalingState);
-    return;
-  }
-  if (_makingOffer) {
-    console.log('[WRTC] renegotiation skipped (offer already in flight)');
-    return;
-  }
-  _makingOffer = true;
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -6273,8 +5181,6 @@ async function sendReOffer() {
     console.log('[WRTC] re-offer sent | callMode:', callMode);
   } catch(e) {
     console.warn('[WRTC] sendReOffer failed:', e.message);
-  } finally {
-    _makingOffer = false;
   }
 }
 
@@ -6392,7 +5298,6 @@ function showScreen(name) {
   if (name === 'dialer') {
     const inp = document.getElementById('inp-dial');
     if (inp && !inp.value) { inp.value = '+'; syncDialDisplay(); }
-    renderContacts();
   }
 }
 
@@ -6730,8 +5635,208 @@ function showSmsBadge(from, text) {
   }
 }
 
-loadThreadsStore();
+// ── OCP Chat ──────────────────────────────────────────────────
+let activeOcpThread  = null;
+let ocpThreadsStore  = [];
+
+function loadOcpThreads() {
+  try {
+    const raw = localStorage.getItem('ocp_threads');
+    ocpThreadsStore = raw ? JSON.parse(raw) : [];
+  } catch(e) { ocpThreadsStore = []; }
+}
+
+function saveOcpThreads() {
+  try { localStorage.setItem('ocp_threads', JSON.stringify(ocpThreadsStore)); } catch(e) {}
+}
+
+function findOrCreateOcpThread(peerOcp, peerName) {
+  let t = ocpThreadsStore.find(t => t.peerOcp === peerOcp);
+  if (!t) {
+    t = { peerOcp, peerName: peerName || peerOcp?.slice(0, 20) || 'Unknown', messages: [] };
+    ocpThreadsStore.push(t);
+  } else if (peerName && peerName !== t.peerName) {
+    t.peerName = peerName;
+  }
+  return t;
+}
+
+// ── Inbox ─────────────────────────────────────────────────────
+function openOcpInbox() {
+  renderOcpThreadList();
+  document.getElementById('ocpInbox').classList.add('open');
+}
+
+function renderOcpThreadList() {
+  const ul = document.getElementById('ocpThreadList');
+  if (!ul) return;
+  ul.innerHTML = '';
+  if (ocpThreadsStore.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'ocp-empty';
+    li.innerHTML = 'No conversations yet.<br>Share your OCP address to start chatting.';
+    ul.appendChild(li);
+    return;
+  }
+  [...ocpThreadsStore].reverse().forEach(t => {
+    const last    = t.messages[t.messages.length - 1];
+    const preview = last ? (last.dir === 'out' ? 'You: ' : '') + last.text : '';
+    const initial = (t.peerName || '?')[0].toUpperCase();
+    const li = document.createElement('li');
+    li.className = 'ocp-thread-item';
+    li.innerHTML = `
+      <div class="ocp-thread-avatar">${initial}</div>
+      <div class="ocp-thread-body">
+        <div class="ocp-thread-name">${escHtml(t.peerName || t.peerOcp?.slice(0, 20) || '?')}</div>
+        <div class="ocp-thread-preview">${escHtml((preview || '').slice(0, 60))}</div>
+      </div>`;
+    li.onclick = () => {
+      document.getElementById('ocpInbox').classList.remove('open');
+      openOcpChat(t.peerOcp, t.peerName);
+    };
+    ul.appendChild(li);
+  });
+}
+
+document.getElementById('ocpInboxBack').onclick = function() {
+  document.getElementById('ocpInbox').classList.remove('open');
+};
+
+// ── Per-thread chat view ───────────────────────────────────────
+function openOcpChat(peerOcp, peerName) {
+  activeOcpThread = {
+    peerOcp,
+    peerName: peerName || peerOcp?.slice(0, 20) || 'Unknown'
+  };
+  document.getElementById('ocpHName').textContent = activeOcpThread.peerName;
+  document.getElementById('ocpHSub').textContent  = peerOcp?.slice(0, 24) + (peerOcp?.length > 24 ? '…' : '');
+
+  const ul = document.getElementById('ocpMsgs');
+  ul.innerHTML = '<li class="sysmsg">Today</li>';
+  const t = findOrCreateOcpThread(peerOcp, peerName);
+  t.messages.forEach(m => addOcpBubble(m.dir, m.text, m.msgId, m.status));
+
+  // Clear unread dot if present
+  const btn = document.getElementById('btn-sms-invite');
+  if (btn?.dataset.ocpUnread) {
+    delete btn.dataset.ocpUnread;
+    btn.querySelector('.ocp-unread-dot')?.remove();
+  }
+
+  document.getElementById('ocpChat').classList.add('open');
+  document.getElementById('ocpInput').focus();
+}
+
+function ocpChatVisible() {
+  return document.getElementById('ocpChat').classList.contains('open');
+}
+
+document.getElementById('ocpChatBack').onclick = function() {
+  document.getElementById('ocpChat').classList.remove('open');
+  activeOcpThread = null;
+  openOcpInbox();
+};
+
+// ── Bubbles + status ───────────────────────────────────────────
+function addOcpBubble(dir, text, msgId, status) {
+  const ul = document.getElementById('ocpMsgs');
+  if (!ul) return;
+  const li  = document.createElement('li');
+  li.className      = 'bubble ' + dir;
+  li.dataset.msgId  = msgId;
+  const d   = new Date();
+  const ts  = d.getHours().toString().padStart(2,'0') + ':' +
+              d.getMinutes().toString().padStart(2,'0');
+  const st  = status || 'sent';
+  const txt = st === 'delivered' ? '✓✓' : st === 'pending' ? '⏱' : '✓';
+  const tickHtml = dir === 'out'
+    ? `<span class="tick st-${st}" id="ocp_tick_${msgId}">${txt}</span>`
+    : '';
+  li.innerHTML = escHtml(text) +
+    `<div class="meta"><span class="ts">${ts}</span>${tickHtml}</div>`;
+  ul.appendChild(li);
+  ul.scrollTop = ul.scrollHeight;
+}
+
+function updateOcpStatus(msgId, status) {
+  const tick = document.getElementById('ocp_tick_' + msgId);
+  if (tick) {
+    const txt = status === 'delivered' ? '✓✓' : status === 'pending' ? '⏱' : '✓';
+    tick.className   = 'tick st-' + status;
+    tick.textContent = txt;
+  }
+  // Persist into the store
+  if (!activeOcpThread) return;
+  const t = ocpThreadsStore.find(t => t.peerOcp === activeOcpThread.peerOcp);
+  if (!t) return;
+  const m = t.messages.find(m => m.msgId === msgId);
+  if (m) { m.status = status; saveOcpThreads(); }
+}
+
+// ── Send ──────────────────────────────────────────────────────
+function sendChat() {
+  const input = document.getElementById('ocpInput');
+  const text  = input.value.trim();
+  if (!text || !activeOcpThread) return;
+
+  const msgId = 'ocp_' + Date.now();
+  const ts    = Date.now();
+
+  addOcpBubble('out', text, msgId, 'sending');
+  input.value = '';
+  input.style.height = 'auto';
+
+  const t = findOrCreateOcpThread(activeOcpThread.peerOcp, activeOcpThread.peerName);
+  t.messages.push({ dir: 'out', text, msgId, ts, status: 'sending' });
+  saveOcpThreads();
+
+  if (!ws || ws.readyState !== 1) {
+    updateOcpStatus(msgId, 'pending');
+    return;
+  }
+  wsSend({ type: 'chat_msg', to: activeOcpThread.peerOcp, text, msgId, ts });
+}
+
+(function wireOcpComposer() {
+  const input = document.getElementById('ocpInput');
+  const btn   = document.getElementById('ocpSend');
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  input.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  });
+  btn.addEventListener('click', sendChat);
+})();
+
+// ── Unread badge on envelope icon ────────────────────────────
+function showOcpBadge(peerOcp, text) {
+  const preview = text.length > 50 ? text.slice(0, 50) + '…' : text;
+  toast('💬 ' + (peerOcp?.slice(0, 14) || '?') + ': ' + preview, 6000);
+  const btn = document.getElementById('btn-sms-invite');
+  if (!btn) return;
+  btn.dataset.ocpUnread = (+btn.dataset.ocpUnread || 0) + 1;
+  if (!btn.querySelector('.ocp-unread-dot')) {
+    const dot = document.createElement('span');
+    dot.className = 'ocp-unread-dot';
+    dot.style.cssText = `position:absolute;top:-3px;right:-3px;
+      width:9px;height:9px;border-radius:50%;
+      background:var(--blue);pointer-events:none;
+      border:1px solid var(--bg-deep);`;
+    btn.style.position = 'relative';
+    btn.appendChild(dot);
+  }
+}
+
+// ── Envelope button → open OCP inbox ─────────────────────────
+document.getElementById('btn-sms-invite').onclick = function() {
+  openOcpInbox();
+};
+
 loadOcpThreads();
+
+loadThreadsStore();
 </script>
 
 </body>

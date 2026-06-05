@@ -58,30 +58,11 @@ const pendingCalls      = new Map(); // callId        → { from, to, link, call
 const wsToRelay         = new Map(); // ws               → relay ocp_address
 const sentAnswerLinks   = new Set(); // callId           → de-duplicate answer_link_ready
 const smsThreads        = new Map(); // `${relayId}|${cNumber}` → { aWs, aOcp, cNumber, relayId, threadId, lastActive }
+const ocpRegistry       = new Map(); // ocp_address             → WebSocket (online OCP users, for chat routing)
 const pendingUSSD       = new Map(); // callee           → { callId, from, channel }
 const simBankRegistry   = new Map(); // country          → WebSocket
 const telegramRegistry  = new Map(); // phone            → telegram chat ID
 const lineRegistry      = new Map(); // phone            → LINE user ID
-
-// ── Handle / numeric-ID registry ────────────────────────────
-// handles: normalised key (lowercase, hyphens ok for OCP-XXXX-XXXX)
-//          → { ocp, display, sig, claimedAt }
-// ocpToHandle: ocp_address → display handle (for reverse lookup)
-// ocpRegistry: ocp_address → live WebSocket  (fast lookup for OCP-routed calls)
-const handles     = new Map();
-const ocpToHandle = new Map();
-const ocpRegistry = new Map();
-
-// Offline chat inbox — holds encrypted messages for users who are currently
-// disconnected.  Only ciphertext stored; server cannot read content.
-// Flushed to the user when they reconnect (register).
-// Format: ocp_address → Array<{ from, fromName, ciphertext, msgId, ts }>
-const offlineChatInbox = new Map();
-const OFFLINE_INBOX_MAX    = 50;      // messages per offline user
-// ~60 s Opus (~32 kbps) → ~240 KB binary → ~320 KB base64 + encryption overhead.
-// 400 KB is the per-message cap; anything larger is rejected immediately so the
-// client can warn "clip too long" rather than silently dropping it.
-const MAX_CHAT_PAYLOAD_BYTES = 400_000;
 
 // WhatsApp Web.js stubs — set waReady=true and assign waClient after
 // calling require('whatsapp-web.js') and authenticating
@@ -265,42 +246,6 @@ async function verifySignature(msg) {
   } catch(e) {
     return true;
   }
-}
-
-// Verify that `sig` is a valid Ed25519 signature of "claim:<handle>:<ocp>"
-// using the public key encoded in `publicKeyJwk` (JWK string or object).
-async function verifyHandleSig(ocp, handle, sig, publicKeyJwk) {
-  try {
-    const jwk = typeof publicKeyJwk === 'string' ? JSON.parse(publicKeyJwk) : publicKeyJwk;
-    const key = await crypto.subtle.importKey('jwk', jwk, { name: 'Ed25519' }, false, ['verify']);
-    const msgBytes = new TextEncoder().encode(`claim:${handle}:${ocp}`);
-    const sigBytes = Buffer.from(sig, 'base64');
-    return await crypto.subtle.verify('Ed25519', key, sigBytes, msgBytes);
-  } catch(e) {
-    console.warn('[HANDLE] sig verify error:', e.message);
-    return false;
-  }
-}
-
-// Resolve a handle, numeric ID, or bare ocp: address to an ocp_address string.
-// Returns null if not found.
-function resolveToOcp(raw) {
-  if (!raw) return null;
-  if (raw.startsWith('ocp:')) return raw;             // bare OCP address
-  const key = raw.toLowerCase().replace(/^@/, '');    // strip optional @ prefix
-  const entry = handles.get(key);
-  return entry ? entry.ocp : null;
-}
-
-// Generate an unused OCP-XXXX-XXXX numeric ID.
-function generateNumericId() {
-  for (let i = 0; i < 200; i++) {
-    const a = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
-    const b = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
-    const display = `OCP-${a}-${b}`;
-    if (!handles.has(display.toLowerCase())) return display;
-  }
-  throw new Error('[HANDLE] exhausted numeric-id attempts');
 }
 
 function findRelay(targetE164, excludeWs) {
@@ -834,9 +779,9 @@ wss.on("connection", (ws, req) => {
         }
       }
       registry.delete(meta.number);
+      if (meta.ocpAddress) ocpRegistry.delete(meta.ocpAddress);
       log("←", "unregistered", meta.number);
     }
-    if (meta?.ocpAddress) ocpRegistry.delete(meta.ocpAddress);
     if (meta) {
       console.log('[SERVER] User disconnected:', meta.number);
       metadata.delete(ws);
@@ -1060,7 +1005,7 @@ async function handle(ws, msg) {
   // (ai_note_line) between both parties on a call, by callId.
   // TODO: swap window.SpeechRecognition on the client for Whisper/Deepgram
   // for better accuracy and non-Chrome browser support.
-  if (msg.type === 'ai_notes' || msg.type === 'ai_note_line' || msg.type === 'video_toggle') {
+  if (msg.type === 'ai_notes' || msg.type === 'ai_note_line') {
     const call = msg.callId ? pendingCalls.get(msg.callId) : null;
     if (call) {
       const role   = getCallRole(ws, call);
@@ -1106,27 +1051,9 @@ async function handle(ws, msg) {
 
       // Keep phone-number → OCP mapping fresh for push lookup after disconnect
       if (msg.from) numberToOcp.set(number, msg.from);
-
-      // Keep OCP address → live WS for handle-routed calls
       if (msg.from) ocpRegistry.set(msg.from, ws);
 
-      // Flush any queued offline chat messages for this OCP address
-      if (msg.from) {
-        const queued = offlineChatInbox.get(msg.from);
-        if (queued?.length) {
-          for (const m of queued) {
-            send(ws, { type: 'chat_msg', from: m.from, fromName: m.fromName,
-                       ciphertext: m.ciphertext, msgId: m.msgId,
-                       ts: m.ts, kind: m.kind || 'chat' });
-          }
-          offlineChatInbox.delete(msg.from);
-          log('💬', `flushed ${queued.length} queued chat(s) to`, msg.from.slice(0, 20) + '…');
-        }
-      }
-
-      // Send back the handle (if any) so the client can display it
-      const handle = msg.from ? (ocpToHandle.get(msg.from) || null) : null;
-      send(ws, { type: "registered", number, name, handle });
+      send(ws, { type: "registered", number, name });
       log("✓", "registered", number, `(${name})`);
       break;
     }
@@ -1243,63 +1170,6 @@ async function handle(ws, msg) {
         return send(ws, { type: "error", reason: "not_registered" });
       }
 
-      // ── PATH 0: handle, numeric ID, or bare ocp: address ──────────────
-      // If msg.to doesn't look like an E.164 number, try resolving it as a
-      // handle / numeric-ID / OCP address before falling into the phone paths.
-      {
-        const rawTo = (msg.to || '').trim();
-        if (rawTo && !rawTo.startsWith('+') && !/^\d+$/.test(rawTo)) {
-          const targetOcp = resolveToOcp(rawTo);
-          if (!targetOcp) {
-            return send(ws, { type: 'handle_not_found', handle: rawTo });
-          }
-          const callId     = makeCallId();
-          const calleeWs   = ocpRegistry.get(targetOcp);
-          const calleeMeta = calleeWs ? metadata.get(calleeWs) : null;
-          const displayTo  = ocpToHandle.get(targetOcp) || rawTo;
-
-          if (calleeWs && calleeWs.readyState === 1) {
-            // Callee is online
-            send(calleeWs, {
-              type: 'incoming_call', callId,
-              from: callerMeta.number, fromName: callerMeta.name
-            });
-            sendPushNotification(targetOcp, {
-              type: 'incoming_call', callId,
-              from: callerMeta.number, fromName: callerMeta.name,
-              handle: displayTo
-            });
-            send(ws, { type: 'ringing', callId, to: displayTo, mode: 'direct' });
-            callLog.set(callId, { from: callerMeta.number, to: targetOcp, startedAt: Date.now(), mode: 'direct' });
-            log('☎', `handle call ${callerMeta.number} → ${displayTo} (${callId})`);
-
-          } else if (pushSubscriptions.get(targetOcp)?.length) {
-            // Callee offline but has push subs — same push-wakeup path as PATH A-OFFLINE
-            pendingCalls.set(callId, {
-              from: callerMeta.number, fromName: callerMeta.name,
-              to: targetOcp, callerWs: ws, createdAt: Date.now(), via: 'push_wakeup'
-            });
-            console.log('[PUSH] no live socket — sending push to handle', displayTo);
-            await sendPushNotification(targetOcp, {
-              type: 'incoming_call', callId,
-              from: callerMeta.number, fromName: callerMeta.name, handle: displayTo
-            });
-            send(ws, { type: 'ringing', callId, to: displayTo, mode: 'direct' });
-            callLog.set(callId, { from: callerMeta.number, to: targetOcp, startedAt: Date.now(), mode: 'direct' });
-            setTimeout(() => {
-              if (!pendingCalls.has(callId)) return;
-              pendingCalls.delete(callId); callLog.delete(callId);
-              send(ws, { type: 'hangup', callId, reason: 'no_answer' });
-            }, 45000);
-            log('☎', `push-wakeup handle call ${callerMeta.number} → ${displayTo} (${callId})`);
-
-          } else {
-            send(ws, { type: 'unavailable', number: displayTo });
-          }
-          break; // PATH 0 handled — exit case "call"
-        }
-      }
-
       const to = normalizeNumber(msg.to);
       if (!to) {
         return send(ws, { type: "error", reason: "invalid_number" });
@@ -1335,37 +1205,6 @@ async function handle(ws, msg) {
         send(ws, { type: "ringing", callId, to, mode: "direct" });
         callLog.set(callId, { from: callerMeta.number, to, startedAt: Date.now(), mode: "direct" });
         log("☎", `direct call ${callerMeta.number} → ${to} (${callId})`);
-
-      // ── PATH A-OFFLINE: known OCP user, tab closed — wake via push ──
-      } else if (numberToOcp.has(to) && pushSubscriptions.get(numberToOcp.get(to))?.length) {
-        pendingCalls.set(callId, {
-          from:      callerMeta.number,
-          fromName:  callerMeta.name,
-          to,
-          callerWs:  ws,
-          createdAt: Date.now(),
-          via:       'push_wakeup'
-        });
-        console.log('[PUSH] no live socket — sending push to', to);
-        await sendPushNotification(to, {
-          type:     'incoming_call',
-          callId,
-          from:     callerMeta.number,
-          fromName: callerMeta.name,
-          handle:   callerMeta.name || callerMeta.number
-        });
-        console.log('[PUSH] sent incoming-call push to', to);
-        send(ws, { type: 'ringing', callId, to, mode: 'direct' });
-        callLog.set(callId, { from: callerMeta.number, to, startedAt: Date.now(), mode: 'direct' });
-        log("☎", `push-wakeup call ${callerMeta.number} → ${to} (${callId})`);
-        // Give callee ~45s to wake, reconnect, and answer before timing out
-        setTimeout(() => {
-          if (!pendingCalls.has(callId)) return;
-          pendingCalls.delete(callId);
-          callLog.delete(callId);
-          send(ws, { type: 'hangup', callId, reason: 'no_answer' });
-          log('!', 'push-wakeup call unanswered (45s):', callId);
-        }, 45000);
 
       // ── PATH B: number not on OpenCall → tiered fallback
       } else {
@@ -1585,26 +1424,12 @@ async function handle(ws, msg) {
 
     // ── HANGUP ────────────────────────────────────────────────
     case "hangup": {
-      const call    = callLog.get(msg.callId);
-      const pending = pendingCalls.get(msg.callId);
+      const call = callLog.get(msg.callId);
 
-      // Direct call: forward to the other party by phone number
       if (msg.with && registry.has(msg.with)) {
         send(registry.get(msg.with), { type: "hangup", callId: msg.callId });
       }
 
-      // Link call: forward to whichever side didn't send this
-      if (pending) {
-        if (pending.callerWs && pending.callerWs !== ws && pending.callerWs.readyState === 1) {
-          send(pending.callerWs, { type: "hangup", callId: msg.callId });
-        }
-        if (pending.relayWs && pending.relayWs !== ws && pending.relayWs.readyState === 1) {
-          send(pending.relayWs, { type: "hangup", callId: msg.callId });
-        }
-        pendingCalls.delete(msg.callId);
-      }
-
-      // Relay call: tell the relay bridge to tear down
       if (call?.relayWs) {
         send(call.relayWs, { type: "relay_hangup", callId: msg.callId });
       }
@@ -1636,9 +1461,7 @@ async function handle(ws, msg) {
     }
 
     // ── JOIN_CALL ─────────────────────────────────────────────
-    // Link callee opens answer page and joins via callId.
-    // Also used by push-woken OCP callees (via:'push_wakeup') who open
-    // /index.html?answer=<callId> and send join_call after re-registering.
+    // Link callee opens answer page and joins via callId
     case 'join_call': {
       const pending = pendingCalls.get(msg.callId);
       if (!pending) {
@@ -1648,25 +1471,6 @@ async function handle(ws, msg) {
       if (!callerWs || callerWs.readyState !== 1) {
         return send(ws, { type: 'error', reason: 'caller_gone' });
       }
-
-      if (pending.via === 'push_wakeup') {
-        // Push-woken path: callee already re-registered with their real number.
-        // Wire them as the peer so ICE/SDP can flow, then deliver incoming_call.
-        // Do NOT overwrite their registry/metadata entry or fire callee_joined —
-        // the normal answer → answered → initWebRTC(true/false) handshake takes over.
-        pending.relayWs   = ws;
-        pending.relayWsId = ws._ocpId;
-        send(ws, {
-          type:     'incoming_call',
-          callId:   msg.callId,
-          from:     pending.from,
-          fromName: pending.fromName
-        });
-        log('✓', 'push-woken callee rejoined — delivering incoming_call:', msg.callId.slice(-6));
-        break;
-      }
-
-      // ── Link-call path ─────────────────────────────────────
       metadata.set(ws, {
         number:        'link:' + msg.callId,
         name:          'Guest',
@@ -1932,158 +1736,38 @@ async function handle(ws, msg) {
       break;
     }
 
-    // ── CLAIM_HANDLE ─────────────────────────────────────────
-    // Client claims a short @handle tied to its OCP identity.
-    // msg: { ocp, handle, sig, public_key? }
-    case 'claim_handle': {
-      const { ocp, handle: rawHandle, sig } = msg;
-      if (!ocp || !rawHandle || !sig) {
-        send(ws, { type: 'handle_error', reason: 'missing_fields' }); break;
-      }
-      // Normalise + validate format: lowercase, [a-z0-9_], 3-20 chars
-      const handle = rawHandle.toLowerCase();
-      if (!/^[a-z0-9_]{3,20}$/.test(handle)) {
-        send(ws, { type: 'handle_error', reason: 'invalid_format' }); break;
-      }
-      // Resolve public key: prefer msg.public_key, fall back to registered meta
-      const senderMeta = metadata.get(ws);
-      const jwk = msg.public_key || senderMeta?.publicKeyJwk;
-      if (!jwk) {
-        send(ws, { type: 'handle_error', reason: 'no_public_key' }); break;
-      }
-      // Verify the signature of "claim:<handle>:<ocp>"
-      const valid = await verifyHandleSig(ocp, handle, sig, jwk);
-      if (!valid) {
-        send(ws, { type: 'handle_error', reason: 'bad_signature' }); break;
-      }
-      // Check if handle is already taken
-      const existing = handles.get(handle);
-      if (existing && existing.ocp !== ocp) {
-        send(ws, { type: 'handle_taken', handle }); break;
-      }
-      // Idempotent: same ocp re-claiming the same handle is fine
-      // Release any previous handle this ocp held
-      const prev = ocpToHandle.get(ocp);
-      if (prev && prev !== handle) handles.delete(prev.toLowerCase());
-      // Store
-      handles.set(handle, { ocp, display: handle, sig, claimedAt: Date.now() });
-      ocpToHandle.set(ocp, handle);
-      send(ws, { type: 'handle_claimed', handle });
-      log('✓', 'handle claimed:', handle, '→', ocp.slice(0, 20) + '…');
-      break;
-    }
-
-    // ── RESOLVE_HANDLE ────────────────────────────────────────
-    // Resolve any handle or OCP-XXXX-XXXX to its ocp address.
-    // msg: { handle }
-    case 'resolve_handle': {
-      const raw = (msg.handle || '').trim();
-      const key = raw.toLowerCase().replace(/^@/, '');
-      const entry = handles.get(key);
-      if (entry) {
-        send(ws, { type: 'handle_resolved', handle: entry.display, ocp: entry.ocp });
-      } else {
-        send(ws, { type: 'handle_not_found', handle: raw });
-      }
-      break;
-    }
-
-    // ── CLAIM_NUMERIC_ID ──────────────────────────────────────
-    // Assign (or return existing) OCP-XXXX-XXXX ID for this ocp address.
-    // msg: { ocp }
-    case 'claim_numeric_id': {
-      const { ocp } = msg;
-      if (!ocp) { send(ws, { type: 'handle_error', reason: 'missing_fields' }); break; }
-      // Return existing if already assigned
-      const existing = ocpToHandle.get(ocp);
-      if (existing && /^OCP-\d{4}-\d{4}$/.test(existing)) {
-        send(ws, { type: 'numeric_id_assigned', id: existing }); break;
-      }
-      // Generate a new unused ID
-      let id;
-      try { id = generateNumericId(); } catch(e) {
-        send(ws, { type: 'handle_error', reason: 'id_exhausted' }); break;
-      }
-      const key = id.toLowerCase();
-      handles.set(key, { ocp, display: id, sig: null, claimedAt: Date.now() });
-      ocpToHandle.set(ocp, id);
-      send(ws, { type: 'numeric_id_assigned', id });
-      log('✓', 'numeric ID assigned:', id, '→', ocp.slice(0, 20) + '…');
-      break;
-    }
-
-    // ── CHAT_MSG ─────────────────────────────────────────────
-    // Route an E2E-encrypted chat message to the recipient.
-    // msg: { to, from, ciphertext, msgId, ts }
+    // ── CHAT_MSG ──────────────────────────────────────────────
+    // OCP-to-OCP text message. Plaintext for now; encryption is the next step.
+    // Route to recipient by ocp_address via ocpRegistry.
     case 'chat_msg': {
-      const { to, from, ciphertext, msgId, ts, kind } = msg;
-      if (!to || !ciphertext || !msgId) break;
-
-      // Reject oversized payloads immediately (large voice clips that exceed the cap)
-      const payloadLen = JSON.stringify(ciphertext).length;
-      if (payloadLen > MAX_CHAT_PAYLOAD_BYTES) {
-        send(ws, { type: 'chat_error', reason: 'payload_too_large', msgId });
-        log('!', `chat_msg rejected (${payloadLen} bytes > cap) from ${(from||'?').slice(0,16)}…`);
-        break;
-      }
-
-      // Resolve recipient ocp address
-      let recipientOcp = null;
-      let recipientWs  = null;
-      if (to.startsWith('ocp:')) {
-        recipientOcp = to;
-        recipientWs  = ocpRegistry.get(to);
-      } else {
-        recipientOcp = resolveToOcp(to);
-        recipientWs  = recipientOcp ? ocpRegistry.get(recipientOcp) : registry.get(to);
-      }
-
       const senderMeta = metadata.get(ws);
-      const fromName   = senderMeta?.name || null;
-      const msgKind    = kind || 'chat';
-
-      if (recipientWs && recipientWs.readyState === 1) {
-        // ── Online: deliver immediately ──────────────────────
-        send(recipientWs, { type: 'chat_msg', from, fromName, ciphertext, msgId,
-                            ts: ts || Date.now(), kind: msgKind });
-        send(ws, { type: 'chat_sent', msgId });
-        log('💬', `${msgKind} ${(from||'?').slice(0,16)}… → ${(to||'?').slice(0,16)}… (live)`);
-      } else if (recipientOcp) {
-        // ── Offline: queue + push ────────────────────────────
-        const inbox = offlineChatInbox.get(recipientOcp) || [];
-        if (inbox.length < OFFLINE_INBOX_MAX) {
-          inbox.push({ from, fromName, ciphertext, msgId, ts: ts || Date.now(), kind: msgKind });
-          offlineChatInbox.set(recipientOcp, inbox);
-        }
-        // Web Push nudge — no plaintext, just a "new message" wake signal
-        const pushPreview = msgKind === 'voice' ? '🎤 Voice message' : 'New message';
-        sendPushNotification(recipientOcp, {
-          type: 'chat_message', from: from || '', fromName: fromName || '',
-          preview: pushPreview
+      if (!senderMeta?.ocpAddress) {
+        return send(ws, { type: 'chat_undelivered', msgId: msg.msgId });
+      }
+      const targetWs = ocpRegistry.get(msg.to);
+      if (targetWs?.readyState === 1) {
+        send(targetWs, {
+          type:  'chat_msg',
+          from:  senderMeta.ocpAddress,
+          text:  msg.text,
+          msgId: msg.msgId,
+          ts:    msg.ts || Date.now()
         });
-        send(ws, { type: 'chat_queued', msgId });
-        log('💬', `${msgKind} queued for offline user ${recipientOcp.slice(0,20)}… (${inbox.length} in inbox)`);
+        send(ws, { type: 'chat_sent', msgId: msg.msgId });
+        log('💬', `chat_msg ${senderMeta.ocpAddress.slice(0, 12)} → ${(msg.to || '').slice(0, 12)}`);
       } else {
-        send(ws, { type: 'chat_undelivered', msgId });
+        send(ws, { type: 'chat_undelivered', msgId: msg.msgId });
+        log('💬', `chat_msg offline: ${(msg.to || '').slice(0, 12)}`);
       }
       break;
     }
 
-    // ── CHAT_DELIVERED ───────────────────────────────────────
-    // Recipient confirms it received and decrypted a chat message.
-    // msg: { to, msgId }  (to = original sender's ocp)
+    // ── CHAT_DELIVERED ────────────────────────────────────────
+    // Recipient acknowledges receipt; pass the double-tick back to sender.
     case 'chat_delivered': {
-      const { to, msgId } = msg;
-      if (!to || !msgId) break;
-      let senderWs = null;
-      if (to.startsWith('ocp:')) {
-        senderWs = ocpRegistry.get(to);
-      } else {
-        const ocp = resolveToOcp(to);
-        senderWs = ocp ? ocpRegistry.get(ocp) : registry.get(to);
-      }
-      if (senderWs && senderWs.readyState === 1) {
-        send(senderWs, { type: 'chat_delivered', msgId });
+      const senderWs = ocpRegistry.get(msg.to);
+      if (senderWs?.readyState === 1) {
+        send(senderWs, { type: 'chat_delivered', msgId: msg.msgId });
       }
       break;
     }
