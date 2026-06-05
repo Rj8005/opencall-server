@@ -665,7 +665,7 @@ const server = http.createServer((req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  WebSocket server
 // ─────────────────────────────────────────────────────────────
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: 1 * 1024 * 1024 }); // 1 MB max frame
 
 wss.on("connection", (ws, req) => {
   const ip = req.socket.remoteAddress;
@@ -1744,17 +1744,32 @@ async function handle(ws, msg) {
       if (!senderMeta?.ocpAddress) {
         return send(ws, { type: 'chat_undelivered', msgId: msg.msgId });
       }
+      // Size cap: voice ~60 s ≤ 500 KB; small files (≤256 KB binary) ≤ 500 KB ciphertext.
+      // Files over 256 KB must go via P2P data channel (dc_signal), not this path.
+      if ((msg.ciphertext || '').length > 500_000) {
+        send(ws, { type: 'chat_undelivered', msgId: msg.msgId, reason: 'clip_too_long' });
+        log('💬', `chat_msg rejected — ciphertext too large (${(msg.ciphertext || '').length} bytes)`);
+        break;
+      }
       const targetWs = ocpRegistry.get(msg.to);
       if (targetWs?.readyState === 1) {
         send(targetWs, {
-          type:  'chat_msg',
-          from:  senderMeta.ocpAddress,
-          text:  msg.text,
-          msgId: msg.msgId,
-          ts:    msg.ts || Date.now()
+          type:       'chat_msg',
+          from:       senderMeta.ocpAddress,
+          ciphertext: msg.ciphertext,
+          iv:         msg.iv,
+          ecdh_pub:   msg.ecdh_pub,
+          kind:       msg.kind,
+          mime:       msg.mime,
+          duration:   msg.duration,
+          filename:   msg.filename,    // file attachments
+          size:       msg.size,
+          text:       msg.text,        // legacy plaintext fallback
+          msgId:      msg.msgId,
+          ts:         msg.ts || Date.now()
         });
         send(ws, { type: 'chat_sent', msgId: msg.msgId });
-        log('💬', `chat_msg ${senderMeta.ocpAddress.slice(0, 12)} → ${(msg.to || '').slice(0, 12)}`);
+        log('💬', `chat_msg ${senderMeta.ocpAddress.slice(0, 12)} → ${(msg.to || '').slice(0, 12)}${msg.kind === 'voice' ? ' [voice]' : ''}`);
       } else {
         send(ws, { type: 'chat_undelivered', msgId: msg.msgId });
         log('💬', `chat_msg offline: ${(msg.to || '').slice(0, 12)}`);
@@ -1768,6 +1783,19 @@ async function handle(ws, msg) {
       const senderWs = ocpRegistry.get(msg.to);
       if (senderWs?.readyState === 1) {
         send(senderWs, { type: 'chat_delivered', msgId: msg.msgId });
+      }
+      break;
+    }
+
+    // ── DC_SIGNAL ─────────────────────────────────────────────
+    // P2P data-channel signaling for large file transfers.
+    // Routes by OCP address; server only relays, never inspects payload.
+    case 'dc_signal': {
+      const dcMeta = metadata.get(ws);
+      if (!dcMeta?.ocpAddress) break;
+      const dcTarget = ocpRegistry.get(msg.to);
+      if (dcTarget?.readyState === 1) {
+        send(dcTarget, { ...msg, from: dcMeta.ocpAddress, to: undefined });
       }
       break;
     }

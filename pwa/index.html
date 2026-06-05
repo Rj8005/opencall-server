@@ -604,6 +604,76 @@ input::placeholder { color: var(--text-muted); }
 }
 .send:hover    { background: rgba(29,158,117,0.25); }
 .send:disabled { opacity: 0.4; cursor: default; }
+.mic-btn {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--bg-field); border: 1px solid var(--border);
+  color: var(--text-muted); font-size: 16px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: background 0.15s, color 0.15s;
+  user-select: none; -webkit-user-select: none; touch-action: none;
+}
+.mic-btn.recording {
+  background: rgba(220,50,50,0.18); border-color: rgba(220,50,50,0.6);
+  color: #e05050;
+}
+.rec-indicator {
+  font-size: 11px; color: #e05050; min-width: 34px;
+  display: none; align-items: center; flex-shrink: 0;
+}
+.rec-indicator.active { display: flex; }
+.voice-player {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 0; min-width: 160px;
+}
+.voice-play-btn {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--green-dim); border: 1px solid var(--green-border);
+  color: var(--green); font-size: 13px; cursor: pointer; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.voice-progress {
+  flex: 1; height: 3px; border-radius: 2px;
+  background: var(--border); cursor: pointer; position: relative;
+}
+.voice-progress-fill {
+  height: 100%; background: var(--green); width: 0%;
+  border-radius: 2px; transition: width 0.1s linear;
+}
+.voice-dur { font-size: 11px; color: var(--text-muted); min-width: 28px; text-align: right; }
+/* ── File bubble ── */
+.attach-btn {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--bg-field); border: 1px solid var(--border);
+  color: var(--text-muted); font-size: 18px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: background 0.15s;
+}
+.attach-btn:hover { background: rgba(255,255,255,0.06); }
+.file-bubble {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; min-width: 180px; max-width: 260px;
+}
+.file-icon  { font-size: 22px; flex-shrink: 0; line-height: 1; }
+.file-meta  { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.file-name  { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-size  { font-size: 10px; color: var(--text-muted); }
+.file-thumb {
+  width: 100%; max-height: 160px; object-fit: cover;
+  border-radius: 6px; margin-bottom: 4px; display: block;
+}
+.file-dl {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  background: var(--green-dim); border: 1px solid var(--green-border);
+  color: var(--green); font-size: 14px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.file-dl:disabled { opacity: 0.35; cursor: default; }
+.ft-progress {
+  height: 3px; border-radius: 2px; background: var(--border);
+  margin-top: 3px; overflow: hidden;
+}
+.ft-progress-fill { height: 100%; background: var(--green); width: 0%; border-radius: 2px; transition: width 0.15s; }
+.ft-pct { font-size: 10px; color: var(--text-muted); }
 
 /* ── OCP Inbox + OCP Chat overlays ── */
 #ocpInbox, #ocpChat {
@@ -1074,7 +1144,11 @@ input::placeholder { color: var(--text-muted); }
     <li class="sysmsg">Today</li>
   </ul>
   <div class="composer">
+    <input type="file" id="ocpFileInput" style="display:none" accept="*/*">
+    <button id="ocpAttach" class="attach-btn" title="Attach file" type="button">📎</button>
     <textarea id="ocpInput" class="field" placeholder="Message…" rows="1"></textarea>
+    <span id="ocpRecStatus" class="rec-indicator" aria-live="polite"></span>
+    <button id="ocpMic" class="mic-btn" title="Hold to record voice note" type="button">🎙</button>
     <button id="ocpSend" class="send" title="Send">&#8593;</button>
   </div>
 </section>
@@ -2096,6 +2170,99 @@ function clearRatchetSession(withNumber) {
   console.log('[OCP] Ratchet session cleared for', withNumber);
 }
 
+// ── Chat Encryption (ECDH P-256 + AES-256-GCM) ───────────
+// Static shared key per peer pair, derived via ECDH.
+// ECDH pub keys are announced in DHT and piggybacked on every chat_msg.
+// Local ocp_threads stores plaintext; only the wire payload is ciphertext.
+
+const chatKeyCache     = new Map(); // peerOcp → CryptoKey (AES-256-GCM)
+const peerEcdhPubCache = new Map(); // peerOcp → base64-raw P-256 pub
+
+// Generate a P-256 ECDH key pair and attach to identity if absent.
+// Persists the updated identity to localStorage immediately.
+async function ensureChatEcdhKeys(identity) {
+  if (identity.ecdhPub && identity.ecdhPrivJwk) return;
+  const kp = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey', 'deriveBits']
+  );
+  const rawPub  = await crypto.subtle.exportKey('raw', kp.publicKey);
+  const privJwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  identity.ecdhPub     = btoa(String.fromCharCode(...new Uint8Array(rawPub)));
+  identity.ecdhPrivJwk = privJwk;
+  localStorage.setItem(OCP_KEY_STORAGE, JSON.stringify(identity));
+  console.log('[CHAT] P-256 ECDH key pair generated');
+}
+
+// Derive the shared AES-256-GCM key for this peer from their P-256 pub + my priv.
+async function deriveChatKey(peerEcdhPubB64) {
+  const peerRaw = Uint8Array.from(atob(peerEcdhPubB64), c => c.charCodeAt(0));
+  const [peerPub, myPriv] = await Promise.all([
+    crypto.subtle.importKey('raw', peerRaw,
+      { name: 'ECDH', namedCurve: 'P-256' }, false, []),
+    crypto.subtle.importKey('jwk', myIdentity.ecdhPrivJwk,
+      { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits'])
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'ECDH', public: peerPub }, myPriv, 256
+  );
+  const km = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32),
+      info: new TextEncoder().encode('OCP-chat-v1') },
+    km, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+
+// Return the cached AES key for peerOcp, deriving it if needed.
+// Returns null if the peer's ECDH pub key is not yet known.
+async function getChatKey(peerOcp) {
+  if (chatKeyCache.has(peerOcp)) return chatKeyCache.get(peerOcp);
+  let pub = peerEcdhPubCache.get(peerOcp);
+  if (!pub) {
+    pub = await dhtLookup('ecdh:' + peerOcp);
+    if (!pub) return null;
+    peerEcdhPubCache.set(peerOcp, pub);
+  }
+  const key = await deriveChatKey(pub);
+  chatKeyCache.set(peerOcp, key);
+  return key;
+}
+
+// Encrypt plaintext for peerOcp. Returns { ciphertext, iv } (both base64) or null.
+async function chatEncrypt(peerOcp, plaintext) {
+  const key = await getChatKey(peerOcp);
+  if (!key) return null;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext)
+  );
+  // Chunked base64 — spread fails for large buffers (>65 535 bytes e.g. voice clips)
+  const ctBytes = new Uint8Array(ct);
+  let ctBin = '';
+  for (let i = 0; i < ctBytes.length; i += 8192) {
+    ctBin += String.fromCharCode(...ctBytes.subarray(i, i + 8192));
+  }
+  return {
+    ciphertext: btoa(ctBin),
+    iv:         btoa(String.fromCharCode(...new Uint8Array(iv)))
+  };
+}
+
+// Decrypt an inbound encrypted chat message. Returns plaintext string or null.
+async function chatDecrypt(peerOcp, ct_b64, iv_b64) {
+  const key = await getChatKey(peerOcp);
+  if (!key) return null;
+  try {
+    const ct = Uint8Array.from(atob(ct_b64), c => c.charCodeAt(0));
+    const iv = Uint8Array.from(atob(iv_b64), c => c.charCodeAt(0));
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return new TextDecoder().decode(pt);
+  } catch(e) {
+    console.warn('[CHAT] Decrypt failed:', e.message);
+    return null;
+  }
+}
+
 // ── Missed Call Landing Page ──────────────────────────────
 
 function checkMissedCallRoute() {
@@ -2244,6 +2411,7 @@ let _iceWasConnected  = false;
 let _backupNudgeShown = false;   // show the banner at most once per session
 getOrCreateIdentity().then(async id => {
   myIdentity = id;
+  await ensureChatEcdhKeys(myIdentity);  // generate P-256 ECDH keys if this is a new/old identity
   // Update all OCP address display elements (register + dialer screens)
   const reg    = document.getElementById('ocp-address-display');
   const dialer = document.getElementById('ocp-addr-dialer');
@@ -2253,7 +2421,9 @@ getOrCreateIdentity().then(async id => {
   initDHT().then(() => {
     if (dhtReady && myIdentity) {
       dhtAnnounce(myIdentity.ocp_address, 'online');
-      console.log('[DHT] Identity announced');
+      if (myIdentity.ecdhPub)
+        dhtAnnounce('ecdh:' + myIdentity.ocp_address, myIdentity.ecdhPub);
+      console.log('[DHT] Identity + ECDH pub announced');
     }
   });
   checkMissedCallRoute();
@@ -3547,13 +3717,60 @@ async function onMessage(msg) {
     case 'chat_msg': {
       const peerOcp = msg.from;
       const inMsgId = msg.msgId || ('ocp_in_' + Date.now());
-      const t = findOrCreateOcpThread(peerOcp, msg.fromName || peerOcp?.slice(0, 20));
-      t.messages.push({ dir: 'in', text: msg.text, msgId: inMsgId, ts: msg.ts || Date.now(), status: 'received' });
-      saveOcpThreads();
-      if (ocpChatVisible() && activeOcpThread?.peerOcp === peerOcp) {
-        addOcpBubble('in', msg.text, inMsgId);
+      // Cache sender's ECDH pub if piggybacked; invalidate derived key so we re-derive
+      if (msg.ecdh_pub && msg.ecdh_pub !== peerEcdhPubCache.get(peerOcp)) {
+        peerEcdhPubCache.set(peerOcp, msg.ecdh_pub);
+        chatKeyCache.delete(peerOcp);
+      }
+      const isVoice = (msg.kind === 'voice');
+      const isFile  = (msg.kind === 'file');
+      let text, audioData, fileData;
+      if (msg.ciphertext && msg.iv) {
+        const decrypted = await chatDecrypt(peerOcp, msg.ciphertext, msg.iv);
+        if (decrypted !== null) {
+          if (isVoice) audioData = decrypted;
+          else if (isFile) fileData = decrypted;
+          else text = decrypted;
+        } else {
+          text = '⚠️ unable to decrypt';
+        }
       } else {
-        showOcpBadge(peerOcp, msg.text);
+        text = msg.text || '';
+      }
+      const t = findOrCreateOcpThread(peerOcp, msg.fromName || peerOcp?.slice(0, 20));
+      if (isVoice && audioData) {
+        const mime = msg.mime || 'audio/webm';
+        const dur  = msg.duration || 0;
+        t.messages.push({ dir: 'in', kind: 'voice', audioData, mime, duration: dur, msgId: inMsgId, ts: msg.ts || Date.now(), status: 'received' });
+        saveOcpThreads();
+        if (ocpChatVisible() && activeOcpThread?.peerOcp === peerOcp) {
+          addVoiceBubble('in', audioData, mime, dur, inMsgId);
+        } else {
+          showOcpBadge(peerOcp, '🎙 Voice message');
+        }
+      } else if (isFile && fileData) {
+        const mime = msg.mime || 'application/octet-stream';
+        const binary = atob(fileData);
+        const bytes  = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: mime });
+        const url  = URL.createObjectURL(blob);
+        _ftBlobUrls.set(inMsgId, url);
+        t.messages.push({ dir:'in', kind:'file', fileData, filename:msg.filename, mime, size:msg.size, msgId:inMsgId, ts:msg.ts || Date.now(), status:'received' });
+        saveOcpThreads();
+        if (ocpChatVisible() && activeOcpThread?.peerOcp === peerOcp) {
+          addFileBubble('in', msg.filename, mime, msg.size, inMsgId, null, url, false);
+        } else {
+          showOcpBadge(peerOcp, '📎 ' + (msg.filename || 'File'));
+        }
+      } else {
+        t.messages.push({ dir: 'in', text: text || '', msgId: inMsgId, ts: msg.ts || Date.now(), status: 'received' });
+        saveOcpThreads();
+        if (ocpChatVisible() && activeOcpThread?.peerOcp === peerOcp) {
+          addOcpBubble('in', text || '', inMsgId);
+        } else {
+          showOcpBadge(peerOcp, text || '');
+        }
       }
       // Send delivery acknowledgement back to sender
       if (msg.msgId) wsSend({ type: 'chat_delivered', to: peerOcp, msgId: msg.msgId });
@@ -3571,7 +3788,15 @@ async function onMessage(msg) {
     }
 
     case 'chat_undelivered': {
+      if (msg.reason === 'clip_too_long') {
+        toast('File too large — use a file under 256 KB');
+      }
       updateOcpStatus(msg.msgId, 'pending');
+      break;
+    }
+
+    case 'dc_signal': {
+      _handleDcSignal(msg);
       break;
     }
 
@@ -5727,7 +5952,26 @@ function openOcpChat(peerOcp, peerName) {
   const ul = document.getElementById('ocpMsgs');
   ul.innerHTML = '<li class="sysmsg">Today</li>';
   const t = findOrCreateOcpThread(peerOcp, peerName);
-  t.messages.forEach(m => addOcpBubble(m.dir, m.text, m.msgId, m.status));
+  t.messages.forEach(m => {
+    if (m.kind === 'voice') {
+      addVoiceBubble(m.dir, m.audioData, m.mime, m.duration, m.msgId, m.status);
+    } else if (m.kind === 'file') {
+      // Restore blob URL from stored fileData if available; large P2P files are not stored
+      let url = _ftBlobUrls.get(m.msgId) || null;
+      if (!url && m.fileData) {
+        try {
+          const bin = atob(m.fileData);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          url = URL.createObjectURL(new Blob([bytes], { type: m.mime || 'application/octet-stream' }));
+          _ftBlobUrls.set(m.msgId, url);
+        } catch {}
+      }
+      addFileBubble(m.dir, m.filename, m.mime, m.size, m.msgId, m.status, url, !!m.large);
+    } else {
+      addOcpBubble(m.dir, m.text, m.msgId, m.status);
+    }
+  });
 
   // Clear unread dot if present
   const btn = document.getElementById('btn-sms-invite');
@@ -5785,20 +6029,476 @@ function updateOcpStatus(msgId, status) {
   }
 }
 
+// ── Voice notes ───────────────────────────────────────────────
+let _voiceRecorder  = null;
+let _voiceChunks    = [];
+let _voiceStartMs   = 0;
+let _voiceTimerID   = null;
+
+function _bestMime() {
+  for (const t of ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4']) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return '';
+}
+
+async function startVoiceRecord() {
+  if (_voiceRecorder) return;
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); }
+  catch { toast('Microphone access denied'); return; }
+
+  _voiceChunks  = [];
+  _voiceStartMs = Date.now();
+  const mime    = _bestMime();
+  _voiceRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+
+  _voiceRecorder.ondataavailable = e => { if (e.data.size) _voiceChunks.push(e.data); };
+  _voiceRecorder.onstop = () => {
+    stream.getTracks().forEach(tr => tr.stop());
+    const blob = new Blob(_voiceChunks, { type: _voiceRecorder.mimeType || 'audio/webm' });
+    const dur  = Math.max(1, Math.round((Date.now() - _voiceStartMs) / 1000));
+    _onVoiceBlob(blob, dur);
+  };
+  _voiceRecorder.start(100);
+
+  const mic = document.getElementById('ocpMic');
+  const rec = document.getElementById('ocpRecStatus');
+  if (mic) mic.classList.add('recording');
+  if (rec) rec.classList.add('active');
+
+  _voiceTimerID = setInterval(() => {
+    const elapsed = Math.round((Date.now() - _voiceStartMs) / 1000);
+    if (rec) rec.textContent = '⏺ ' + elapsed + 's';
+    if (elapsed >= 60) stopVoiceRecord();
+  }, 500);
+}
+
+function stopVoiceRecord() {
+  if (!_voiceRecorder || _voiceRecorder.state === 'inactive') return;
+  clearInterval(_voiceTimerID); _voiceTimerID = null;
+  _voiceRecorder.stop();
+  _voiceRecorder = null;
+  const mic = document.getElementById('ocpMic');
+  const rec = document.getElementById('ocpRecStatus');
+  if (mic) mic.classList.remove('recording');
+  if (rec) { rec.classList.remove('active'); rec.textContent = ''; }
+}
+
+async function _onVoiceBlob(blob, duration) {
+  if (!activeOcpThread) return;
+  const toOcp = activeOcpThread.peerOcp;
+  const msgId = 'ocp_' + Date.now();
+  const ts    = Date.now();
+  const mime  = blob.type || 'audio/webm';
+
+  // Blob → base64 (chunked to avoid spread stack overflow)
+  const ab    = await blob.arrayBuffer();
+  const bytes = new Uint8Array(ab);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  const audioData = btoa(bin);
+
+  addVoiceBubble('out', audioData, mime, duration, msgId, 'sending');
+  const t = findOrCreateOcpThread(toOcp, activeOcpThread.peerName);
+  t.messages.push({ dir: 'out', kind: 'voice', audioData, mime, duration, msgId, ts, status: 'sending' });
+  saveOcpThreads();
+
+  if (!ws || ws.readyState !== 1) { updateOcpStatus(msgId, 'pending'); return; }
+
+  const enc = await chatEncrypt(toOcp, audioData);
+  if (!enc) { updateOcpStatus(msgId, 'pending'); toast('Encryption key not available yet'); return; }
+
+  wsSend({
+    type:       'chat_msg',
+    kind:       'voice',
+    to:         toOcp,
+    ciphertext: enc.ciphertext,
+    iv:         enc.iv,
+    ecdh_pub:   myIdentity?.ecdhPub,
+    mime,
+    duration,
+    msgId,
+    ts
+  });
+}
+
+function _fmtDur(secs) {
+  const s = Math.max(0, Math.round(secs));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+function addVoiceBubble(dir, audioData, mime, duration, msgId, status) {
+  const ul = document.getElementById('ocpMsgs');
+  if (!ul) return;
+  const li = document.createElement('li');
+  li.className     = 'bubble ' + dir;
+  li.dataset.msgId = msgId;
+  const d   = new Date();
+  const ts  = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+  const st  = status || 'sent';
+  const txt = st === 'delivered' ? '✓✓' : st === 'pending' ? '⏱' : '✓';
+  const tickHtml = dir === 'out'
+    ? `<span class="tick st-${st}" id="ocp_tick_${msgId}">${txt}</span>`
+    : '';
+  const fmtD = _fmtDur(duration || 0);
+
+  li.innerHTML = `<div class="voice-player">
+    <button class="voice-play-btn" type="button" title="Play">&#9654;</button>
+    <div class="voice-progress"><div class="voice-progress-fill"></div></div>
+    <span class="voice-dur">${escHtml(fmtD)}</span>
+  </div><div class="meta"><span class="ts">${ts}</span>${tickHtml}</div>`;
+
+  let audio = null;
+  const playBtn = li.querySelector('.voice-play-btn');
+  const fill    = li.querySelector('.voice-progress-fill');
+  const durEl   = li.querySelector('.voice-dur');
+
+  playBtn.addEventListener('click', () => {
+    if (!audio) {
+      // Lazy-create blob URL on first tap to avoid holding many revokable URLs
+      const bytes = new Uint8Array(atob(audioData).split('').map(c => c.charCodeAt(0)));
+      const url   = URL.createObjectURL(new Blob([bytes], { type: mime || 'audio/webm' }));
+      audio = new Audio(url);
+      audio.addEventListener('timeupdate', () => {
+        if (!audio.duration) return;
+        const pct = audio.currentTime / audio.duration * 100;
+        fill.style.width = pct + '%';
+        durEl.textContent = _fmtDur(Math.ceil(audio.duration - audio.currentTime));
+      });
+      audio.addEventListener('ended', () => {
+        playBtn.innerHTML = '&#9654;';
+        fill.style.width  = '0%';
+        durEl.textContent = fmtD;
+      });
+    }
+    if (audio.paused) { audio.play(); playBtn.innerHTML = '&#9646;&#9646;'; }
+    else              { audio.pause(); playBtn.innerHTML = '&#9654;'; }
+  });
+
+  ul.appendChild(li);
+  ul.scrollTop = ul.scrollHeight;
+}
+
+// ── File transfer ─────────────────────────────────────────────
+const _ftPeers    = new Map(); // transferId → {pc, dc, msgId, peerOcp}
+const _ftRecv     = new Map(); // transferId → {peerOcp, filename, mime, size, total, chunks, received, msgId}
+const _ftBlobUrls = new Map(); // msgId → blobUrl (ephemeral; cleared on reload)
+
+const FILE_SMALL  = 256 * 1024; // bytes — threshold between inline and P2P
+const FILE_CHUNK  = 64  * 1024; // P2P chunk size
+
+function _attachFile() {
+  document.getElementById('ocpFileInput').click();
+}
+
+async function _handleFileSelect(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file || !activeOcpThread) return;
+  if (file.size < FILE_SMALL) await _sendSmallFile(file);
+  else                        await _sendLargeFile(file);
+}
+
+async function _sendSmallFile(file) {
+  const toOcp = activeOcpThread.peerOcp;
+  const msgId = 'ocp_' + Date.now();
+  const ts    = Date.now();
+
+  const ab    = await file.arrayBuffer();
+  const bytes = new Uint8Array(ab);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  const b64 = btoa(bin);
+
+  const url = URL.createObjectURL(file);
+  _ftBlobUrls.set(msgId, url);
+  addFileBubble('out', file.name, file.type, file.size, msgId, 'sending', url, false);
+
+  const t = findOrCreateOcpThread(toOcp, activeOcpThread.peerName);
+  t.messages.push({ dir:'out', kind:'file', fileData:b64, filename:file.name, mime:file.type, size:file.size, msgId, ts, status:'sending' });
+  saveOcpThreads();
+
+  if (!ws || ws.readyState !== 1) { updateOcpStatus(msgId, 'pending'); return; }
+
+  const enc = await chatEncrypt(toOcp, b64);
+  if (!enc) { updateOcpStatus(msgId, 'pending'); toast('Encryption key not available yet'); return; }
+
+  wsSend({
+    type:       'chat_msg',
+    kind:       'file',
+    to:         toOcp,
+    ciphertext: enc.ciphertext,
+    iv:         enc.iv,
+    ecdh_pub:   myIdentity?.ecdhPub,
+    filename:   file.name,
+    mime:       file.type,
+    size:       file.size,
+    msgId,
+    ts
+  });
+}
+
+async function _sendLargeFile(file) {
+  if (!ws || ws.readyState !== 1) {
+    toast('Peer must be online for files over 256 KB');
+    return;
+  }
+  const toOcp      = activeOcpThread.peerOcp;
+  const transferId = 'ft_' + Date.now();
+  const msgId      = 'ocp_' + Date.now();
+  const ts         = Date.now();
+
+  addFileBubble('out', file.name, file.type, file.size, msgId, 'sending', null, true);
+  const t = findOrCreateOcpThread(toOcp, activeOcpThread.peerName);
+  t.messages.push({ dir:'out', kind:'file', large:true, filename:file.name, mime:file.type, size:file.size, msgId, ts, status:'sending' });
+  saveOcpThreads();
+
+  const ftPc = new RTCPeerConnection(RTC_CFG);
+  const ftDc = ftPc.createDataChannel('ft', { ordered: true });
+  _ftPeers.set(transferId, { pc: ftPc, dc: ftDc, msgId, peerOcp: toOcp, file });
+
+  ftPc.onicecandidate = e => {
+    if (e.candidate) {
+      wsSend({ type:'dc_signal', kind:'ice', to:toOcp, transferId, candidate:e.candidate.toJSON() });
+    }
+  };
+  ftDc.onopen  = () => _streamFileDc(ftDc, toOcp, file, transferId, msgId);
+  ftDc.onerror = () => { toast('File transfer failed'); updateOcpStatus(msgId, 'pending'); };
+
+  const offer = await ftPc.createOffer();
+  await ftPc.setLocalDescription(offer);
+  wsSend({ type:'dc_signal', kind:'offer', to:toOcp, transferId,
+           sdp:offer.sdp, filename:file.name, mime:file.type, size:file.size, msgId, ts });
+}
+
+async function _streamFileDc(dc, peerOcp, file, transferId, msgId) {
+  const ab    = await file.arrayBuffer();
+  const bytes = new Uint8Array(ab);
+  const total = Math.ceil(bytes.length / FILE_CHUNK);
+
+  for (let i = 0; i < total; i++) {
+    const slice = bytes.subarray(i * FILE_CHUNK, (i + 1) * FILE_CHUNK);
+    let bin = '';
+    for (let j = 0; j < slice.length; j += 8192) {
+      bin += String.fromCharCode(...slice.subarray(j, j + 8192));
+    }
+    const b64 = btoa(bin);
+    const enc = await chatEncrypt(peerOcp, b64);
+    if (!enc) break;
+    while (dc.bufferedAmount > 2 * 1024 * 1024) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+    dc.send(JSON.stringify({ i, n:total, ct:enc.ciphertext, iv:enc.iv, id:transferId }));
+    _updateFileProgress(msgId, (i + 1) / total);
+  }
+  dc.close();
+  updateOcpStatus(msgId, 'sent');
+  _ftPeers.delete(transferId);
+}
+
+async function _handleDcSignal(msg) {
+  const peerOcp    = msg.from;
+  const transferId = msg.transferId;
+  if (!peerOcp || !transferId) return;
+
+  if (msg.kind === 'offer') {
+    const msgId = 'ocp_in_' + Date.now();
+    const ftPc  = new RTCPeerConnection(RTC_CFG);
+    _ftPeers.set(transferId, { pc: ftPc, msgId, peerOcp });
+
+    ftPc.onicecandidate = e => {
+      if (e.candidate) {
+        wsSend({ type:'dc_signal', kind:'ice', to:peerOcp, transferId, candidate:e.candidate.toJSON() });
+      }
+    };
+
+    ftPc.ondatachannel = e => {
+      const ftDc = e.channel;
+      if (_ftPeers.has(transferId)) _ftPeers.get(transferId).dc = ftDc;
+      _ftRecv.set(transferId, { peerOcp, filename:msg.filename, mime:msg.mime,
+        size:msg.size, total:0, chunks:{}, received:0, msgId });
+
+      const t = findOrCreateOcpThread(peerOcp, peerOcp?.slice(0, 20));
+      t.messages.push({ dir:'in', kind:'file', large:true, filename:msg.filename,
+        mime:msg.mime, size:msg.size, msgId, ts:Date.now(), status:'received' });
+      saveOcpThreads();
+      if (ocpChatVisible() && activeOcpThread?.peerOcp === peerOcp) {
+        addFileBubble('in', msg.filename, msg.mime, msg.size, msgId, null, null, true);
+      } else {
+        showOcpBadge(peerOcp, '📎 ' + (msg.filename || 'File'));
+      }
+
+      ftDc.onmessage = async evt => {
+        const chunk = JSON.parse(evt.data);
+        const recv  = _ftRecv.get(transferId);
+        if (!recv) return;
+        const plain = await chatDecrypt(peerOcp, chunk.ct, chunk.iv);
+        if (plain !== null) {
+          recv.chunks[chunk.i] = plain;
+          recv.received++;
+          if (chunk.n > recv.total) recv.total = chunk.n;
+          _updateFileProgress(recv.msgId, recv.received / recv.total);
+          if (recv.received >= recv.total) _assembleFile(transferId);
+        }
+      };
+    };
+
+    await ftPc.setRemoteDescription({ type:'offer', sdp:msg.sdp });
+    const answer = await ftPc.createAnswer();
+    await ftPc.setLocalDescription(answer);
+    wsSend({ type:'dc_signal', kind:'answer', to:peerOcp, transferId, sdp:answer.sdp });
+    return;
+  }
+
+  if (msg.kind === 'answer') {
+    const entry = _ftPeers.get(transferId);
+    if (entry?.pc) await entry.pc.setRemoteDescription({ type:'answer', sdp:msg.sdp });
+    return;
+  }
+
+  if (msg.kind === 'ice') {
+    const entry = _ftPeers.get(transferId);
+    if (entry?.pc) {
+      try { await entry.pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); }
+      catch(e) { console.warn('[FT] addIceCandidate:', e.message); }
+    }
+    return;
+  }
+}
+
+function _assembleFile(transferId) {
+  const recv = _ftRecv.get(transferId);
+  if (!recv) return;
+  let combined = '';
+  for (let i = 0; i < recv.total; i++) combined += (recv.chunks[i] || '');
+  const binary = atob(combined);
+  const bytes  = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: recv.mime || 'application/octet-stream' });
+  const url  = URL.createObjectURL(blob);
+  _ftBlobUrls.set(recv.msgId, url);
+  _updateFileBubbleReady(recv.msgId, url, recv.mime);
+  updateOcpStatus(recv.msgId, 'received');
+  _ftRecv.delete(transferId);
+  _ftPeers.delete(transferId);
+}
+
+function _updateFileProgress(msgId, frac) {
+  const li = document.querySelector(`li[data-msg-id="${CSS.escape(msgId)}"]`);
+  if (!li) return;
+  const fill = li.querySelector('.ft-progress-fill');
+  const pct  = li.querySelector('.ft-pct');
+  if (fill) fill.style.width = Math.round(frac * 100) + '%';
+  if (pct)  pct.textContent  = Math.round(frac * 100) + '%';
+}
+
+function _updateFileBubbleReady(msgId, url, mime) {
+  const li = document.querySelector(`li[data-msg-id="${CSS.escape(msgId)}"]`);
+  if (!li) return;
+  const prog = li.querySelector('.ft-progress');
+  const pct  = li.querySelector('.ft-pct');
+  if (prog) prog.style.display = 'none';
+  if (pct)  pct.textContent    = '';
+  const dlBtn = li.querySelector('.file-dl');
+  if (dlBtn) { dlBtn.disabled = false; dlBtn.dataset.url = url; }
+  if ((mime || '').startsWith('image/')) {
+    let thumb = li.querySelector('.file-thumb');
+    if (!thumb) {
+      thumb = document.createElement('img');
+      thumb.className = 'file-thumb';
+      li.insertBefore(thumb, li.firstChild);
+    }
+    thumb.src = url;
+  }
+}
+
+function addFileBubble(dir, filename, mime, size, msgId, status, url, isLarge) {
+  const ul = document.getElementById('ocpMsgs');
+  if (!ul) return;
+  const li = document.createElement('li');
+  li.className     = 'bubble ' + dir;
+  li.dataset.msgId = msgId;
+  li.dataset.mime  = mime || '';
+  const d  = new Date();
+  const ts = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+  const st   = status || 'sent';
+  const tick = st === 'delivered' ? '✓✓' : st === 'pending' ? '⏱' : '✓';
+  const tickHtml = dir === 'out'
+    ? `<span class="tick st-${st}" id="ocp_tick_${msgId}">${tick}</span>`
+    : '';
+  const isImg = (mime || '').startsWith('image/');
+  const icon  = _fileIcon(mime);
+  const thumbHtml = (isImg && url)
+    ? `<img class="file-thumb" src="${escHtml(url)}" alt="${escHtml(filename || '')}">`
+    : '';
+  const progressHtml = isLarge
+    ? `<div class="ft-progress"><div class="ft-progress-fill"></div></div><span class="ft-pct">0%</span>`
+    : '';
+
+  li.innerHTML = `${thumbHtml}<div class="file-bubble">
+    <span class="file-icon">${icon}</span>
+    <div class="file-meta">
+      <span class="file-name" title="${escHtml(filename || '')}">${escHtml(filename || 'file')}</span>
+      <span class="file-size">${escHtml(_fmtSize(size || 0))}</span>
+      ${progressHtml}
+    </div>
+    <button class="file-dl" type="button" title="Download"
+      data-url="${escHtml(url || '')}" data-name="${escHtml(filename || 'file')}"
+      ${url ? '' : 'disabled'}>&#8595;</button>
+  </div><div class="meta"><span class="ts">${ts}</span>${tickHtml}</div>`;
+
+  li.querySelector('.file-dl').addEventListener('click', function() {
+    const u = this.dataset.url;
+    if (u) _downloadBlob(u, this.dataset.name);
+  });
+
+  ul.appendChild(li);
+  ul.scrollTop = ul.scrollHeight;
+}
+
+function _fileIcon(mime) {
+  if (!mime) return '📄';
+  if (mime.startsWith('image/'))                          return '🖼';
+  if (mime.startsWith('video/'))                          return '🎬';
+  if (mime.startsWith('audio/'))                          return '🎵';
+  if (mime.includes('pdf'))                               return '📕';
+  if (mime.includes('zip') || mime.includes('compress'))  return '🗜';
+  if (mime.includes('word') || mime.includes('document')) return '📝';
+  if (mime.includes('sheet') || mime.includes('excel'))   return '📊';
+  return '📄';
+}
+
+function _fmtSize(bytes) {
+  if (bytes < 1024)        return bytes + ' B';
+  if (bytes < 1048576)     return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function _downloadBlob(url, name) {
+  const a = document.createElement('a');
+  a.href = url; a.download = name || 'file'; a.click();
+}
+
 // ── Send ──────────────────────────────────────────────────────
-function sendChat() {
+async function sendChat() {
   const input = document.getElementById('ocpInput');
   const text  = input.value.trim();
   if (!text || !activeOcpThread) return;
 
   const msgId = 'ocp_' + Date.now();
   const ts    = Date.now();
+  const toOcp = activeOcpThread.peerOcp;
 
   addOcpBubble('out', text, msgId, 'sending');
   input.value = '';
   input.style.height = 'auto';
 
-  const t = findOrCreateOcpThread(activeOcpThread.peerOcp, activeOcpThread.peerName);
+  const t = findOrCreateOcpThread(toOcp, activeOcpThread.peerName);
   t.messages.push({ dir: 'out', text, msgId, ts, status: 'sending' });
   saveOcpThreads();
 
@@ -5806,7 +6506,22 @@ function sendChat() {
     updateOcpStatus(msgId, 'pending');
     return;
   }
-  wsSend({ type: 'chat_msg', to: activeOcpThread.peerOcp, text, msgId, ts });
+
+  const enc = await chatEncrypt(toOcp, text);
+  if (!enc) {
+    updateOcpStatus(msgId, 'pending');
+    toast('Encryption key not available yet — ask peer to send a message first');
+    return;
+  }
+  wsSend({
+    type:       'chat_msg',
+    to:         toOcp,
+    ciphertext: enc.ciphertext,
+    iv:         enc.iv,
+    ecdh_pub:   myIdentity?.ecdhPub,
+    msgId,
+    ts
+  });
 }
 
 (function wireOcpComposer() {
@@ -5820,6 +6535,23 @@ function sendChat() {
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
   });
   btn.addEventListener('click', sendChat);
+
+  // Attach file
+  const attachBtn = document.getElementById('ocpAttach');
+  const fileInput = document.getElementById('ocpFileInput');
+  if (attachBtn) attachBtn.addEventListener('click', _attachFile);
+  if (fileInput) fileInput.addEventListener('change', _handleFileSelect);
+
+  // Mic — hold to record
+  const mic = document.getElementById('ocpMic');
+  if (mic) {
+    mic.addEventListener('mousedown',   e => { e.preventDefault(); startVoiceRecord(); });
+    mic.addEventListener('touchstart',  e => { e.preventDefault(); startVoiceRecord(); }, { passive: false });
+    mic.addEventListener('mouseup',     () => stopVoiceRecord());
+    mic.addEventListener('mouseleave',  () => stopVoiceRecord());
+    mic.addEventListener('touchend',    () => stopVoiceRecord());
+    mic.addEventListener('touchcancel', () => stopVoiceRecord());
+  }
 })();
 
 // ── Unread badge on envelope icon ────────────────────────────
