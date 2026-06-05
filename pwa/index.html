@@ -2781,28 +2781,35 @@ function renderContacts() {
       const safeLabel  = label.replace(/'/g,"\\'");
       const safeTarget = target.replace(/'/g,"\\'");
       const safeOcp    = (c.ocp || '').replace(/'/g,"\\'");
-      const chatBtn = c.ocp
+      // OCP contacts: row tap → chat; non-OCP: row tap → call
+      const rowClick = c.ocp
+        ? `openOcpChat('${safeOcp}','${safeLabel}')`
+        : `callContact('${safeTarget}','${safeLabel}')`;
+      const rightIcon = c.ocp
+        // OCP contact: show both a chat indicator and a call button
         ? `<div onclick="openOcpChat('${safeOcp}','${safeLabel}')"
-               title="Chat" style="color:var(--blue);font-size:15px;opacity:.65;
-                                   cursor:pointer;padding:4px 2px;flex-shrink:0">&#128172;</div>`
-        : '';
-      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;
-               border-radius:var(--radius-sm);border-bottom:1px solid var(--border)">
+               title="Message" style="color:var(--blue);font-size:14px;opacity:.7;
+                                      cursor:pointer;padding:4px 3px;flex-shrink:0">&#128172;</div>
+           <div onclick="event.stopPropagation();callContact('${safeTarget}','${safeLabel}')"
+                title="Call" style="color:var(--blue);font-size:18px;opacity:.7;
+                                    cursor:pointer;flex-shrink:0">&#9742;</div>`
+        // Phone-only contact: just a call button
+        : `<div style="color:var(--blue);font-size:18px;opacity:.7;flex-shrink:0">&#9742;</div>`;
+      return `<div onclick="${rowClick}"
+        style="display:flex;align-items:center;gap:10px;padding:8px 10px;
+               border-radius:var(--radius-sm);border-bottom:1px solid var(--border);cursor:pointer">
         <div style="width:32px;height:32px;border-radius:50%;background:var(--blue-dim);
                     border:1px solid var(--blue-border);display:flex;align-items:center;
                     justify-content:center;font-size:13px;color:var(--blue);flex-shrink:0">
           ${label[0].toUpperCase()}
         </div>
-        <div style="flex:1;min-width:0;cursor:pointer"
-             onclick="callContact('${safeTarget}','${safeLabel}')">
+        <div style="flex:1;min-width:0">
           <div style="font-family:'Syne',sans-serif;font-size:13px;color:#c8dff5;
                       white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
           ${sub ? `<div style="font-family:'DM Mono',monospace;font-size:10px;
                                color:var(--text-secondary)">${sub}</div>` : ''}
         </div>
-        ${chatBtn}
-        <div onclick="callContact('${safeTarget}','${safeLabel}')"
-             style="color:var(--blue);font-size:18px;opacity:.7;cursor:pointer;flex-shrink:0">&#9742;</div>
+        ${rightIcon}
       </div>`;
     }).join('');
 }
@@ -2812,6 +2819,43 @@ function callContact(target, label) {
   document.getElementById('inp-dial').value = target;
   syncDialDisplay();
   doCall();
+}
+
+// Open an OCP chat from the dialer's current input value (✉ button).
+// Handles @handle, OCP-XXXX-XXXX, ocp:... addresses, and plain phone numbers.
+async function openChatFromDialer() {
+  const raw = (document.getElementById('inp-dial')?.value || '').trim();
+
+  if (!raw || raw === '+') {
+    toast('Enter a handle, OCP code, or number first');
+    return;
+  }
+  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
+
+  // Bare ocp: address — open directly
+  if (raw.startsWith('ocp:')) {
+    const ct = loadContacts().find(c => c.ocp === raw);
+    openOcpChat(raw, ct?.name || raw.slice(0, 24) + '…');
+    return;
+  }
+
+  // @handle or OCP-XXXX-XXXX — resolve to ocp key first
+  if (raw.startsWith('@') || /^OCP-\d{4}-\d{4}$/i.test(raw)) {
+    const stripped = raw.startsWith('@') ? raw.slice(1) : raw;
+    _pendingHandleCall = { handle: raw, action: 'chat' };
+    showDialHint('Looking up ' + raw + '…', false);
+    await wsSend({ type: 'resolve_handle', handle: stripped });
+    return;
+  }
+
+  // Phone number — look up in local contacts for a cached ocp key
+  const ct = loadContacts().find(c => c.number === raw || c.number === raw.replace(/\s/g,''));
+  if (ct?.ocp) {
+    openOcpChat(ct.ocp, ct.name || raw);
+    return;
+  }
+
+  toast('OCP chat needs an @handle or OCP code — plain numbers work after a call');
 }
 
 function _initInstallHint() {
@@ -3436,6 +3480,7 @@ document.getElementById('btn-backspace')?.addEventListener('click', () => {
   doDelete(); syncDialDisplay();
 });
 document.getElementById('btn-call')?.addEventListener('click', doCall);
+document.getElementById('btn-sms-invite')?.addEventListener('click', openChatFromDialer);
 
 // ── screen router ──────────────────────────────────────────
 function show(id) {
@@ -3744,6 +3789,11 @@ async function onMessage(msg) {
         const addInp = document.getElementById('inp-add-contact');
         if (addInp) addInp.value = '';
         toast(('@' + msg.handle || msg.ocp) + ' added to contacts');
+      } else if (_p.action === 'chat') {
+        // Resolved from openChatFromDialer — save contact then open thread
+        saveContact({ ocp: msg.ocp, name: msg.handle || msg.ocp, number: null });
+        showDialHint('Enter number to call', false);
+        openOcpChat(msg.ocp, msg.handle || msg.ocp);
       } else {
         // Route call to the resolved OCP address
         _callPeerName = msg.handle || null;
