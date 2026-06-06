@@ -59,6 +59,8 @@ const wsToRelay         = new Map(); // ws               → relay ocp_address
 const sentAnswerLinks   = new Set(); // callId           → de-duplicate answer_link_ready
 const smsThreads        = new Map(); // `${relayId}|${cNumber}` → { aWs, aOcp, cNumber, relayId, threadId, lastActive }
 const ocpRegistry       = new Map(); // ocp_address             → WebSocket (online OCP users, for chat routing)
+const offlineChatQueue  = new Map(); // ocp_address             → [{from,ciphertext,iv,ecdh_pub,kind,mime,duration,filename,size,msgId,ts}]
+const OFFLINE_QUEUE_MAX = 100;       // max queued messages per recipient (drops oldest)
 const pendingUSSD       = new Map(); // callee           → { callId, from, channel }
 const simBankRegistry   = new Map(); // country          → WebSocket
 const telegramRegistry  = new Map(); // phone            → telegram chat ID
@@ -1055,6 +1057,19 @@ async function handle(ws, msg) {
 
       send(ws, { type: "registered", number, name });
       log("✓", "registered", number, `(${name})`);
+
+      // Flush any messages queued while this user was offline
+      if (msg.from) {
+        const queued = offlineChatQueue.get(msg.from);
+        if (queued?.length) {
+          queued.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+          for (const qmsg of queued) {
+            send(ws, { type: 'chat_msg', ...qmsg });
+          }
+          offlineChatQueue.delete(msg.from);
+          log('💬', `flushed ${queued.length} queued msg(s) to ${msg.from.slice(0, 20)}`);
+        }
+      }
       break;
     }
 
@@ -1771,8 +1786,35 @@ async function handle(ws, msg) {
         send(ws, { type: 'chat_sent', msgId: msg.msgId });
         log('💬', `chat_msg ${senderMeta.ocpAddress.slice(0, 12)} → ${(msg.to || '').slice(0, 12)}${msg.kind === 'voice' ? ' [voice]' : ''}`);
       } else {
-        send(ws, { type: 'chat_undelivered', msgId: msg.msgId });
-        log('💬', `chat_msg offline: ${(msg.to || '').slice(0, 12)}`);
+        // Recipient offline — store ciphertext only; server cannot read content
+        const toOcp = msg.to;
+        if (toOcp) {
+          if (!offlineChatQueue.has(toOcp)) offlineChatQueue.set(toOcp, []);
+          const q = offlineChatQueue.get(toOcp);
+          q.push({
+            from:       senderMeta.ocpAddress,
+            ciphertext: msg.ciphertext,
+            iv:         msg.iv,
+            ecdh_pub:   msg.ecdh_pub,
+            kind:       msg.kind,
+            mime:       msg.mime,
+            duration:   msg.duration,
+            filename:   msg.filename,
+            size:       msg.size,
+            msgId:      msg.msgId,
+            ts:         msg.ts || Date.now()
+          });
+          // Cap per-recipient queue — drop oldest entries
+          if (q.length > OFFLINE_QUEUE_MAX) q.splice(0, q.length - OFFLINE_QUEUE_MAX);
+        }
+        send(ws, { type: 'chat_queued', msgId: msg.msgId });
+        log('💬', `chat_msg queued (offline): ${(toOcp || '').slice(0, 20)}`);
+        // Wake recipient via push if they have a subscription
+        sendPushNotification(toOcp, {
+          type:     'chat_message',
+          from:     senderMeta.ocpAddress,
+          fromName: senderMeta.name || ''
+        });
       }
       break;
     }

@@ -3822,6 +3822,12 @@ async function onMessage(msg) {
       break;
     }
 
+    case 'chat_queued': {
+      // Server stored the message; recipient is offline and will receive it on reconnect
+      updateOcpStatus(msg.msgId, 'queued');
+      break;
+    }
+
     case 'chat_delivered': {
       updateOcpStatus(msg.msgId, 'delivered');
       break;
@@ -6182,7 +6188,7 @@ function addOcpBubble(dir, text, msgId, status) {
 function updateOcpStatus(msgId, status) {
   const tick = document.getElementById('ocp_tick_' + msgId);
   if (tick) {
-    const txt = status === 'delivered' ? '✓✓' : status === 'pending' ? '⏱' : '✓';
+    const txt = status === 'delivered' ? '✓✓' : status === 'pending' ? '⏱' : status === 'queued' ? '⏳' : '✓';
     tick.className   = 'tick st-' + status;
     tick.textContent = txt;
   }
