@@ -5099,6 +5099,9 @@ async function doHangup() {
 
   if (currentCallId) {
     await wsSend({ type: 'call.hangup', callId: currentCallId });
+  } else if (callWith) {
+    // Direct OCP call: server routes hangup by phone number via registry
+    await wsSend({ type: 'hangup', with: callWith, callId });
   }
   currentCallId = null;
 
@@ -5199,6 +5202,9 @@ function endCall() {
   const screenBtn = document.getElementById('btn-screen');
   if (vidBtn)    { vidBtn.innerHTML    = '&#127909;'; vidBtn.classList.remove('active'); }
   if (screenBtn) { screenBtn.innerHTML = '&#128253;'; screenBtn.classList.remove('active'); }
+  isMuted = false;
+  const muteBtn = document.getElementById('btn-mute');
+  if (muteBtn) { muteBtn.innerHTML = '&#127908;'; muteBtn.classList.remove('active'); }
   const badge = document.getElementById('screen-share-badge');
   const rv    = document.getElementById('remote-video');
   if (badge) badge.style.display = 'none';
@@ -5289,9 +5295,17 @@ async function initWebRTC(isCaller) {
     if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
       _iceWasConnected = true;
     }
-    if (pc?.iceConnectionState === 'failed' || pc?.iceConnectionState === 'disconnected') {
+    if (pc?.iceConnectionState === 'failed') {
       toast('Connection lost');
       endCall();
+    } else if (pc?.iceConnectionState === 'disconnected') {
+      // 'disconnected' is transient (can self-recover); wait before tearing down
+      setTimeout(() => {
+        if (pc?.iceConnectionState === 'disconnected' || pc?.iceConnectionState === 'failed') {
+          toast('Connection lost');
+          endCall();
+        }
+      }, 5000);
     }
   };
 
@@ -5446,7 +5460,7 @@ async function toggleVideo() {
     if (sender) await sender.replaceTrack(null);
     document.getElementById('local-video').srcObject = null;
     updateVideoLayout(false);
-    await sendReOffer();
+    if (pc.signalingState === 'stable') await sendReOffer();
   } else {
     try {
       videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -5463,7 +5477,7 @@ async function toggleVideo() {
       pc.addTrack(vTrack, videoStream);
     }
     updateVideoLayout(true);
-    await sendReOffer();
+    if (pc.signalingState === 'stable') await sendReOffer();
   }
   const btn = document.getElementById('btn-video');
   btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
@@ -6207,7 +6221,10 @@ async function startVoiceRecord() {
   _voiceRecorder.ondataavailable = e => { if (e.data.size) _voiceChunks.push(e.data); };
   _voiceRecorder.onstop = () => {
     stream.getTracks().forEach(tr => tr.stop());
-    const blob = new Blob(_voiceChunks, { type: _voiceRecorder.mimeType || 'audio/webm' });
+    if (!_voiceChunks.length) { toast('Recording failed'); return; }
+    // _voiceRecorder is null by the time onstop fires (nulled in stopVoiceRecord);
+    // use the closure variable `mime` instead.
+    const blob = new Blob(_voiceChunks, { type: mime || 'audio/webm' });
     const dur  = Math.max(1, Math.round((Date.now() - _voiceStartMs) / 1000));
     _onVoiceBlob(blob, dur);
   };
