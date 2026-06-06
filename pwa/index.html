@@ -2237,9 +2237,11 @@ async function deriveChatKey(peerEcdhPubB64) {
 // Returns null if the peer's ECDH pub key is not yet known.
 async function getChatKey(peerOcp) {
   if (chatKeyCache.has(peerOcp)) return chatKeyCache.get(peerOcp);
+  if (!myIdentity?.ecdhPrivJwk) return null;
   let pub = peerEcdhPubCache.get(peerOcp);
   if (!pub) {
     pub = await dhtLookup('ecdh:' + peerOcp);
+    if (!pub) pub = await dhtLookup('ecdh:' + peerOcp); // retry once on timeout
     if (!pub) return null;
     peerEcdhPubCache.set(peerOcp, pub);
   }
@@ -3125,7 +3127,8 @@ async function onMessage(msg) {
       if (myIdentity && dhtReady) {
         dhtAnnounce(myIdentity.ocp_address, 'online');
         if (myNumber) dhtAnnouncePhone(myNumber, myIdentity.ocp_address);
-        console.log('[DHT] Announced identity and phone');
+        if (myIdentity.ecdhPub) dhtAnnounce('ecdh:' + myIdentity.ocp_address, myIdentity.ecdhPub);
+        console.log('[DHT] Announced identity, phone, and ECDH pub');
       }
       // Missed call flow: skip dialer, call back the original caller immediately
       if (window._pendingMissedCallback) {
@@ -3809,6 +3812,8 @@ async function onMessage(msg) {
       }
       // Send delivery acknowledgement back to sender
       if (msg.msgId) wsSend({ type: 'chat_delivered', to: peerOcp, msgId: msg.msgId });
+      // Flush any messages we queued while waiting for this peer's ECDH pub
+      if (msg.ecdh_pub) _flushChatQueue(peerOcp);
       break;
     }
 
@@ -3824,9 +3829,37 @@ async function onMessage(msg) {
 
     case 'chat_undelivered': {
       if (msg.reason === 'clip_too_long') {
-        toast('File too large — use a file under 256 KB');
+        toast('Voice/file too large for this channel');
       }
       updateOcpStatus(msg.msgId, 'pending');
+      break;
+    }
+
+    // Peer asks for our ECDH pub so they can encrypt their first message to us.
+    // Reply with our pub so they can flush their queue; also flush ours.
+    case 'chat_key_request': {
+      const ckPeer = msg.from;
+      if (!ckPeer) break;
+      if (msg.ecdh_pub && msg.ecdh_pub !== peerEcdhPubCache.get(ckPeer)) {
+        peerEcdhPubCache.set(ckPeer, msg.ecdh_pub);
+        chatKeyCache.delete(ckPeer);
+      }
+      if (myIdentity?.ecdhPub) {
+        wsSend({ type: 'chat_key_response', to: ckPeer, ecdh_pub: myIdentity.ecdhPub });
+      }
+      _flushChatQueue(ckPeer);
+      break;
+    }
+
+    // Peer replied to our key request — cache their pub and flush queued messages.
+    case 'chat_key_response': {
+      const ckPeer = msg.from;
+      if (!ckPeer || !msg.ecdh_pub) break;
+      if (msg.ecdh_pub !== peerEcdhPubCache.get(ckPeer)) {
+        peerEcdhPubCache.set(ckPeer, msg.ecdh_pub);
+        chatKeyCache.delete(ckPeer);
+      }
+      _flushChatQueue(ckPeer);
       break;
     }
 
@@ -6168,7 +6201,8 @@ async function startVoiceRecord() {
   _voiceChunks  = [];
   _voiceStartMs = Date.now();
   const mime    = _bestMime();
-  _voiceRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+  // 16 kbps keeps a 60-second clip under ~120 KB raw → ciphertext ~210 KB, well within the 500 KB server cap
+  _voiceRecorder = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 16000 } : { audioBitsPerSecond: 16000 });
 
   _voiceRecorder.ondataavailable = e => { if (e.data.size) _voiceChunks.push(e.data); };
   _voiceRecorder.onstop = () => {
@@ -6226,7 +6260,18 @@ async function _onVoiceBlob(blob, duration) {
   if (!ws || ws.readyState !== 1) { updateOcpStatus(msgId, 'pending'); return; }
 
   const enc = await chatEncrypt(toOcp, audioData);
-  if (!enc) { updateOcpStatus(msgId, 'pending'); toast('Encryption key not available yet'); return; }
+  if (!enc) {
+    updateOcpStatus(msgId, 'pending');
+    wsSend({ type: 'chat_key_request', to: toOcp, ecdh_pub: myIdentity?.ecdhPub });
+    toast('Key not ready — text your contact first, then resend');
+    return;
+  }
+  // Guard: reject if ciphertext would exceed the server's 500 KB hard limit
+  if (enc.ciphertext.length > 480_000) {
+    updateOcpStatus(msgId, 'pending');
+    toast('Voice note too long — keep under ~30 seconds');
+    return;
+  }
 
   wsSend({
     type:       'chat_msg',
@@ -6343,7 +6388,12 @@ async function _sendSmallFile(file) {
   if (!ws || ws.readyState !== 1) { updateOcpStatus(msgId, 'pending'); return; }
 
   const enc = await chatEncrypt(toOcp, b64);
-  if (!enc) { updateOcpStatus(msgId, 'pending'); toast('Encryption key not available yet'); return; }
+  if (!enc) {
+    updateOcpStatus(msgId, 'pending');
+    wsSend({ type: 'chat_key_request', to: toOcp, ecdh_pub: myIdentity?.ecdhPub });
+    toast('Key not ready — text your contact first, then resend');
+    return;
+  }
 
   wsSend({
     type:       'chat_msg',
@@ -6601,6 +6651,23 @@ function _downloadBlob(url, name) {
   a.href = url; a.download = name || 'file'; a.click();
 }
 
+// ── Chat queue — messages pending peer ECDH key ───────────────
+const _chatPendingQueue = new Map(); // peerOcp → [{msgId, text, ts}]
+
+async function _flushChatQueue(peerOcp) {
+  const queue = _chatPendingQueue.get(peerOcp);
+  if (!queue?.length) return;
+  _chatPendingQueue.delete(peerOcp);
+  if (!ws || ws.readyState !== 1) return;
+  for (const { msgId, text, ts } of queue) {
+    const enc = await chatEncrypt(peerOcp, text);
+    if (!enc) { updateOcpStatus(msgId, 'pending'); continue; }
+    updateOcpStatus(msgId, 'sending');
+    wsSend({ type: 'chat_msg', to: peerOcp, ciphertext: enc.ciphertext, iv: enc.iv,
+             ecdh_pub: myIdentity?.ecdhPub, msgId, ts });
+  }
+}
+
 // ── Send ──────────────────────────────────────────────────────
 async function sendChat() {
   const input = document.getElementById('ocpInput');
@@ -6626,8 +6693,13 @@ async function sendChat() {
 
   const enc = await chatEncrypt(toOcp, text);
   if (!enc) {
+    // Peer's ECDH pub not yet known — queue the message and trigger key exchange.
+    // Message auto-sends the moment we receive their pub (via piggyback or key_response).
+    if (!_chatPendingQueue.has(toOcp)) _chatPendingQueue.set(toOcp, []);
+    _chatPendingQueue.get(toOcp).push({ msgId, text, ts });
     updateOcpStatus(msgId, 'pending');
-    toast('Encryption key not available yet — ask peer to send a message first');
+    wsSend({ type: 'chat_key_request', to: toOcp, ecdh_pub: myIdentity?.ecdhPub });
+    toast('Connecting… message will send automatically');
     return;
   }
   wsSend({

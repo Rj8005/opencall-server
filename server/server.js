@@ -665,7 +665,7 @@ const server = http.createServer((req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  WebSocket server
 // ─────────────────────────────────────────────────────────────
-const wss = new WebSocketServer({ server, maxPayload: 1 * 1024 * 1024 }); // 1 MB max frame
+const wss = new WebSocketServer({ server, maxPayload: 2 * 1024 * 1024 }); // 2 MB backstop — real limit enforced in handler
 
 wss.on("connection", (ws, req) => {
   const ip = req.socket.remoteAddress;
@@ -1796,6 +1796,19 @@ async function handle(ws, msg) {
       const dcTarget = ocpRegistry.get(msg.to);
       if (dcTarget?.readyState === 1) {
         send(dcTarget, { ...msg, from: dcMeta.ocpAddress, to: undefined });
+      }
+      break;
+    }
+
+    // ── CHAT_KEY_REQUEST / CHAT_KEY_RESPONSE ──────────────────
+    // Pure relay — lets two peers exchange ECDH pubs before the first message.
+    case 'chat_key_request':
+    case 'chat_key_response': {
+      const ckMeta = metadata.get(ws);
+      if (!ckMeta?.ocpAddress) break;
+      const ckTarget = ocpRegistry.get(msg.to);
+      if (ckTarget?.readyState === 1) {
+        send(ckTarget, { ...msg, from: ckMeta.ocpAddress, to: undefined });
       }
       break;
     }
