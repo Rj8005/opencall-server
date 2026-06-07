@@ -1001,9 +1001,10 @@ async function handle(ws, msg) {
           console.log('[SDP_OFFER] unexpected role:', role, '— ignoring');
         }
       } else {
-        // Direct OCP-to-OCP path: no pendingCall entry, route by msg.to number
-        const from     = metadata.get(ws)?.number || null;
-        const targetWs = msg.to ? registry.get(msg.to) : null;
+        // Direct path: route by phone number (registry) or OCP address (ocpRegistry)
+        const senderMeta = metadata.get(ws);
+        const from       = senderMeta?.ocpAddress || senderMeta?.number || null;
+        const targetWs   = msg.to ? (registry.get(msg.to) || ocpRegistry.get(msg.to)) : null;
         if (targetWs?.readyState === 1) {
           targetWs.send(JSON.stringify({ type: 'sdp_offer', from, sdp: msg.sdp }));
           console.log('[SDP_OFFER] ✅ direct', from, '→', msg.to);
@@ -1032,9 +1033,10 @@ async function handle(ws, msg) {
           console.log('[SDP_ANSWER] unexpected role:', role, '— ignoring');
         }
       } else {
-        // Direct OCP-to-OCP path: no pendingCall entry, route by msg.to number
-        const from     = metadata.get(ws)?.number || null;
-        const targetWs = msg.to ? registry.get(msg.to) : null;
+        // Direct path: route by phone number (registry) or OCP address (ocpRegistry)
+        const senderMeta = metadata.get(ws);
+        const from       = senderMeta?.ocpAddress || senderMeta?.number || null;
+        const targetWs   = msg.to ? (registry.get(msg.to) || ocpRegistry.get(msg.to)) : null;
         if (targetWs?.readyState === 1) {
           targetWs.send(JSON.stringify({ type: 'sdp_answer', from, sdp: msg.sdp }));
           console.log('[SDP_ANSWER] ✅ direct', from, '→', msg.to);
@@ -1070,9 +1072,10 @@ async function handle(ws, msg) {
           console.log('[ICE] unknown role for ws, callId:', msg.callId?.slice(-6));
         }
       } else {
-        // Direct OCP-to-OCP path: no pendingCall entry, route by msg.to number
-        const from     = metadata.get(ws)?.number || null;
-        const targetWs = msg.to ? registry.get(msg.to) : null;
+        // Direct path: route by phone number (registry) or OCP address (ocpRegistry)
+        const senderMeta = metadata.get(ws);
+        const from       = senderMeta?.ocpAddress || senderMeta?.number || null;
+        const targetWs   = msg.to ? (registry.get(msg.to) || ocpRegistry.get(msg.to)) : null;
         if (targetWs?.readyState === 1) {
           targetWs.send(JSON.stringify({ type: 'ice', from, candidate: msg.candidate }));
         } else {
@@ -1264,6 +1267,27 @@ async function handle(ws, msg) {
       const callerMeta = metadata.get(ws);
       if (!callerMeta?.number) {
         return send(ws, { type: "error", reason: "not_registered" });
+      }
+
+      // ── OCP-to-OCP direct call ─────────────────────────────
+      if (typeof msg.to === 'string' && msg.to.startsWith('ocp:')) {
+        const calleeWs = ocpRegistry.get(msg.to);
+        if (!calleeWs || calleeWs.readyState !== 1) {
+          return send(ws, { type: 'unavailable', number: msg.to });
+        }
+        const ocpCallId = makeCallId();
+        const callerOcp = callerMeta.ocpAddress || callerMeta.number;
+        send(calleeWs, {
+          type:     'incoming_call',
+          callId:   ocpCallId,
+          from:     callerOcp,
+          fromName: callerMeta.name,
+          fromOcp:  callerMeta.ocpAddress || null
+        });
+        send(ws, { type: 'ringing', callId: ocpCallId, to: msg.to, mode: 'direct' });
+        callLog.set(ocpCallId, { from: callerOcp, to: msg.to, startedAt: Date.now(), mode: 'direct' });
+        log('☎', `OCP call ${callerOcp.slice(0, 16)} → ${msg.to.slice(0, 16)} (${ocpCallId})`);
+        break;
       }
 
       const to = normalizeNumber(msg.to);
@@ -1490,7 +1514,8 @@ async function handle(ws, msg) {
 
     // ── ANSWER ────────────────────────────────────────────────
     case "answer": {
-      const callerWs = registry.get(msg.from);
+      const callerWs = registry.get(msg.from)
+                    || (msg.from?.startsWith('ocp:') ? ocpRegistry.get(msg.from) : null);
       if (!callerWs) return send(ws, { type: "error", reason: "caller_gone" });
 
       send(callerWs, { type: "answered", callId: msg.callId });
@@ -1512,7 +1537,8 @@ async function handle(ws, msg) {
 
     // ── REJECT ────────────────────────────────────────────────
     case "reject": {
-      const callerWs = registry.get(msg.from);
+      const callerWs = registry.get(msg.from)
+                    || (msg.from?.startsWith('ocp:') ? ocpRegistry.get(msg.from) : null);
       if (callerWs) send(callerWs, { type: "rejected", callId: msg.callId });
       callLog.delete(msg.callId);
       log("✗", "rejected:", msg.callId);
@@ -1523,8 +1549,9 @@ async function handle(ws, msg) {
     case "hangup": {
       const call = callLog.get(msg.callId);
 
-      if (msg.with && registry.has(msg.with)) {
-        send(registry.get(msg.with), { type: "hangup", callId: msg.callId });
+      if (msg.with) {
+        const hangupTarget = registry.get(msg.with) || ocpRegistry.get(msg.with);
+        if (hangupTarget) send(hangupTarget, { type: "hangup", callId: msg.callId });
       }
 
       if (call?.relayWs) {

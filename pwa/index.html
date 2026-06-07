@@ -5268,6 +5268,16 @@ async function doCall() {
   await wsSend({ type: 'call', to, country: window._selectedCountry || null });
 }
 
+// ── OCP-to-OCP call ────────────────────────────────────────
+async function callWithOcp(ocp, name) {
+  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
+  callWith = ocp;
+  showCallingScreen(name || ocp.slice(4, 20));
+  setConnectionStatus('routing');
+  await initRatchetSession(ocp);
+  await wsSend({ type: 'call', to: ocp });
+}
+
 // ── answer / decline ───────────────────────────────────────
 async function doAnswer() {
   stopRingtone();
@@ -6079,7 +6089,7 @@ function _contactAct(i, action) {
   if (!c) return;
   if (action === 'call') {
     if (c.ocp) {
-      openOcpChat(c.ocp, c.name || c.ocp.slice(0, 20));
+      callWithOcp(c.ocp, c.name || c.ocp.slice(4, 20));
     } else if (c.number) {
       const inp = document.getElementById('inp-dial');
       if (inp) { inp.value = c.number; syncDialDisplay(); }
