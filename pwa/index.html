@@ -728,6 +728,86 @@ input::placeholder { color: var(--text-muted); }
   padding: 48px 24px; text-align: center;
   color: var(--text-muted); font-size: 13px; line-height: 1.6;
 }
+/* ── Contacts / Recent Calls ───────────────────────────── */
+.contacts-section { margin-top: 14px; }
+.contacts-header {
+  font-size: 11px; letter-spacing: 0.6px; color: var(--text-secondary);
+  text-transform: uppercase; margin-bottom: 6px;
+  font-family: 'DM Mono', monospace;
+}
+.contact-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid rgba(99,180,255,.06);
+}
+.contact-row:last-child { border-bottom: none; }
+.contact-avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(99,180,255,.10); color: var(--blue);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 14px; flex-shrink: 0;
+}
+.contact-info { flex: 1; min-width: 0; cursor: pointer; }
+.contact-name {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.contact-sub {
+  font-size: 11px; color: var(--text-secondary);
+  font-family: 'DM Mono', monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.contact-actions { display: flex; gap: 5px; flex-shrink: 0; }
+.contact-btn {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: rgba(99,180,255,.07); border: 1px solid rgba(99,180,255,.15);
+  color: var(--blue); font-size: 13px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.contact-btn:hover { background: rgba(99,180,255,.17); }
+.contact-btn-msg {
+  color: #c8f55a; background: rgba(200,245,90,.06);
+  border-color: rgba(200,245,90,.18);
+}
+.contact-empty {
+  color: var(--text-secondary); font-size: 12px;
+  text-align: center; padding: 10px 0;
+  font-family: 'DM Mono', monospace;
+}
+/* ── Handle / Code layer ───────────────────────────────── */
+.ocp-code-row {
+  margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.ocp-code-val {
+  font-family:'DM Mono',monospace; font-size:13px; font-weight:700;
+  color:#c8f55a; letter-spacing:0.5px;
+}
+.ocp-handle-val {
+  font-family:'DM Mono',monospace; font-size:12px; color:var(--blue);
+}
+.handle-claim-row {
+  display:flex; gap:6px; margin-top:8px;
+}
+.handle-inp {
+  flex:1; padding:7px 10px; background:rgba(99,180,255,.06);
+  border:1px solid rgba(99,180,255,.18); border-radius:8px;
+  color:var(--text); font-family:'DM Mono',monospace; font-size:12px;
+  outline:none;
+}
+.handle-inp:focus { border-color:rgba(99,180,255,.45); }
+.handle-btn {
+  padding:7px 13px; background:rgba(99,180,255,.1);
+  border:1px solid rgba(99,180,255,.25); border-radius:8px;
+  color:var(--blue); font-size:12px; font-weight:700; cursor:pointer;
+  white-space:nowrap;
+}
+.handle-btn:hover { background:rgba(99,180,255,.2); }
+.handle-btn:disabled { opacity:.45; cursor:default; }
+.qr-btn {
+  padding:4px 9px; background:rgba(200,245,90,.08);
+  border:1px solid rgba(200,245,90,.2); border-radius:6px;
+  color:#c8f55a; font-size:11px; cursor:pointer;
+}
+.qr-btn:hover { background:rgba(200,245,90,.16); }
 </style>
 </head>
 <body>
@@ -870,6 +950,39 @@ input::placeholder { color: var(--text-muted); }
         <span id="ocp-addr-dialer">ocp:loading...</span>
         <span class="copy-btn" onclick="copyOCPAddress()">copy</span>
       </div>
+      <!-- OCP code (numeric id) + QR -->
+      <div class="ocp-code-row">
+        <span style="font-size:11px;color:var(--text-secondary)">Your code:</span>
+        <span id="my-ocp-code" class="ocp-code-val">…</span>
+        <button class="qr-btn" onclick="_showMyCodeQR()" title="Show QR">&#9638; QR</button>
+      </div>
+      <!-- Handle: show if claimed, else show claim form -->
+      <div id="handle-display" style="display:none;margin-top:6px;">
+        <span style="font-size:11px;color:var(--text-secondary)">Handle:</span>
+        <span id="my-handle-text" class="ocp-handle-val" style="margin-left:6px;"></span>
+      </div>
+      <div id="handle-claim-form">
+        <div class="handle-claim-row">
+          <input id="inp-claim-handle" class="handle-inp"
+                 placeholder="@yourchoice  (3-20 chars)"
+                 maxlength="21"
+                 onkeydown="if(event.key==='Enter')claimHandle()">
+          <button id="btn-claim-handle" class="handle-btn" onclick="claimHandle()">Claim</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Find / add by handle or OCP code -->
+    <div class="card" style="margin-top:8px;">
+      <div class="card-label">Find by handle or code</div>
+      <div class="handle-claim-row">
+        <input id="inp-add-handle" class="handle-inp"
+               placeholder="@handle or OCP-XXXX-XXXX"
+               onkeydown="if(event.key==='Enter')addByHandle()">
+        <button class="handle-btn" onclick="addByHandle()">Add</button>
+      </div>
+      <div id="add-handle-status" style="font-size:11px;color:var(--text-secondary);
+           font-family:'DM Mono',monospace;margin-top:4px;min-height:16px;"></div>
     </div>
 
     <div class="dial-display">
@@ -920,6 +1033,12 @@ input::placeholder { color: var(--text-muted); }
                      color:var(--blue);font-weight:700;font-size:12px;cursor:pointer">
         Enable call alerts
       </button>
+    </div>
+
+    <!-- Recent Calls / Contacts -->
+    <div class="contacts-section">
+      <div class="contacts-header">Recent Calls</div>
+      <div id="contacts-list"><div class="contact-empty">No recent calls yet</div></div>
     </div>
 
     <div class="status-footer">
@@ -2599,6 +2718,11 @@ let relayCallActive      = false;
 let micStream            = null;
 let audioSendInterval    = null;
 let currentCallId        = null;
+let myHandle             = null; // @claimed handle, stored in localStorage 'ocp_handle'
+let myNumericId          = null; // OCP-XXXX-XXXX, stored in localStorage 'ocp_numeric_id'
+let _pendingHandleAction = null; // { action:'call'|'chat'|'add', raw } set before resolve_handle
+let contacts             = []; // { ocp, name, number, lastCall } — persisted to ocp_contacts
+let _contactsRenderCache = []; // last sorted order, used by _contactAct
 
 // ── AI Notes (browser SpeechRecognition live transcript) ──
 // TODO: replace SpeechRecognition with Whisper/Deepgram for better accuracy
@@ -3163,6 +3287,22 @@ async function onMessage(msg) {
           console.log('[Push] wake-to-call join_call sent for', _cid);
         }, 350);
       }
+
+      // ── Handle / OCP-code bootstrap ──────────────────────────
+      // Restore cached handle & numeric ID, then auto-claim numeric ID once.
+      if (!myHandle) {
+        const h = localStorage.getItem('ocp_handle');
+        if (h) { myHandle = h; }
+      }
+      if (!myNumericId) {
+        const cached = localStorage.getItem('ocp_numeric_id');
+        if (cached) { myNumericId = cached; }
+      }
+      _updateHandleDisplay();
+      if (!myNumericId && myIdentity) {
+        // First time on this device — request an OCP-XXXX-XXXX id
+        wsSend({ type: 'claim_numeric_id' });
+      }
       break;
 
     case 'ringing':
@@ -3300,6 +3440,11 @@ async function onMessage(msg) {
           if (pc.iceConnectionState === 'connected') {
             LOG.webrtc('✅ ICE CONNECTED — audio tunnel established');
             _iceWasConnected = true;
+            saveContact({
+              ocp:    pendingCall?.fromOcp || null,
+              name:   pendingCall?.fromName || document.getElementById('caller-name-display')?.textContent || callWith || '',
+              number: callWith || null
+            });
           }
           if (pc.iceConnectionState === 'failed') {
             LOG.err('❌ ICE FAILED — audio tunnel could not be established');
@@ -3531,6 +3676,11 @@ async function onMessage(msg) {
         if (state === 'connected' || state === 'completed') {
           LOG.webrtc('✅ WebRTC connected to relay B!');
           _iceWasConnected = true;
+          saveContact({
+            ocp:    null,
+            name:   document.getElementById('caller-name-display')?.textContent || callWith || '',
+            number: callWith || null
+          });
           showActiveCallOverlay();
           startTimer();
           setConnectionStatus('calling');
@@ -3866,6 +4016,49 @@ async function onMessage(msg) {
         chatKeyCache.delete(ckPeer);
       }
       _flushChatQueue(ckPeer);
+      break;
+    }
+
+    // ── HANDLE / OCP-CODE RESPONSES ───────────────────────
+    case 'numeric_id_assigned': {
+      myNumericId = msg.id;
+      localStorage.setItem('ocp_numeric_id', msg.id);
+      _updateHandleDisplay();
+      console.log('[Handle] numeric id assigned:', msg.id);
+      break;
+    }
+    case 'handle_claimed': {
+      myHandle = msg.handle;
+      localStorage.setItem('ocp_handle', msg.handle);
+      _updateHandleDisplay();
+      toast('@' + msg.handle + ' is yours!');
+      const claimBtn = document.getElementById('btn-claim-handle');
+      if (claimBtn) { claimBtn.textContent = 'Claimed ✓'; claimBtn.disabled = true; }
+      break;
+    }
+    case 'handle_taken': {
+      toast('Handle already taken — try another');
+      const takenBtn = document.getElementById('btn-claim-handle');
+      if (takenBtn) { takenBtn.disabled = false; takenBtn.textContent = 'Claim'; }
+      document.getElementById('inp-claim-handle')?.focus();
+      break;
+    }
+    case 'handle_error': {
+      const reason = msg.reason || 'error';
+      toast('Handle error: ' + reason.replace(/_/g, ' '));
+      const errBtn = document.getElementById('btn-claim-handle');
+      if (errBtn) { errBtn.disabled = false; errBtn.textContent = 'Claim'; }
+      break;
+    }
+    case 'handle_resolved': {
+      _onHandleResolved(msg.ocp, msg.handle);
+      break;
+    }
+    case 'handle_not_found': {
+      _pendingHandleAction = null;
+      const st = document.getElementById('add-handle-status');
+      if (st) st.textContent = '';
+      toast('No one found with that handle/code');
       break;
     }
 
@@ -5027,6 +5220,13 @@ async function doCall() {
     showDialHint('Enter a number to call', true);
     return;
   }
+  // Handle/code intercept: @alice or OCP-XXXX-XXXX → resolve first
+  if (_isHandleInput(to)) {
+    if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
+    showDialHint('Looking up ' + to + '…', false);
+    _resolveAndAct(to, 'call');
+    return;
+  }
   if (!to.startsWith('+')) {
     showDialHint('Add country code: +91, +1, +44...', true);
     return;
@@ -5300,6 +5500,11 @@ async function initWebRTC(isCaller) {
     console.log('[WRTC] iceConnectionState (initWebRTC):', pc?.iceConnectionState);
     if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
       _iceWasConnected = true;
+      saveContact({
+        ocp:    pendingCall?.fromOcp || null,
+        name:   pendingCall?.fromName || document.getElementById('caller-name-display')?.textContent || callWith || '',
+        number: callWith || null
+      });
     }
     if (pc?.iceConnectionState === 'failed') {
       toast('Connection lost');
@@ -5704,9 +5909,184 @@ function updateHeaderInfo(name, number) {
   if (el) el.textContent = name + ' · ' + number;
 }
 
+// ── Handle / OCP-code layer ─────────────────────────────────
+
+// Sign an arbitrary raw string with our Ed25519 private key (same algorithm
+// as server's verifyHandleSig / ocp-identity.js signRaw).
+async function _signRaw(text) {
+  if (!myIdentity?.privateKeyJwk) return null;
+  const key = await crypto.subtle.importKey(
+    'jwk', myIdentity.privateKeyJwk, { name: 'Ed25519' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(text));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+}
+
+function _updateHandleDisplay() {
+  const codeEl  = document.getElementById('my-ocp-code');
+  const hdisEl  = document.getElementById('handle-display');
+  const htxtEl  = document.getElementById('my-handle-text');
+  const hformEl = document.getElementById('handle-claim-form');
+  if (codeEl && myNumericId)  codeEl.textContent = myNumericId;
+  if (myHandle) {
+    if (htxtEl)  htxtEl.textContent  = '@' + myHandle;
+    if (hdisEl)  hdisEl.style.display = '';
+    if (hformEl) hformEl.style.display = 'none';
+  }
+}
+
+async function claimHandle() {
+  const inp = document.getElementById('inp-claim-handle');
+  const btn = document.getElementById('btn-claim-handle');
+  if (!inp || !btn) return;
+  const raw  = inp.value.trim().replace(/^@/, '');
+  const norm = raw.toLowerCase();
+  if (!/^[a-z0-9_]{3,20}$/.test(norm)) {
+    toast('Handle must be 3-20 chars: letters, numbers, underscore');
+    return;
+  }
+  if (!myIdentity) { toast('Identity not ready'); return; }
+  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
+  btn.disabled = true; btn.textContent = '…';
+  const sig = await _signRaw('claim:' + norm + ':' + myIdentity.ocp_address);
+  if (!sig) { btn.disabled = false; btn.textContent = 'Claim'; toast('Sign failed'); return; }
+  wsSend({ type: 'claim_handle', handle: norm, sig });
+}
+
+function _isHandleInput(s) {
+  return s.startsWith('@') || /^ocp-\d{4}-\d{4}$/i.test(s);
+}
+
+function _resolveAndAct(raw, action) {
+  if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
+  const norm = raw.replace(/^@/, '').toLowerCase();
+  _pendingHandleAction = { action, raw };
+  wsSend({ type: 'resolve_handle', handle: norm });
+}
+
+function _onHandleResolved(ocp, handle) {
+  const pending = _pendingHandleAction;
+  _pendingHandleAction = null;
+  if (!ocp) { toast('No one found with that handle/code'); return; }
+  const name = (handle || '').replace(/^@/, '');
+  // Always persist as a contact so they're reachable directly forever
+  saveContact({ ocp, name, number: null });
+  if (pending?.action === 'add') {
+    const st = document.getElementById('add-handle-status');
+    if (st) st.textContent = '@' + name + ' saved as contact';
+    toast('@' + name + ' added');
+    return;
+  }
+  if (pending?.action === 'call') {
+    // Check if we already have their phone number from a prior call
+    const existing = contacts.find(c => c.ocp === ocp && c.number);
+    if (existing?.number) {
+      const inp = document.getElementById('inp-dial');
+      if (inp) { inp.value = existing.number; syncDialDisplay(); }
+      doCall();
+    } else {
+      // OCP-only — open their chat thread (OCP-native path)
+      toast(name + ' found — opening chat');
+      openOcpChat(ocp, name);
+    }
+    return;
+  }
+  // 'chat' or default
+  openOcpChat(ocp, name);
+}
+
+function addByHandle() {
+  const inp = document.getElementById('inp-add-handle');
+  const st  = document.getElementById('add-handle-status');
+  if (!inp) return;
+  const raw = inp.value.trim();
+  if (!raw) return;
+  if (st) st.textContent = 'Looking up…';
+  _resolveAndAct(raw, 'add');
+}
+
+function _showMyCodeQR() {
+  const code = myNumericId || myIdentity?.ocp_address;
+  if (!code) { toast('Code not ready yet'); return; }
+  const label = myHandle ? '@' + myHandle + '  ·  ' + code : code;
+  showQRCode(code);
+  // Update caption inside the QR box to show handle too
+  setTimeout(() => {
+    const box = document.getElementById('ocp-qr-box');
+    if (box) {
+      const cap = box.querySelector('div');
+      if (cap) cap.textContent = label;
+    }
+  }, 50);
+}
+
+// ── Contacts store ──────────────────────────────────────────
+function loadContacts() {
+  try { contacts = JSON.parse(localStorage.getItem('ocp_contacts') || '[]'); }
+  catch { contacts = []; }
+}
+function saveContacts() {
+  localStorage.setItem('ocp_contacts', JSON.stringify(contacts));
+}
+function saveContact({ ocp, name, number }) {
+  if (!ocp && !number) return;
+  const idx = ocp
+    ? contacts.findIndex(c => c.ocp === ocp)
+    : contacts.findIndex(c => !c.ocp && c.number === number);
+  const entry = { ocp: ocp || null, name: name || number || ocp, number: number || null, lastCall: Date.now() };
+  if (idx >= 0) contacts[idx] = Object.assign({}, contacts[idx], entry);
+  else contacts.push(entry);
+  saveContacts();
+  console.log('[CONTACTS] saved peer', entry.name || entry.ocp);
+  renderContacts();
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function renderContacts() {
+  const list = document.getElementById('contacts-list');
+  if (!list) return;
+  _contactsRenderCache = [...contacts].sort((a, b) => (b.lastCall || 0) - (a.lastCall || 0));
+  if (!_contactsRenderCache.length) {
+    list.innerHTML = '<div class="contact-empty">No recent calls yet</div>';
+    return;
+  }
+  list.innerHTML = _contactsRenderCache.map((c, i) => {
+    const label = c.name || c.number || (c.ocp ? c.ocp.slice(4, 16) + '…' : '?');
+    const sub   = (c.number && c.name !== c.number) ? c.number
+                : c.ocp ? c.ocp.slice(4, 22) + '…' : '';
+    return `<div class="contact-row">
+      <div class="contact-avatar">${escHtml((label[0] || '?').toUpperCase())}</div>
+      <div class="contact-info" onclick="_contactAct(${i},'call')">
+        <div class="contact-name">${escHtml(label)}</div>
+        ${sub ? `<div class="contact-sub">${escHtml(sub)}</div>` : ''}
+      </div>
+      <div class="contact-actions">
+        <button class="contact-btn" onclick="_contactAct(${i},'call')" title="Call">&#9742;</button>
+        ${c.ocp ? `<button class="contact-btn contact-btn-msg" onclick="_contactAct(${i},'msg')" title="Message">&#128172;</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+function _contactAct(i, action) {
+  const c = _contactsRenderCache[i];
+  if (!c) return;
+  if (action === 'call') {
+    if (!c.number) { toast('No phone number for this contact'); return; }
+    const inp = document.getElementById('inp-dial');
+    if (inp) { inp.value = c.number; syncDialDisplay(); }
+    doCall();
+  } else {
+    if (c.ocp) openOcpChat(c.ocp, c.name || c.ocp.slice(0, 20));
+  }
+}
+
 function initFlow() {
   // Missed-call landing page — don't interfere with that flow
   if (new URLSearchParams(window.location.search).get('missed') === 'true') return;
+
+  loadContacts();
+  renderContacts();
 
   const claimed = localStorage.getItem('claimed');
   const name    = localStorage.getItem('user_name');

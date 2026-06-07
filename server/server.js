@@ -66,6 +66,13 @@ const simBankRegistry   = new Map(); // country          → WebSocket
 const telegramRegistry  = new Map(); // phone            → telegram chat ID
 const lineRegistry      = new Map(); // phone            → LINE user ID
 
+// ── Handle registry ────────────────────────────────────────────
+// Unified namespace: both @handles and OCP-XXXX-XXXX numeric IDs live here.
+// Keys are always lowercase (strips leading '@', lowercases OCP-XXXX-XXXX).
+const handles        = new Map(); // handle(lowercase) → { ocp, sig, claimedAt }
+const ocpToHandle    = new Map(); // ocp_address        → chosen @handle (not numeric)
+const ocpToNumericId = new Map(); // ocp_address        → OCP-XXXX-XXXX numeric id
+
 // WhatsApp Web.js stubs — set waReady=true and assign waClient after
 // calling require('whatsapp-web.js') and authenticating
 let waReady  = false;
@@ -248,6 +255,39 @@ async function verifySignature(msg) {
   } catch(e) {
     return true;
   }
+}
+
+// Verify a handle-claim signature without needing metadata.
+// The OCP address IS the raw 32-byte Ed25519 public key encoded as 64 hex chars.
+// The signed payload is the exact string "claim:<handle>:<ocp>".
+async function verifyHandleSig(ocp, handle, sig) {
+  try {
+    const hexKey = ocp.startsWith('ocp:') ? ocp.slice(4) : ocp;
+    if (!/^[0-9a-f]{64}$/i.test(hexKey)) return false;
+    const keyBytes = Buffer.from(hexKey, 'hex');
+    const pubKey = await crypto.subtle.importKey(
+      'raw', keyBytes, { name: 'Ed25519' }, false, ['verify']
+    );
+    const msgBytes = new TextEncoder().encode('claim:' + handle + ':' + ocp);
+    const sigBytes = Buffer.from(sig, 'base64');
+    return await crypto.subtle.verify('Ed25519', pubKey, sigBytes, msgBytes);
+  } catch(e) {
+    return false;
+  }
+}
+
+// Generate a unique OCP-XXXX-XXXX numeric id, checked against the handles namespace.
+// Returns lowercase (map key form); caller uppercases for display.
+function generateNumericId() {
+  let id;
+  let attempts = 0;
+  do {
+    const p1 = String(1000 + Math.floor(Math.random() * 9000));
+    const p2 = String(1000 + Math.floor(Math.random() * 9000));
+    id = `ocp-${p1}-${p2}`;
+    attempts++;
+  } while (handles.has(id) && attempts < 200);
+  return id; // e.g. "ocp-3721-9046"
 }
 
 function findRelay(targetE164, excludeWs) {
@@ -627,6 +667,20 @@ const server = http.createServer((req, res) => {
   if (req.url === '/vapid-public-key') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ publicKey: vapidPublic }));
+    return;
+  }
+
+  if (req.url.startsWith('/resolve/')) {
+    const raw  = decodeURIComponent(req.url.slice('/resolve/'.length)).trim();
+    const norm = raw.replace(/^@/, '').toLowerCase();
+    const entry = handles.get(norm);
+    if (entry) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ handle: norm, ocp: entry.ocp }));
+    } else {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'not_found', handle: norm }));
+    }
     return;
   }
 
@@ -1202,7 +1256,8 @@ async function handle(ws, msg) {
           type:     "incoming_call",
           callId,
           from:     callerMeta.number,
-          fromName: callerMeta.name
+          fromName: callerMeta.name,
+          fromOcp:  callerMeta.ocpAddress || null
         });
 
         // Wake callee if the tab is backgrounded / closed.
@@ -1852,6 +1907,86 @@ async function handle(ws, msg) {
       if (ckTarget?.readyState === 1) {
         send(ckTarget, { ...msg, from: ckMeta.ocpAddress, to: undefined });
       }
+      break;
+    }
+
+    // ── CLAIM_HANDLE ──────────────────────────────────────────
+    // Client signs "claim:<handle>:<ocp>" with its Ed25519 private key.
+    // msg.from (added by wsSend) is the claimant's OCP address.
+    case 'claim_handle': {
+      const claimOcp = msg.from;
+      if (!claimOcp) { send(ws, { type: 'handle_error', reason: 'not_registered' }); break; }
+
+      const rawHandle = (msg.handle || '').replace(/^@/, '');
+      const norm      = rawHandle.toLowerCase();
+
+      if (!/^[a-z0-9_]{3,20}$/.test(norm)) {
+        send(ws, { type: 'handle_error', reason: 'invalid_format' });
+        break;
+      }
+
+      const sigOk = await verifyHandleSig(claimOcp, norm, msg.sig || '');
+      if (!sigOk) {
+        send(ws, { type: 'handle_error', reason: 'bad_signature' });
+        break;
+      }
+
+      const existing = handles.get(norm);
+      if (existing) {
+        if (existing.ocp === claimOcp) {
+          // Same owner reclaiming — idempotent
+          send(ws, { type: 'handle_claimed', handle: norm });
+        } else {
+          send(ws, { type: 'handle_taken' });
+        }
+        break;
+      }
+
+      handles.set(norm, { ocp: claimOcp, sig: msg.sig, claimedAt: Date.now() });
+      ocpToHandle.set(claimOcp, norm);
+      send(ws, { type: 'handle_claimed', handle: norm });
+      log('🏷', 'handle claimed:', '@' + norm, '→', claimOcp.slice(0, 20));
+      break;
+    }
+
+    // ── RESOLVE_HANDLE ────────────────────────────────────────
+    // Resolves both @handles and OCP-XXXX-XXXX numeric IDs.
+    // On success the client uses the returned ocp address directly with the
+    // existing chat_msg / call routing — no special server-side wiring needed.
+    case 'resolve_handle': {
+      const rawH = (msg.handle || '').replace(/^@/, '');
+      const norm = rawH.toLowerCase();
+      const entry = handles.get(norm);
+      if (entry) {
+        send(ws, { type: 'handle_resolved', handle: norm, ocp: entry.ocp });
+      } else {
+        send(ws, { type: 'handle_not_found', handle: norm });
+      }
+      break;
+    }
+
+    // ── CLAIM_NUMERIC_ID ──────────────────────────────────────
+    // Auto-assigns an OCP-XXXX-XXXX id for this ocp address.
+    // Idempotent: returns the same id on repeated calls.
+    case 'claim_numeric_id': {
+      const numOcp = msg.from;
+      if (!numOcp) break;
+
+      const alreadyHas = ocpToNumericId.get(numOcp);
+      if (alreadyHas) {
+        send(ws, { type: 'numeric_id_assigned', id: alreadyHas });
+        break;
+      }
+
+      const normId    = generateNumericId();          // "ocp-3721-9046"
+      const displayId = normId.slice(4).toUpperCase(); // "3721-9046"
+      const fullId    = 'OCP-' + displayId;            // "OCP-3721-9046"
+
+      handles.set(normId, { ocp: numOcp, sig: null, claimedAt: Date.now() });
+      ocpToNumericId.set(numOcp, fullId);
+
+      send(ws, { type: 'numeric_id_assigned', id: fullId });
+      log('🔢', 'numeric id assigned:', fullId, '→', numOcp.slice(0, 20));
       break;
     }
 
