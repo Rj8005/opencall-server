@@ -9,6 +9,8 @@
  */
 
 const http    = require('http');
+const fs      = require('fs');
+const path    = require('path');
 const { WebSocketServer } = require('ws');
 const webPush = require('web-push');
 
@@ -72,6 +74,31 @@ const lineRegistry      = new Map(); // phone            → LINE user ID
 const handles        = new Map(); // handle(lowercase) → { ocp, sig, claimedAt }
 const ocpToHandle    = new Map(); // ocp_address        → chosen @handle (not numeric)
 const ocpToNumericId = new Map(); // ocp_address        → OCP-XXXX-XXXX numeric id
+
+const HANDLES_FILE = path.join(__dirname, 'handles.json');
+
+function saveHandles() {
+  try {
+    fs.writeFileSync(HANDLES_FILE, JSON.stringify({
+      handles:        [...handles.entries()],
+      ocpToNumericId: [...ocpToNumericId.entries()]
+    }));
+  } catch(e) { console.error('[HANDLES] save failed:', e.message); }
+}
+
+function loadHandles() {
+  try {
+    if (!fs.existsSync(HANDLES_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(HANDLES_FILE, 'utf8'));
+    for (const [k, v] of (data.handles        || [])) handles.set(k, v);
+    for (const [k, v] of (data.ocpToNumericId || [])) ocpToNumericId.set(k, v);
+    // Rebuild ocpToHandle from handles entries that are not numeric-ID keys
+    for (const [k, v] of handles) {
+      if (!/^ocp-\d{4}-\d{4}$/.test(k)) ocpToHandle.set(v.ocp, k);
+    }
+    console.log('[HANDLES] loaded', handles.size, 'entries from disk');
+  } catch(e) { console.error('[HANDLES] load failed:', e.message); }
+}
 
 // WhatsApp Web.js stubs — set waReady=true and assign waClient after
 // calling require('whatsapp-web.js') and authenticating
@@ -1944,6 +1971,7 @@ async function handle(ws, msg) {
 
       handles.set(norm, { ocp: claimOcp, sig: msg.sig, claimedAt: Date.now() });
       ocpToHandle.set(claimOcp, norm);
+      saveHandles();
       send(ws, { type: 'handle_claimed', handle: norm });
       log('🏷', 'handle claimed:', '@' + norm, '→', claimOcp.slice(0, 20));
       break;
@@ -1984,6 +2012,7 @@ async function handle(ws, msg) {
 
       handles.set(normId, { ocp: numOcp, sig: null, claimedAt: Date.now() });
       ocpToNumericId.set(numOcp, fullId);
+      saveHandles();
 
       send(ws, { type: 'numeric_id_assigned', id: fullId });
       log('🔢', 'numeric id assigned:', fullId, '→', numOcp.slice(0, 20));
@@ -2034,6 +2063,7 @@ setInterval(() => {
 // ─────────────────────────────────────────────────────────────
 //  Start
 // ─────────────────────────────────────────────────────────────
+loadHandles();
 server.listen(PORT, () => {
   console.log(`
   ╔══════════════════════════════════════════════╗

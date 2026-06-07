@@ -3289,7 +3289,8 @@ async function onMessage(msg) {
       }
 
       // ── Handle / OCP-code bootstrap ──────────────────────────
-      // Restore cached handle & numeric ID, then auto-claim numeric ID once.
+      // Restore cached handle & numeric ID, then always re-register with
+      // the server so server-side maps survive Render.com restarts.
       if (!myHandle) {
         const h = localStorage.getItem('ocp_handle');
         if (h) { myHandle = h; }
@@ -3299,8 +3300,13 @@ async function onMessage(msg) {
         if (cached) { myNumericId = cached; }
       }
       _updateHandleDisplay();
-      if (!myNumericId && myIdentity) {
-        // First time on this device — request an OCP-XXXX-XXXX id
+      if (myHandle && myIdentity) {
+        // Re-claim on every connect — idempotent, heals server-restart wipe
+        _signRaw('claim:' + myHandle + ':' + myIdentity.ocp_address)
+          .then(sig => wsSend({ type: 'claim_handle', handle: myHandle, sig }));
+      }
+      if (myIdentity) {
+        // Always request numeric ID — server returns existing if already assigned
         wsSend({ type: 'claim_numeric_id' });
       }
       break;
@@ -6072,10 +6078,15 @@ function _contactAct(i, action) {
   const c = _contactsRenderCache[i];
   if (!c) return;
   if (action === 'call') {
-    if (!c.number) { toast('No phone number for this contact'); return; }
-    const inp = document.getElementById('inp-dial');
-    if (inp) { inp.value = c.number; syncDialDisplay(); }
-    doCall();
+    if (c.ocp) {
+      openOcpChat(c.ocp, c.name || c.ocp.slice(0, 20));
+    } else if (c.number) {
+      const inp = document.getElementById('inp-dial');
+      if (inp) { inp.value = c.number; syncDialDisplay(); }
+      doCall();
+    } else {
+      toast('No way to reach this contact');
+    }
   } else {
     if (c.ocp) openOcpChat(c.ocp, c.name || c.ocp.slice(0, 20));
   }
