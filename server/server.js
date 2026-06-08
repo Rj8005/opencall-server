@@ -1547,19 +1547,35 @@ async function handle(ws, msg) {
 
     // ── HANGUP ────────────────────────────────────────────────
     case "hangup": {
-      const call = callLog.get(msg.callId);
+      const callId  = msg.callId;
+      const call    = callId ? callLog.get(callId) : null;
+      const senderMeta = metadata.get(ws);
+      const senderKey  = senderMeta?.ocpAddress || senderMeta?.number;
 
+      // Find the peer's WebSocket — try explicit msg.with first, then callLog fallback
+      let targetWs = null;
       if (msg.with) {
-        const hangupTarget = registry.get(msg.with) || ocpRegistry.get(msg.with);
-        if (hangupTarget) send(hangupTarget, { type: "hangup", callId: msg.callId });
+        targetWs = registry.get(msg.with) || ocpRegistry.get(msg.with);
+      }
+      if (!targetWs && call) {
+        // callLog stores {from, to} — the other party is whoever isn't the sender
+        const otherKey = (senderKey && call.from === senderKey) ? call.to : call.from;
+        if (otherKey) targetWs = ocpRegistry.get(otherKey) || registry.get(otherKey);
+      }
+
+      if (targetWs) {
+        send(targetWs, { type: "hangup", callId });
+        log('📴', 'hangup forwarded →', (msg.with || '?').slice(0, 16), 'callId:', callId);
+      } else {
+        log('📴', 'hangup: no peer found for', (msg.with || senderKey || '?').slice(0, 16));
       }
 
       if (call?.relayWs) {
-        send(call.relayWs, { type: "relay_hangup", callId: msg.callId });
+        send(call.relayWs, { type: "relay_hangup", callId });
       }
 
-      callLog.delete(msg.callId);
-      log("✗", "hangup:", msg.callId);
+      if (callId) callLog.delete(callId);
+      log("✗", "hangup done:", callId);
       break;
     }
 
@@ -1852,8 +1868,11 @@ async function handle(ws, msg) {
       if (call) {
         if (ws === call.callerWs) {
           send(call.relayWs, { type: 'relay_hangup', callId: msg.callId });
+          log('📴', 'call.hangup: caller→relay relay_hangup', msg.callId);
         } else if (ws === call.relayWs) {
-          send(call.callerWs, { type: 'call.hangup', callId: msg.callId });
+          // Use 'hangup' (not 'call.hangup') so the client's case 'hangup' handles it
+          send(call.callerWs, { type: 'hangup', callId: msg.callId });
+          log('📴', 'call.hangup: relay→caller hangup', msg.callId);
         }
         pendingCalls.delete(msg.callId);
       }

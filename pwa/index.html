@@ -3359,6 +3359,10 @@ async function onMessage(msg) {
       break;
 
     case 'hangup':
+    case 'call.hangup':
+      console.log('[CALL] hangup received — tearing down');
+      stopRingback();
+      stopRingtone();
       toast('Call ended');
       endCall();
       break;
@@ -5320,9 +5324,10 @@ async function doHangup() {
   document.getElementById('tap-to-hear')?.remove();
 
   if (currentCallId) {
-    await wsSend({ type: 'call.hangup', callId: currentCallId });
-  } else if (callWith) {
-    // Direct OCP call: server routes hangup by phone number via registry
+    console.log('[CALL] hangup sent (relay) callId:', currentCallId, 'to:', callWith);
+    await wsSend({ type: 'call.hangup', callId: currentCallId, with: callWith });
+  } else if (callWith || callId) {
+    console.log('[CALL] hangup sent to', callWith, 'callId:', callId);
     await wsSend({ type: 'hangup', with: callWith, callId });
   }
   currentCallId = null;
