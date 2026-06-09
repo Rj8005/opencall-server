@@ -3895,6 +3895,10 @@ async function onMessage(msg) {
       break;
     }
 
+    case 'video_toggle':
+      console.log('[WRTC] video_toggle received — state:', msg.state, '(remote track arrives via SDP renegotiation)');
+      break;
+
     case 'screen_share': {
       const badge = document.getElementById('screen-share-badge');
       const rv    = document.getElementById('remote-video');
@@ -5421,6 +5425,11 @@ function endCall() {
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
   if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
   isVideo = false; isScreenSharing = false;
+  const rvClean = document.getElementById('remote-video');
+  const lvClean = document.getElementById('local-video');
+  if (rvClean) rvClean.srcObject = null;
+  if (lvClean) lvClean.srcObject = null;
+  document.body.classList.remove('video-mode');
   updateVideoLayout(false);
   const vidBtn    = document.getElementById('btn-video');
   const screenBtn = document.getElementById('btn-screen');
@@ -5708,6 +5717,7 @@ async function toggleVideo() {
     updateVideoLayout(true);
     if (pc.signalingState === 'stable') await sendReOffer();
   }
+  wsSend({ type: 'video_toggle', state: isVideo ? 'on' : 'off', callId, to: callWith });
   const btn = document.getElementById('btn-video');
   btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
   btn.classList.toggle('active', isVideo);
@@ -5731,10 +5741,11 @@ async function sendReOffer() {
 }
 
 function updateVideoLayout(on) {
-  document.body.classList.toggle('video-mode', on);
-  if (!on) {
+  if (on) {
+    document.body.classList.add('video-mode');
+  } else {
     const rv = document.getElementById('remote-video');
-    if (rv) rv.srcObject = null;
+    if (!rv?.srcObject) document.body.classList.remove('video-mode');
   }
 }
 

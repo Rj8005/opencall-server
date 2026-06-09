@@ -1018,13 +1018,7 @@ async function onMessage(event) {
       break;
 
     case 'video_toggle':
-      console.log('[WRTC] video_toggle received — state:', msg.state);
-      if (_makingOffer) {
-        console.log('[WRTC] renegotiation skipped (not stable) — video_toggle debounced');
-        break;
-      }
-      if (msg.state === 'on'  && !isVideo) await toggleVideo(true);
-      if (msg.state === 'off' &&  isVideo) await toggleVideo(true);
+      console.log('[WRTC] video_toggle received — state:', msg.state, '(remote track arrives via SDP renegotiation)');
       break;
 
     case 'error':
@@ -1218,10 +1212,10 @@ async function toggleSpeaker() {
   spkBtn.classList.toggle('active', isSpeaker);
 }
 
-async function toggleVideo(_mirrored = false) {
+async function toggleVideo() {
   if (!pc || pc.signalingState === 'closed') return;
-  if (!_mirrored && _makingOffer) {
-    console.log('[WRTC] renegotiation skipped (not stable) — toggleVideo debounced');
+  if (_makingOffer) {
+    console.log('[WRTC] renegotiation skipped (offer in flight) — toggleVideo debounced');
     return;
   }
   if (isVideo) {
@@ -1248,11 +1242,8 @@ async function toggleVideo(_mirrored = false) {
     }
     updateVideoLayout(true);
   }
-  if (!_mirrored) {
-    await sendReOffer();
-    wsSend({ type: 'video_toggle', state: isVideo ? 'on' : 'off', callId, to: callerNumber });
-  }
-  // _mirrored=true: track prepared, no re-offer — initiator's offer is already en route.
+  wsSend({ type: 'video_toggle', state: isVideo ? 'on' : 'off', callId, to: callerNumber });
+  await sendReOffer();
   const btn = document.getElementById('ans-video');
   btn.innerHTML = isVideo ? '&#128249;' : '&#127909;';
   btn.classList.toggle('active', isVideo);
@@ -1287,12 +1278,11 @@ async function sendReOffer() {
 }
 
 function updateVideoLayout(on) {
-  document.body.classList.toggle('video-mode', on);
-  if (!on) {
+  if (on) {
+    document.body.classList.add('video-mode');
+  } else {
     const rv = document.getElementById('remote-video');
-    if (rv) rv.srcObject = null;
-    const lv = document.getElementById('local-video');
-    if (lv) lv.srcObject = null;
+    if (!rv?.srcObject) document.body.classList.remove('video-mode');
   }
 }
 
@@ -1334,6 +1324,11 @@ function cleanupMedia() {
   stopTimer();
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
   isVideo = false;
+  const _rvClean = document.getElementById('remote-video');
+  if (_rvClean) _rvClean.srcObject = null;
+  const _lvClean = document.getElementById('local-video');
+  if (_lvClean) _lvClean.srcObject = null;
+  document.body.classList.remove('video-mode');
   updateVideoLayout(false);
   const vidBtn = document.getElementById('ans-video');
   if (vidBtn) { vidBtn.innerHTML = '&#127909;'; vidBtn.classList.remove('active'); }
