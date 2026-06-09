@@ -2704,7 +2704,7 @@ let pendingCall   = null;
 let isMuted       = false;
 let isSpeaker     = false;
 let isVideo          = false;
-let _callWithVideo   = false;
+let isVideoCall      = false;   // true for the duration of a video call
 let videoStream      = null;
 let isScreenSharing  = false;
 let screenStream     = null;
@@ -3332,8 +3332,7 @@ async function onMessage(msg) {
       document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
       document.getElementById('caller-avatar').classList.remove('ringing');
       startTimer();
-      await initWebRTC(true, _callWithVideo);
-      _callWithVideo = false;
+      await initWebRTC(true);
       break;
 
     case 'call_connected':
@@ -5283,7 +5282,7 @@ async function doCall() {
 async function callWithOcp(ocp, name, withVideo = false) {
   if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
   callWith = ocp;
-  _callWithVideo = withVideo;
+  isVideoCall = withVideo;
   showCallingScreen(name || ocp.slice(4, 20));
   setConnectionStatus('routing');
   await initRatchetSession(ocp);
@@ -5300,10 +5299,10 @@ async function doAnswer() {
   callId   = pendingCall.callId;
   callWith = pendingCall.from;
   callMode = 'direct';
-  _callWithVideo = !!(pendingCall.video);
+  isVideoCall = !!(pendingCall.video);
   await initRatchetSession(callWith);
   await wsSend({ type:'answer', callId:pendingCall.callId, from:pendingCall.from });
-  initWebRTC(false, _callWithVideo);
+  initWebRTC(false);
 }
 async function doDecline() {
   stopRingtone();
@@ -5434,7 +5433,7 @@ function endCall() {
   window._selectedCountry = null;
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
   if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
-  isVideo = false; _callWithVideo = false; isScreenSharing = false;
+  isVideo = false; isVideoCall = false; isScreenSharing = false;
   const rvClean = document.getElementById('remote-video');
   const lvClean = document.getElementById('local-video');
   if (rvClean) rvClean.srcObject = null;
@@ -5467,39 +5466,55 @@ function endCall() {
 }
 
 // ── WebRTC ─────────────────────────────────────────────────
-async function initWebRTC(isCaller, withVideo = false) {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-  } catch {
-    toast('Microphone access denied');
-    doHangup(); return;
+async function initWebRTC(isCaller) {
+  if (pc) {
+    // Already initialised (race between doAnswer fire-and-forget and handleOffer).
+    // The first call to complete owns the PC; later calls are no-ops.
+    console.log('[WRTC] initWebRTC skipped — pc already set (race guard)');
+    return;
   }
-  console.log('[WRTC] getUserMedia OK (initWebRTC) — audioTracks:', localStream.getAudioTracks().length,
-    localStream.getAudioTracks().map(t => 'enabled:'+t.enabled+' muted:'+t.muted));
+  // Single getUserMedia call — captures video too when this is a video call.
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideoCall });
+  } catch(e) {
+    if (isVideoCall) {
+      // Camera permission denied — fall back to audio-only and warn
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        toast('Camera access denied — voice call only');
+        isVideoCall = false;
+        console.warn('[WRTC] video getUserMedia failed, fell back to audio:', e.message);
+      } catch {
+        toast('Microphone access denied');
+        doHangup(); return;
+      }
+    } else {
+      toast('Microphone access denied');
+      doHangup(); return;
+    }
+  }
+  console.log('[WRTC] getUserMedia OK — tracks:', localStream.getTracks().map(t => t.kind+'('+t.enabled+')').join(','));
 
   pc = new RTCPeerConnection(RTC_CFG);
   console.log('[WRTC] initWebRTC iceServers:', JSON.stringify(RTC_CFG.iceServers));
 
+  // Add ALL captured tracks (audio + video when isVideoCall).
   localStream.getTracks().forEach(t => {
-    console.log('[WRTC] addTrack (initWebRTC, before offer/answer) — kind:', t.kind, 'enabled:', t.enabled);
+    console.log('[WRTC] addTrack (initWebRTC) — kind:', t.kind, 'enabled:', t.enabled);
     pc.addTrack(t, localStream);
   });
-  console.log('[WRTC] addTrack done — senders now:', pc.getSenders().length);
+  console.log('[WRTC] addTrack done — senders:', pc.getSenders().length);
 
-  if (withVideo) {
-    try {
-      videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
-      isVideo = true;
-      pc.addTrack(videoStream.getVideoTracks()[0], videoStream);
-      document.getElementById('local-video').srcObject = videoStream;
-      updateVideoLayout(true);
-      const vBtn = document.getElementById('btn-video');
-      if (vBtn) { vBtn.innerHTML = '&#128249;'; vBtn.classList.add('active'); }
-      console.log('[WRTC] video track added (initWebRTC withVideo)');
-    } catch(e) {
-      toast('Camera access denied — voice call only');
-      console.warn('[WRTC] video getUserMedia failed:', e.message);
-    }
+  // Self-view: attach local stream to the small corner video element.
+  const vTracks = localStream.getVideoTracks();
+  if (vTracks.length > 0) {
+    videoStream = new MediaStream(vTracks);   // handle used by toggleVideo
+    isVideo = true;
+    document.getElementById('local-video').srcObject = localStream;
+    updateVideoLayout(true);
+    const vBtn = document.getElementById('btn-video');
+    if (vBtn) { vBtn.innerHTML = '&#128249;'; vBtn.classList.add('active'); }
+    console.log('[WRTC] self-view attached, videoTracks:', vTracks.length);
   }
 
   pc.ontrack = e => {
@@ -5553,6 +5568,7 @@ async function initWebRTC(isCaller, withVideo = false) {
     console.log('[WRTC] iceConnectionState (initWebRTC):', pc?.iceConnectionState);
     if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
       _iceWasConnected = true;
+      if (!timerInterval) startTimer();   // fallback: start timer if signalling path missed it
       saveContact({
         ocp:    pendingCall?.fromOcp || null,
         name:   pendingCall?.fromName || document.getElementById('caller-name-display')?.textContent || callWith || '',
@@ -5609,6 +5625,11 @@ async function flushIce(conn) {
 }
 
 async function handleOffer(sdp, from) {
+  // If the remote offer contains a video m-line, ensure our camera is captured.
+  if (sdp.includes('m=video') && !isVideoCall) {
+    isVideoCall = true;
+    console.log('[WRTC] offer has m=video — isVideoCall set true');
+  }
   if (!pc) await initWebRTC(false);
   try {
     await pc.setRemoteDescription({ type:'offer', sdp });
