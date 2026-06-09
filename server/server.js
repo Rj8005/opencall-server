@@ -997,6 +997,13 @@ async function handle(ws, msg) {
           } else {
             console.log('[SDP_OFFER] ❌ relayWs not open:', call.relayWs?.readyState);
           }
+        } else if (role === 'relay') {
+          if (call.callerWs?.readyState === 1) {
+            call.callerWs.send(JSON.stringify(msg));
+            console.log('[SDP_OFFER] ✅ B→A re-offer forwarded');
+          } else {
+            console.log('[SDP_OFFER] ❌ callerWs not open for B→A re-offer');
+          }
         } else {
           console.log('[SDP_OFFER] unexpected role:', role, '— ignoring');
         }
@@ -1028,6 +1035,11 @@ async function handle(ws, msg) {
           if (call.callerWs?.readyState === 1) {
             call.callerWs.send(JSON.stringify(msg));
             console.log('[SDP_ANSWER] ✅ B→A forwarded');
+          }
+        } else if (role === 'caller') {
+          if (call.relayWs?.readyState === 1) {
+            call.relayWs.send(JSON.stringify(msg));
+            console.log('[SDP_ANSWER] ✅ A→B re-answer forwarded');
           }
         } else {
           console.log('[SDP_ANSWER] unexpected role:', role, '— ignoring');
@@ -1091,7 +1103,7 @@ async function handle(ws, msg) {
   // (ai_note_line) between both parties on a call, by callId.
   // TODO: swap window.SpeechRecognition on the client for Whisper/Deepgram
   // for better accuracy and non-Chrome browser support.
-  if (msg.type === 'ai_notes' || msg.type === 'ai_note_line' || msg.type === 'screen_share') {
+  if (msg.type === 'ai_notes' || msg.type === 'ai_note_line' || msg.type === 'screen_share' || msg.type === 'video_toggle') {
     const call = msg.callId ? pendingCalls.get(msg.callId) : null;
     if (call) {
       const role   = getCallRole(ws, call);
@@ -1282,7 +1294,8 @@ async function handle(ws, msg) {
           callId:   ocpCallId,
           from:     callerOcp,
           fromName: callerMeta.name,
-          fromOcp:  callerMeta.ocpAddress || null
+          fromOcp:  callerMeta.ocpAddress || null,
+          video:    msg.video || undefined
         });
         send(ws, { type: 'ringing', callId: ocpCallId, to: msg.to, mode: 'direct' });
         callLog.set(ocpCallId, { from: callerOcp, to: msg.to, startedAt: Date.now(), mode: 'direct' });
@@ -1308,7 +1321,8 @@ async function handle(ws, msg) {
           callId,
           from:     callerMeta.number,
           fromName: callerMeta.name,
-          fromOcp:  callerMeta.ocpAddress || null
+          fromOcp:  callerMeta.ocpAddress || null,
+          video:    msg.video || undefined
         });
 
         // Wake callee if the tab is backgrounded / closed.

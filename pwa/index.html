@@ -768,6 +768,10 @@ input::placeholder { color: var(--text-muted); }
   color: #c8f55a; background: rgba(200,245,90,.06);
   border-color: rgba(200,245,90,.18);
 }
+.contact-btn-vid {
+  color: #3ddc84; background: rgba(61,220,132,.06);
+  border-color: rgba(61,220,132,.18);
+}
 .contact-empty {
   color: var(--text-secondary); font-size: 12px;
   text-align: center; padding: 10px 0;
@@ -2700,6 +2704,7 @@ let pendingCall   = null;
 let isMuted       = false;
 let isSpeaker     = false;
 let isVideo          = false;
+let _callWithVideo   = false;
 let videoStream      = null;
 let isScreenSharing  = false;
 let screenStream     = null;
@@ -3327,7 +3332,8 @@ async function onMessage(msg) {
       document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
       document.getElementById('caller-avatar').classList.remove('ringing');
       startTimer();
-      await initWebRTC(true);
+      await initWebRTC(true, _callWithVideo);
+      _callWithVideo = false;
       break;
 
     case 'call_connected':
@@ -5274,13 +5280,16 @@ async function doCall() {
 }
 
 // ── OCP-to-OCP call ────────────────────────────────────────
-async function callWithOcp(ocp, name) {
+async function callWithOcp(ocp, name, withVideo = false) {
   if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
   callWith = ocp;
+  _callWithVideo = withVideo;
   showCallingScreen(name || ocp.slice(4, 20));
   setConnectionStatus('routing');
   await initRatchetSession(ocp);
-  await wsSend({ type: 'call', to: ocp });
+  const msg = { type: 'call', to: ocp };
+  if (withVideo) msg.video = true;
+  await wsSend(msg);
 }
 
 // ── answer / decline ───────────────────────────────────────
@@ -5291,9 +5300,10 @@ async function doAnswer() {
   callId   = pendingCall.callId;
   callWith = pendingCall.from;
   callMode = 'direct';
+  _callWithVideo = !!(pendingCall.video);
   await initRatchetSession(callWith);
   await wsSend({ type:'answer', callId:pendingCall.callId, from:pendingCall.from });
-  initWebRTC(false);
+  initWebRTC(false, _callWithVideo);
 }
 async function doDecline() {
   stopRingtone();
@@ -5424,7 +5434,7 @@ function endCall() {
   window._selectedCountry = null;
   if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
   if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
-  isVideo = false; isScreenSharing = false;
+  isVideo = false; _callWithVideo = false; isScreenSharing = false;
   const rvClean = document.getElementById('remote-video');
   const lvClean = document.getElementById('local-video');
   if (rvClean) rvClean.srcObject = null;
@@ -5457,7 +5467,7 @@ function endCall() {
 }
 
 // ── WebRTC ─────────────────────────────────────────────────
-async function initWebRTC(isCaller) {
+async function initWebRTC(isCaller, withVideo = false) {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
   } catch {
@@ -5475,6 +5485,22 @@ async function initWebRTC(isCaller) {
     pc.addTrack(t, localStream);
   });
   console.log('[WRTC] addTrack done — senders now:', pc.getSenders().length);
+
+  if (withVideo) {
+    try {
+      videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      isVideo = true;
+      pc.addTrack(videoStream.getVideoTracks()[0], videoStream);
+      document.getElementById('local-video').srcObject = videoStream;
+      updateVideoLayout(true);
+      const vBtn = document.getElementById('btn-video');
+      if (vBtn) { vBtn.innerHTML = '&#128249;'; vBtn.classList.add('active'); }
+      console.log('[WRTC] video track added (initWebRTC withVideo)');
+    } catch(e) {
+      toast('Camera access denied — voice call only');
+      console.warn('[WRTC] video getUserMedia failed:', e.message);
+    }
+  }
 
   pc.ontrack = e => {
     console.log('[WRTC] ontrack fired (initWebRTC) — kind:', e.track.kind, 'streamId:', e.streams[0]?.id, 'enabled:', e.track.enabled, 'muted:', e.track.muted);
@@ -6014,9 +6040,7 @@ function _onHandleResolved(ocp, handle) {
       if (inp) { inp.value = existing.number; syncDialDisplay(); }
       doCall();
     } else {
-      // OCP-only — open their chat thread (OCP-native path)
-      toast(name + ' found — opening chat');
-      openOcpChat(ocp, name);
+      callWithOcp(ocp, name);
     }
     return;
   }
@@ -6092,6 +6116,7 @@ function renderContacts() {
       </div>
       <div class="contact-actions">
         <button class="contact-btn" onclick="_contactAct(${i},'call')" title="Call">&#9742;</button>
+        ${c.ocp ? `<button class="contact-btn contact-btn-vid" onclick="_contactAct(${i},'video')" title="Video Call">&#128249;</button>` : ''}
         ${c.ocp ? `<button class="contact-btn contact-btn-msg" onclick="_contactAct(${i},'msg')" title="Message">&#128172;</button>` : ''}
       </div>
     </div>`;
@@ -6100,6 +6125,14 @@ function renderContacts() {
 function _contactAct(i, action) {
   const c = _contactsRenderCache[i];
   if (!c) return;
+  if (action === 'video') {
+    if (c.ocp) {
+      callWithOcp(c.ocp, c.name || c.ocp.slice(4, 20), true);
+    } else {
+      toast('Video calls require an OCP contact');
+    }
+    return;
+  }
   if (action === 'call') {
     if (c.ocp) {
       callWithOcp(c.ocp, c.name || c.ocp.slice(4, 20));
