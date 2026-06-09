@@ -589,15 +589,14 @@ input::placeholder { color: var(--text-muted); }
 
 <script>
 // ── Config ──────────────────────────────────────────────────────
-const SERVER = 'https://opencall-server-pqfe.onrender.com';
-const WS_URL = 'wss://opencall-server-pqfe.onrender.com';
+const SERVER = 'https://signal.opencall.space';
+const WS_URL = 'wss://signal.opencall.space';
 
 const RTC_CFG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478', username: 'ocp', credential: 'opencall2026' },
-    { urls: 'turn:ocp-node.onrender.com:3478',             username: 'ocp', credential: 'opencall2026' }
+    { urls: 'turn:node.opencall.space:3478', username: 'ocp', credential: 'opencall2026' }
   ]
 };
 console.log('[WRTC] RTC_CFG iceServers:', JSON.stringify(RTC_CFG.iceServers),

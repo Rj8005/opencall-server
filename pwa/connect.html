@@ -95,7 +95,7 @@ a.home{color:rgba(99,180,255,.5);font-size:11px;text-decoration:none;margin-top:
   const rawId   = (params.get('id') || '').trim();
   const WS_URL  = (function() {
     try { return localStorage.getItem('server_url') || ''; } catch { return ''; }
-  })() || 'wss://opencall-server-pqfe.onrender.com';
+  })() || 'wss://signal.opencall.space';
   const APP_BASE = location.origin;
 
   function show(id) {

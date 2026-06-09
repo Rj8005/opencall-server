@@ -853,7 +853,7 @@ input::placeholder { color: var(--text-muted); }
       <div class="field-group" style="margin-top:12px">
         <label class="card-label">Signal server</label>
         <input type="text" id="input-server"
-               value="wss://opencall-server-pqfe.onrender.com"
+               value="wss://signal.opencall.space"
                style="margin-top:4px;font-size:10px"/>
       </div>
       <button id="btn-claim" class="relay-btn relay-btn-sms"
@@ -1431,7 +1431,7 @@ document.addEventListener('visibilitychange', async () => {
 
 function reconnectAndRejoin() {
   if (!window._pendingCallId) return;
-  const server = localStorage.getItem('server_url') || 'wss://opencall-server-pqfe.onrender.com';
+  const server = localStorage.getItem('server_url') || 'wss://signal.opencall.space';
   const name   = localStorage.getItem('user_name')  || myName   || '';
   const number = localStorage.getItem('user_number') || myNumber || '';
   if (name && number) initSignalServer(server, name, number);
@@ -2105,9 +2105,7 @@ const ratchetSessions = new Map(); // callWith → session state
 
 // ── OCP DHT Client ────────────────────────────────────────
 const DHT_BOOTSTRAP = [
-  'wss://ocp-bootstrap-1-nui5.onrender.com/ws',
-  'wss://ocp-node.onrender.com/ws',
-  'wss://ocp-bootstrap-1-nui5.onrender.com/ws'
+  'wss://node.opencall.space/ws'
 ];
 const dhtPeers = new Map();
 let dhtReady = false;
@@ -2453,7 +2451,7 @@ async function answerMissedCall() {
 
   const server = document.getElementById('input-server')?.value.trim()
     || localStorage.getItem('server_url')
-    || 'wss://opencall-server-pqfe.onrender.com';
+    || 'wss://signal.opencall.space';
 
   try { ws = new WebSocket(server); }
   catch(e) {
@@ -2579,7 +2577,7 @@ getOrCreateIdentity().then(async id => {
 function _pushServerBase() {
   const wsUrl = (ws?.url)
     || localStorage.getItem('server_url')
-    || 'wss://opencall-server-pqfe.onrender.com';
+    || 'wss://signal.opencall.space';
   return wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
 }
 
@@ -2997,7 +2995,7 @@ const PLATFORM_ICONS = {
   imessage:  { icon:'🔵', name:'iMessage',   color:'#007AFF' },
 };
 
-const OCPApiBase = 'https://ocp-dht-node-5ul1.onrender.com';
+const OCPApiBase = 'https://node.opencall.space';
 
 // ── Channel engine — country scoring map ──────────────────
 const COUNTRY_SCORES = {
@@ -3043,8 +3041,7 @@ const RTC_CFG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:ocp-bootstrap-1-nui5.onrender.com:3478', username: 'ocp', credential: 'opencall2026' },
-    { urls: 'turn:ocp-node.onrender.com:3478',             username: 'ocp', credential: 'opencall2026' }
+    { urls: 'turn:node.opencall.space:3478', username: 'ocp', credential: 'opencall2026' }
   ]
 };
 console.log('[WRTC] RTC_CFG iceServers:', JSON.stringify(RTC_CFG.iceServers),
@@ -3214,7 +3211,7 @@ async function doRegister() {
   const number = document.getElementById('input-number')?.value.trim() || '';
   const server = document.getElementById('input-server')?.value.trim()
     || localStorage.getItem('server_url')
-    || 'wss://opencall-server-pqfe.onrender.com';
+    || 'wss://signal.opencall.space';
   if (!name)   return toast('Enter your name');
   if (!number) return toast('Enter your number');
   if (!server) return toast('Enter server URL');
@@ -4377,7 +4374,7 @@ async function invSendAuto(channel) {
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
   if (resultEl) { resultEl.className = 'inv-send-result'; resultEl.textContent = ''; }
 
-  const wsUrl   = (document.getElementById('input-server')?.value || localStorage.getItem('server_url') || 'wss://opencall-server-pqfe.onrender.com').trim();
+  const wsUrl   = (document.getElementById('input-server')?.value || localStorage.getItem('server_url') || 'wss://signal.opencall.space').trim();
   const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
 
   const ctrl  = new AbortController();
@@ -4438,7 +4435,7 @@ async function invSendEmail() {
   // Button stays disabled — single attempt only, no retry loop.
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
-  const wsUrl   = (document.getElementById('input-server')?.value || localStorage.getItem('server_url') || 'wss://opencall-server-pqfe.onrender.com').trim();
+  const wsUrl   = (document.getElementById('input-server')?.value || localStorage.getItem('server_url') || 'wss://signal.opencall.space').trim();
   const baseUrl = wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
 
   const ctrl  = new AbortController();
@@ -6117,7 +6114,7 @@ function initFlow() {
   const claimed = localStorage.getItem('claimed');
   const name    = localStorage.getItem('user_name');
   const number  = localStorage.getItem('user_number');
-  const server  = localStorage.getItem('server_url') || 'wss://opencall-server-pqfe.onrender.com';
+  const server  = localStorage.getItem('server_url') || 'wss://signal.opencall.space';
 
   if (claimed === 'true' && name && number) {
     show('dialer');
@@ -6160,7 +6157,7 @@ document.getElementById('btn-claim')?.addEventListener('click', () => {
   const name   = document.getElementById('input-name')?.value?.trim();
   const number = document.getElementById('input-number')?.value?.trim();
   const server = (document.getElementById('input-server')?.value?.trim())
-    || 'wss://opencall-server-pqfe.onrender.com';
+    || 'wss://signal.opencall.space';
   if (!name || !number) {
     toast('Please enter your name and number');
     return;
@@ -6190,7 +6187,7 @@ document.getElementById('link-change')?.addEventListener('click', e => {
   const srvEl  = document.getElementById('input-server');
   if (nameEl) nameEl.value = localStorage.getItem('user_name')   || '';
   if (numEl)  numEl.value  = localStorage.getItem('user_number') || '';
-  if (srvEl)  srvEl.value  = localStorage.getItem('server_url')  || 'wss://opencall-server-pqfe.onrender.com';
+  if (srvEl)  srvEl.value  = localStorage.getItem('server_url')  || 'wss://signal.opencall.space';
 });
 
 // Fix 1 — registration number: warn if no country code

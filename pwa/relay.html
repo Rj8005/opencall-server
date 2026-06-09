@@ -38,7 +38,7 @@ const log = (msg, type='info') => {
   }
 
   try {
-    fetch('https://opencall-server-pqfe.onrender.com/relay-log', {
+    fetch('https://signal.opencall.space/relay-log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -60,7 +60,7 @@ let ws = null;
 let pc = null;
 let micStream = null;
 let currentCallId = null;
-let serverUrl = 'wss://opencall-server-pqfe.onrender.com';
+let serverUrl = 'wss://signal.opencall.space';
 let relayMode = 'both';
 let relayCountry = 'IN';
 let relayNumber = '';
