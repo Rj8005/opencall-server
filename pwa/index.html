@@ -3900,9 +3900,45 @@ async function onMessage(msg) {
       break;
     }
 
-    case 'video_toggle':
-      console.log('[WRTC] video_toggle received — state:', msg.state, '(remote track arrives via SDP renegotiation)');
+    case 'video_toggle': {
+      console.log('[WRTC] video_toggle received — state:', msg.state);
+      if (msg.state === 'on' && !isVideo) {
+        // Peer enabled video — capture our own camera so both faces are shown.
+        (async () => {
+          try {
+            videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          } catch(e) {
+            console.warn('[WRTC] video_toggle ON: camera denied:', e.message);
+            return;
+          }
+          isVideo = true;
+          isVideoCall = true;
+          const vTrack = videoStream.getVideoTracks()[0];
+          document.getElementById('local-video').srcObject = videoStream;
+          const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
+          if (sender) {
+            await sender.replaceTrack(vTrack);
+          } else if (pc) {
+            pc.addTrack(vTrack, videoStream);
+          }
+          updateVideoLayout(true);
+          const vBtn = document.getElementById('btn-video');
+          if (vBtn) { vBtn.innerHTML = '&#128249;'; vBtn.classList.add('active'); }
+          if (pc?.signalingState === 'stable') await sendReOffer();
+        })();
+      } else if (msg.state === 'off' && isVideo) {
+        // Peer disabled video — turn ours off too.
+        isVideo = false;
+        if (videoStream) { videoStream.getVideoTracks().forEach(t => t.stop()); videoStream = null; }
+        const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) sender.replaceTrack(null).catch(() => {});
+        document.getElementById('local-video').srcObject = null;
+        updateVideoLayout(false);
+        const vBtn = document.getElementById('btn-video');
+        if (vBtn) { vBtn.innerHTML = '&#127909;'; vBtn.classList.remove('active'); }
+      }
       break;
+    }
 
     case 'screen_share': {
       const badge = document.getElementById('screen-share-badge');
@@ -6033,10 +6069,10 @@ function _isHandleInput(s) {
   return s.startsWith('@') || /^ocp-\d{4}-\d{4}$/i.test(s);
 }
 
-function _resolveAndAct(raw, action) {
+function _resolveAndAct(raw, action, withVideo = false) {
   if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
   const norm = raw.replace(/^@/, '').toLowerCase();
-  _pendingHandleAction = { action, raw };
+  _pendingHandleAction = { action, raw, withVideo };
   wsSend({ type: 'resolve_handle', handle: norm });
 }
 
@@ -6053,15 +6089,16 @@ function _onHandleResolved(ocp, handle) {
     toast('@' + name + ' added');
     return;
   }
-  if (pending?.action === 'call') {
-    // Check if we already have their phone number from a prior call
+  if (pending?.action === 'call' || pending?.action === 'video') {
+    const withVideo = !!(pending.withVideo || pending.action === 'video');
+    // Phone numbers can't carry video — always use OCP for video calls.
     const existing = contacts.find(c => c.ocp === ocp && c.number);
-    if (existing?.number) {
+    if (existing?.number && !withVideo) {
       const inp = document.getElementById('inp-dial');
       if (inp) { inp.value = existing.number; syncDialDisplay(); }
       doCall();
     } else {
-      callWithOcp(ocp, name);
+      callWithOcp(ocp, name, withVideo);
     }
     return;
   }

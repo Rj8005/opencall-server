@@ -1111,7 +1111,7 @@ async function handle(ws, msg) {
       if (target?.readyState === 1) send(target, msg);
     } else if (msg.to) {
       // Direct OCP-to-OCP path: route by msg.to (same as sdp_offer)
-      const targetWs = registry.get(msg.to);
+      const targetWs = registry.get(msg.to) || ocpRegistry.get(msg.to);
       if (targetWs?.readyState === 1) send(targetWs, msg);
     }
     return;
