@@ -3911,11 +3911,17 @@ async function onMessage(msg) {
             console.warn('[WRTC] video_toggle ON: camera denied:', e.message);
             return;
           }
+          // Guard: call may have ended while getUserMedia was awaiting.
+          if (!pc || !callWith || pc.signalingState === 'closed') {
+            videoStream?.getTracks().forEach(t => t.stop());
+            videoStream = null;
+            return;
+          }
           isVideo = true;
           isVideoCall = true;
           const vTrack = videoStream.getVideoTracks()[0];
           document.getElementById('local-video').srcObject = videoStream;
-          const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
+          const sender = pc?.getSenders()?.find(s => s.track?.kind === 'video');
           if (sender) {
             await sender.replaceTrack(vTrack);
           } else if (pc) {
@@ -3924,13 +3930,16 @@ async function onMessage(msg) {
           updateVideoLayout(true);
           const vBtn = document.getElementById('btn-video');
           if (vBtn) { vBtn.innerHTML = '&#128249;'; vBtn.classList.add('active'); }
+          // Re-offer so the remote side receives our video track.
+          // handleOffer (if currently in progress) will roll back any conflicting
+          // local offer and accept the incoming one — no glare.
           if (pc?.signalingState === 'stable') await sendReOffer();
         })();
       } else if (msg.state === 'off' && isVideo) {
         // Peer disabled video — turn ours off too.
         isVideo = false;
         if (videoStream) { videoStream.getVideoTracks().forEach(t => t.stop()); videoStream = null; }
-        const sender = pc?.getSenders().find(s => s.track?.kind === 'video');
+        const sender = pc?.getSenders()?.find(s => s.track?.kind === 'video');
         if (sender) sender.replaceTrack(null).catch(() => {});
         document.getElementById('local-video').srcObject = null;
         updateVideoLayout(false);
@@ -5667,20 +5676,38 @@ async function handleOffer(sdp, from) {
     console.log('[WRTC] offer has m=video — isVideoCall set true');
   }
   if (!pc) await initWebRTC(false);
+  // Glare guard: if we have an outstanding local offer (e.g. from sendReOffer in
+  // video_toggle handler), roll it back so we can accept the incoming offer instead.
+  if (pc?.signalingState === 'have-local-offer') {
+    try {
+      await pc.setLocalDescription({ type: 'rollback' });
+      console.log('[WRTC] handleOffer: rolled back local offer (glare guard)');
+    } catch(e) {
+      console.warn('[WRTC] handleOffer rollback failed:', e.message);
+    }
+  }
   try {
     await pc.setRemoteDescription({ type:'offer', sdp });
     console.log('[WRTC] handleOffer setRemoteDescription OK');
     await flushIce(pc);
   } catch(e) {
     console.log('[WRTC] handleOffer setRemoteDescription FAILED:', e.message);
+    return; // cannot createAnswer without a valid remote description
   }
-  const answer = await pc.createAnswer();
-  console.log('[WRTC] handleOffer createAnswer type:', answer.type, '| m=audio:', answer.sdp.includes('m=audio'), '| sendrecv:', answer.sdp.includes('sendrecv'));
+  let answer;
+  try {
+    answer = await pc.createAnswer();
+    console.log('[WRTC] handleOffer createAnswer type:', answer.type, '| m=audio:', answer.sdp.includes('m=audio'), '| sendrecv:', answer.sdp.includes('sendrecv'));
+  } catch(e) {
+    console.warn('[WRTC] handleOffer createAnswer failed:', e.message);
+    return;
+  }
   try {
     await pc.setLocalDescription(answer);
     console.log('[WRTC] handleOffer setLocalDescription OK (answer)');
   } catch(e) {
     console.log('[WRTC] handleOffer setLocalDescription FAILED:', e.message);
+    return;
   }
   // Link path: callee registered as 'link:<callId>', not by phone/OCP.
   // Route answer to callWith so the server can deliver via registry.
