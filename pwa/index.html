@@ -3328,6 +3328,7 @@ async function onMessage(msg) {
 
     case 'answered':
       stopRingback();
+      stopRingtone();
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
       document.getElementById('caller-avatar').classList.remove('ringing');
@@ -3336,6 +3337,8 @@ async function onMessage(msg) {
       break;
 
     case 'call_connected':
+      stopRingtone();
+      stopRingback();
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
       document.getElementById('caller-name-display').textContent = callWith;
@@ -5612,6 +5615,8 @@ async function initWebRTC(isCaller) {
   pc.oniceconnectionstatechange = () => {
     console.log('[WRTC] iceConnectionState (initWebRTC):', pc?.iceConnectionState);
     if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
+      stopRingtone();
+      stopRingback();
       _iceWasConnected = true;
       if (!timerInterval) startTimer();   // fallback: start timer if signalling path missed it
       saveContact({
