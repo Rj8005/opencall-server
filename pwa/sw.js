@@ -1,5 +1,5 @@
-const CACHE = 'ocp-v5';
-const ASSETS = ['/', '/index.html', '/manifest.json'];
+const CACHE = 'ocp-v6';
+const ASSETS = ['/', '/index.html', '/manifest.json', '/lib/jssip.min.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
@@ -24,8 +24,7 @@ self.addEventListener('fetch', event => {
       url.includes('opencall-server') ||
       url.includes('/reach/') ||
       url.includes('/invite/') ||
-      url.includes('/health') ||
-      url.includes('jsdelivr.net')) {  // IDT-DIALOUT: JsSIP CDN — always network
+      url.includes('/health')) {
     event.respondWith(fetch(event.request));
     return;
   }
