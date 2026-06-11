@@ -24,7 +24,8 @@ self.addEventListener('fetch', event => {
       url.includes('opencall-server') ||
       url.includes('/reach/') ||
       url.includes('/invite/') ||
-      url.includes('/health')) {
+      url.includes('/health') ||
+      url.includes('jsdelivr.net')) {  // IDT-DIALOUT: JsSIP CDN — always network
     event.respondWith(fetch(event.request));
     return;
   }

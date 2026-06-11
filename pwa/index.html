@@ -1331,6 +1331,9 @@ input::placeholder { color: var(--text-muted); }
 <div id="toast"></div>
 <audio id="remote-audio" autoplay playsinline></audio>
 
+<!-- IDT-DIALOUT: JsSIP WebRTC SIP client (pinned version) -->
+<script src="https://cdn.jsdelivr.net/npm/jssip@3.13.8/dist/jssip.min.js"></script>
+
 <script>
 // ── Service worker + push bootstrap ───────────────────────
 // iOS Safari note: Web Push only works when the PWA is added to the Home
@@ -2727,6 +2730,10 @@ let _pendingHandleAction = null; // { action:'call'|'chat'|'add', raw } set befo
 let contacts             = []; // { ocp, name, number, lastCall } — persisted to ocp_contacts
 let _contactsRenderCache = []; // last sorted order, used by _contactAct
 
+// IDT-DIALOUT: feature flag — set to false to revert to relay/simbank/share-link
+const USE_IDT_DIALOUT = true;
+let _sipSession = null;  // active JsSIP RTCSession for phone-number calls
+
 // ── AI Notes (browser SpeechRecognition live transcript) ──
 // TODO: replace SpeechRecognition with Whisper/Deepgram for better accuracy
 // and non-Chrome browser support.
@@ -3332,6 +3339,7 @@ async function onMessage(msg) {
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
       document.getElementById('caller-avatar').classList.remove('ringing');
+      console.log('[DIAG] startTimer called via answered');
       startTimer();
       await initWebRTC(true);
       break;
@@ -3346,6 +3354,7 @@ async function onMessage(msg) {
       document.getElementById('call-route-info').textContent = callMode === 'relay' ? 'via relay' : 'via OCP network';
       document.getElementById('caller-avatar').classList.remove('ringing');
       showActiveCallOverlay();
+      console.log('[DIAG] startTimer called via call_connected');
       startTimer();
       break;
 
@@ -3422,6 +3431,7 @@ async function onMessage(msg) {
 
       setConnectionStatus('calling');
       document.getElementById('caller-avatar')?.classList.remove('ringing');
+      console.log('[DIAG] startTimer called via callee_joined');
       startTimer();
       console.log('[WRTC] callee joined via link — starting offer | callId:', callId);
       await initWebRTC(true);   // getUserMedia + addTrack + createOffer + sdp_offer
@@ -3697,6 +3707,7 @@ async function onMessage(msg) {
             number: callWith || null
           });
           showActiveCallOverlay();
+          console.log('[DIAG] startTimer called via relay-iceConnectionState-connected');
           startTimer();
           setConnectionStatus('calling');
           if (hint) {
@@ -5299,6 +5310,16 @@ async function doCall() {
     showDialHint('Number too short', true);
     return;
   }
+  // IDT-DIALOUT: primary path — dial directly via JsSIP/Kamailio → IDT carrier
+  if (USE_IDT_DIALOUT) {
+    callWith = to;
+    currentDialedNumber = to;
+    showCallingScreen(to);
+    placeSipCall(to);
+    return;
+  }
+
+  // ── Legacy path (relay / simbank / share-link) — USE_IDT_DIALOUT=false ──────
   if (!ws || ws.readyState !== 1) return toast('Not connected to server');
 
   // DHT lookup: hint-only — does NOT gate routing (server decides relay vs invite)
@@ -5361,7 +5382,117 @@ async function doDecline() {
 }
 
 // ── hangup ─────────────────────────────────────────────────
+// IDT-DIALOUT: dial a PSTN number via JsSIP → Kamailio SBC → IDT carrier
+function placeSipCall(e164) {
+  if (!window.JsSIP) {
+    console.error('[IDT] JsSIP not loaded — cannot place SIP call');
+    toast('SIP library not loaded');
+    endCall();
+    return;
+  }
+
+  // Kamailio expects bare E.164 digits (no leading +)
+  const bareNumber = e164.replace(/^\+/, '');
+  const target     = 'sip:' + bareNumber + '@sbc.opencall.space';
+  console.log('[IDT] placeSipCall → target:', target);
+
+  JsSIP.debug.disable('JsSIP:*');  // suppress verbose internal logs
+
+  const ua = new JsSIP.UA({
+    sockets:  [ new JsSIP.WebSocketInterface('wss://sbc.opencall.space:4443') ],
+    uri:      'sip:webrtc@sbc.opencall.space',
+    register: false   // IP-authed on Kamailio; no SIP registration needed
+  });
+
+  ua.on('connected', () => {
+    console.log('[IDT] UA connected to SBC — placing call');
+    document.getElementById('call-status-detail').textContent = 'Connecting via PSTN…';
+    document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
+
+    const session = ua.call(target, {
+      mediaConstraints: { audio: true, video: false },
+      pcConfig: { iceServers: [{ urls: 'stun:node.opencall.space:3478' }] }
+    });
+    _sipSession = session;
+
+    // Wire remote audio as soon as the RTCPeerConnection is created
+    session.on('peerconnection', ({ peerconnection }) => {
+      peerconnection.ontrack = ev => {
+        if (ev.track.kind !== 'audio') return;
+        const audio = document.getElementById('remote-audio');
+        audio.srcObject = ev.streams[0] || new MediaStream([ev.track]);
+        audio.play().catch(err => {
+          console.warn('[IDT] remote-audio play blocked:', err.message);
+          let b = document.getElementById('tap-to-hear');
+          if (!b) {
+            b = document.createElement('button');
+            b.id = 'tap-to-hear';
+            b.textContent = '🔊 Tap to hear';
+            b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);' +
+              'z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;' +
+              'color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+            document.body.appendChild(b);
+          }
+          b.style.display = 'block';
+          b.onclick = () => { audio.play(); b.style.display = 'none'; };
+        });
+      };
+    });
+
+    session.on('progress', () => {
+      console.log('[IDT] progress — ringing');
+      document.getElementById('call-status-detail').textContent = 'Ringing…';
+      document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
+    });
+
+    session.on('confirmed', () => {
+      console.log('[IDT] confirmed — call connected');
+      stopRingback();
+      setConnectionStatus('calling');
+      document.getElementById('call-status-detail').textContent = 'Connected via PSTN';
+      document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
+      console.log('[DIAG] startTimer called via IDT-sip-confirmed');
+      startTimer();
+    });
+
+    session.on('ended', ev => {
+      console.log('[IDT] ended — cause:', ev.cause);
+      _sipSession = null;
+      ua.stop();
+      endCall();
+      setConnectionStatus('online');
+    });
+
+    session.on('failed', ev => {
+      console.error('[IDT] failed — cause:', ev.cause);
+      _sipSession = null;
+      ua.stop();
+      toast('Call failed (' + (ev.cause || 'unknown') + ')');
+      endCall();
+      setConnectionStatus('online');
+    });
+  });
+
+  ua.on('disconnected', () => {
+    // Only act if a call was in progress (ignore post-hangup disconnect)
+    if (_sipSession) {
+      console.error('[IDT] UA disconnected unexpectedly');
+      _sipSession = null;
+      endCall();
+      setConnectionStatus('online');
+    }
+  });
+
+  ua.start();
+}
+
 async function doHangup() {
+  // IDT-DIALOUT: terminate SIP session if one is active
+  if (_sipSession) {
+    try { _sipSession.terminate(); } catch(e) {}
+    _sipSession = null;
+  }
+
   clearTimeout(relayTimeout);
   relayTimeout = null;
   relayCallActive = false;
@@ -5542,6 +5673,7 @@ async function initWebRTC(isCaller) {
     }
   }
   console.log('[WRTC] getUserMedia OK — tracks:', localStream.getTracks().map(t => t.kind+'('+t.enabled+')').join(','));
+  console.log('[DIAG] role=' + (isCaller ? 'caller' : 'callee') + ' isVideoCall=' + isVideoCall + ' audioTracks=' + localStream.getAudioTracks().length + ' videoTracks=' + localStream.getVideoTracks().length);
 
   pc = new RTCPeerConnection(RTC_CFG);
   console.log('[WRTC] initWebRTC iceServers:', JSON.stringify(RTC_CFG.iceServers));
@@ -5549,6 +5681,7 @@ async function initWebRTC(isCaller) {
   // Add ALL captured tracks (audio + video when isVideoCall).
   localStream.getTracks().forEach(t => {
     console.log('[WRTC] addTrack (initWebRTC) — kind:', t.kind, 'enabled:', t.enabled);
+    console.log('[DIAG] addTrack kind=' + t.kind + ' role=' + (isCaller ? 'caller' : 'callee'));
     pc.addTrack(t, localStream);
   });
   console.log('[WRTC] addTrack done — senders:', pc.getSenders().length);
@@ -5567,6 +5700,7 @@ async function initWebRTC(isCaller) {
 
   pc.ontrack = e => {
     console.log('[WRTC] ontrack fired (initWebRTC) — kind:', e.track.kind, 'streamId:', e.streams[0]?.id, 'enabled:', e.track.enabled, 'muted:', e.track.muted);
+    console.log('[DIAG] ontrack kind=' + e.track.kind + ' streams=' + e.streams.length);
     if (e.track.kind === 'video') {
       // Route remote video to the <video> element only; audio stays in <audio>.
       const rv = document.getElementById('remote-video');
@@ -5618,7 +5752,7 @@ async function initWebRTC(isCaller) {
       stopRingtone();
       stopRingback();
       _iceWasConnected = true;
-      if (!timerInterval) startTimer();   // fallback: start timer if signalling path missed it
+      if (!timerInterval) { console.log('[DIAG] startTimer called via iceConnectionState-connected'); startTimer(); }   // fallback: start timer if signalling path missed it
       saveContact({
         ocp:    pendingCall?.fromOcp || null,
         name:   pendingCall?.fromName || document.getElementById('caller-name-display')?.textContent || callWith || '',
@@ -5734,7 +5868,7 @@ function startTimer() {
     document.getElementById('call-timer').textContent = `${m}:${s}`;
   }, 1000);
 }
-function stopTimer() { clearInterval(timerInterval); timerInterval=null; timerSecs=0; }
+function stopTimer() { console.log('[DIAG] stopTimer called', new Error().stack); clearInterval(timerInterval); timerInterval=null; timerSecs=0; }
 
 // ── ringtone — Web Audio, no files needed ──────────────────
 function startRingtone() {
