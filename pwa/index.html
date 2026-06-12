@@ -3334,11 +3334,14 @@ async function onMessage(msg) {
       break;
 
     case 'answered':
+      DLOG('MSG answered'); // DIAGTMP
+      DLOG('-> stopRingback (answered)'); // DIAGTMP
       stopRingback();
       stopRingtone();
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
       document.getElementById('caller-avatar').classList.remove('ringing');
+      DLOG('-> startTimer (answered)'); // DIAGTMP
       console.log('[DIAG] startTimer called via answered');
       startTimer();
       await initWebRTC(true);
@@ -3439,6 +3442,7 @@ async function onMessage(msg) {
     }
 
     case 'sdp_offer': {
+      DLOG('MSG sdp_offer', {pcExists: !!pc, pcId: pc&&pc._id}); // DIAGTMP
       LOG.webrtc('📨 SDP offer received', { callId: msg.callId, sdpLength: msg.sdp?.sdp?.length, from: msg.from });
       if (callMode === 'relay' && msg.callId) {
         // Relay call: B (relay) sends offer → A answers
@@ -5381,6 +5385,7 @@ async function doAnswer() {
   isVideoCall = !!(pendingCall.video);
   await initRatchetSession(callWith);
   await wsSend({ type:'answer', callId:pendingCall.callId, from:pendingCall.from });
+  DLOG('doAnswer -> initWebRTC(false)'); // DIAGTMP
   initWebRTC(false);
 }
 async function doDecline() {
@@ -5655,11 +5660,17 @@ function endCall() {
 }
 
 // ── WebRTC ─────────────────────────────────────────────────
+let _pcSeq = 0, _iwSeq = 0;                                   // DIAGTMP
+const DT = () => Math.round(performance.now());               // DIAGTMP
+const DLOG = (tag, o) => console.log('[DIAG '+DT()+'] '+tag, o||''); // DIAGTMP
 async function initWebRTC(isCaller) {
+  const _myiw = ++_iwSeq;                                    // DIAGTMP
+  DLOG('IW enter', {seq:_myiw, isCaller, pcExists: !!pc, isVideoCall}); // DIAGTMP
   if (pc) {
     // Already initialised (race between doAnswer fire-and-forget and handleOffer).
     // The first call to complete owns the PC; later calls are no-ops.
     console.log('[WRTC] initWebRTC skipped — pc already set (race guard)');
+    DLOG('IW guard-hit returning', {seq:_myiw, pcId: pc._id}); // DIAGTMP
     return;
   }
   // Single getUserMedia call — captures video too when this is a video call.
@@ -5682,10 +5693,13 @@ async function initWebRTC(isCaller) {
       doHangup(); return;
     }
   }
+  DLOG('IW gUM done', {seq:_myiw});                          // DIAGTMP
   console.log('[WRTC] getUserMedia OK — tracks:', localStream.getTracks().map(t => t.kind+'('+t.enabled+')').join(','));
   console.log('[DIAG] role=' + (isCaller ? 'caller' : 'callee') + ' isVideoCall=' + isVideoCall + ' audioTracks=' + localStream.getAudioTracks().length + ' videoTracks=' + localStream.getVideoTracks().length);
 
   pc = new RTCPeerConnection(RTC_CFG);
+  pc._id = ++_pcSeq;                                         // DIAGTMP
+  DLOG('IW pc-created', {seq:_myiw, pcId: pc._id});          // DIAGTMP
   console.log('[WRTC] initWebRTC iceServers:', JSON.stringify(RTC_CFG.iceServers));
 
   // Add ALL captured tracks (audio + video when isVideoCall).
@@ -5709,6 +5723,7 @@ async function initWebRTC(isCaller) {
   }
 
   pc.ontrack = e => {
+    DLOG('ontrack', {pcId: this._id || (pc&&pc._id), kind: e.track.kind, isVideoCall}); // DIAGTMP
     console.log('[WRTC] ontrack fired (initWebRTC) — kind:', e.track.kind, 'streamId:', e.streams[0]?.id, 'enabled:', e.track.enabled, 'muted:', e.track.muted);
     console.log('[DIAG] ontrack kind=' + e.track.kind + ' streams=' + e.streams.length);
     if (e.track.kind === 'video') {
@@ -5722,12 +5737,15 @@ async function initWebRTC(isCaller) {
     const audio = document.getElementById('remote-audio');
     audio.srcObject = e.streams[0];
     console.log('[WRTC] remote-audio srcObject set (initWebRTC), streamId:', e.streams[0]?.id);
+    DLOG('audio attach -> remote-audio', {pcId: pc&&pc._id}); // DIAGTMP
     audio.play()
       .then(() => {
+        DLOG('audio play OK'); // DIAGTMP
         console.log('[WRTC] remote-audio play OK (initWebRTC)');
         const b = document.getElementById('tap-to-hear'); if (b) b.style.display = 'none';
       })
       .catch(err => {
+        DLOG('audio play FAIL', err); // DIAGTMP
         console.log('[WRTC] remote-audio play BLOCKED (initWebRTC):', err.name, err.message);
         let b = document.getElementById('tap-to-hear');
         if (!b) {
@@ -5757,6 +5775,7 @@ async function initWebRTC(isCaller) {
   };
 
   pc.oniceconnectionstatechange = () => {
+    DLOG('ICE state', {pcId: pc&&pc._id, state: pc&&pc.iceConnectionState}); // DIAGTMP
     console.log('[WRTC] iceConnectionState (initWebRTC):', pc?.iceConnectionState);
     if (pc?.iceConnectionState === 'connected' || pc?.iceConnectionState === 'completed') {
       stopRingtone();
@@ -5870,6 +5889,7 @@ async function handleOffer(sdp, from) {
 
 // ── call timer ─────────────────────────────────────────────
 function startTimer() {
+  DLOG('startTimer FIRED'); // DIAGTMP
   timerSecs = 0;
   timerInterval = setInterval(() => {
     timerSecs++;
@@ -5899,6 +5919,7 @@ function startRingtone() {
   ringInterval = setInterval(ring, 820);
 }
 function stopRingtone() {
+  DLOG('stopRingtone FIRED'); // DIAGTMP
   clearInterval(ringInterval);
   if (audioCtx) { audioCtx.close(); audioCtx=null; }
 }
@@ -5919,6 +5940,7 @@ function startRingback() {
   ringbackInt = setInterval(beep, 3200);
 }
 function stopRingback() {
+  DLOG('stopRingback FIRED'); // DIAGTMP
   clearInterval(ringbackInt);
   if (ringbackCtx) { ringbackCtx.close(); ringbackCtx=null; }
 }
