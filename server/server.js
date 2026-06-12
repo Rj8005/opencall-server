@@ -1528,12 +1528,26 @@ async function handle(ws, msg) {
 
     // ── ANSWER ────────────────────────────────────────────────
     case "answer": {
-      const callerWs = registry.get(msg.from)
-                    || (msg.from?.startsWith('ocp:') ? ocpRegistry.get(msg.from) : null);
+      // Resolve callerWs via four sources in priority order:
+      //   1. pendingCalls[callId].callerWs  — relay / answer-link paths store it here
+      //   2. ocpRegistry[callLog[callId].from] — OCP-to-OCP path: callLog stores callerOcp
+      //      but no callerWs, so we recover the socket via ocpRegistry
+      //   3. registry[msg.from]              — legacy direct phone-number path
+      //   4. ocpRegistry[msg.from]           — original OCP fallback (msg.from = callerOcp)
+      const _pend = pendingCalls.get(msg.callId);
+      const _log  = callLog.get(msg.callId);
+      const _candidates = [
+        _pend?.callerWs,
+        _log?.from ? ocpRegistry.get(_log.from) : null,
+        registry.get(msg.from),
+        msg.from?.startsWith('ocp:') ? ocpRegistry.get(msg.from) : null
+      ];
+      const callerWs = _candidates.find(s => s?.readyState === 1) ?? null;
+
       if (!callerWs) return send(ws, { type: "error", reason: "caller_gone" });
 
-      send(callerWs, { type: "answered", callId: msg.callId });
-      send(ws,       { type: "call_connected", callId: msg.callId });
+      try { send(callerWs, { type: "answered",      callId: msg.callId }); } catch(e) {}
+      try { send(ws,       { type: "call_connected", callId: msg.callId }); } catch(e) {}
       log("✓", "answered:", msg.callId);
       break;
     }
