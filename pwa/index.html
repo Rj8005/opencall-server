@@ -5384,7 +5384,7 @@ async function doAnswer() {
   callMode = 'direct';
   isVideoCall = !!(pendingCall.video);
   await initRatchetSession(callWith);
-  await wsSend({ type:'answer', callId:pendingCall.callId, from:pendingCall.from });
+  await wsSend({ type:'answer', callId:pendingCall.callId });
   DLOG('doAnswer -> initWebRTC(false)'); // DIAGTMP
   initWebRTC(false);
 }
@@ -5614,6 +5614,7 @@ function endCall() {
   window._pendingCallId = null;
   releaseWakeLock();
   stopTimer();
+  if (window._statsTimer) { clearInterval(window._statsTimer); window._statsTimer=null; } // DIAGTMP
   stopRingtone();
   stopRingback();
   const waitPanel = document.getElementById('relay-waiting-panel');
@@ -5782,6 +5783,17 @@ async function initWebRTC(isCaller) {
       stopRingback();
       _iceWasConnected = true;
       if (!timerInterval) { console.log('[DIAG] startTimer called via iceConnectionState-connected'); startTimer(); }   // fallback: start timer if signalling path missed it
+      if (window._statsTimer) clearInterval(window._statsTimer);            // DIAGTMP
+      window._statsTimer = setInterval(async () => {                        // DIAGTMP
+        if (!pc) return;                                                    // DIAGTMP
+        const s = await pc.getStats(); let o={}, i={};                      // DIAGTMP
+        s.forEach(r => {                                                    // DIAGTMP
+          if (r.type==='outbound-rtp' && r.kind==='audio') o={pktSent:r.packetsSent, bytesSent:r.bytesSent};   // DIAGTMP
+          if (r.type==='inbound-rtp'  && r.kind==='audio') i={pktRecv:r.packetsReceived, bytesRecv:r.bytesReceived, level:r.audioLevel}; // DIAGTMP
+        });                                                                 // DIAGTMP
+        const rx = pc.getReceivers().find(x=>x.track&&x.track.kind==='audio'); // DIAGTMP
+        DLOG('AUDIO STATS', {send:o, recv:i, remoteMuted: rx && rx.track.muted}); // DIAGTMP
+      }, 2000);                                                             // DIAGTMP
       saveContact({
         ocp:    pendingCall?.fromOcp || null,
         name:   pendingCall?.fromName || document.getElementById('caller-name-display')?.textContent || callWith || '',

@@ -861,8 +861,8 @@ wss.on("connection", (ws, req) => {
           callLog.delete(callId);
         }
       }
-      registry.delete(meta.number);
-      if (meta.ocpAddress) ocpRegistry.delete(meta.ocpAddress);
+      if (registry.get(meta.number) === ws) registry.delete(meta.number);
+      if (meta.ocpAddress && ocpRegistry.get(meta.ocpAddress) === ws) ocpRegistry.delete(meta.ocpAddress);
       log("←", "unregistered", meta.number);
     }
     if (meta) {
