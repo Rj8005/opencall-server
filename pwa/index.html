@@ -5310,7 +5310,17 @@ async function doCall() {
     showDialHint('Number too short', true);
     return;
   }
-  // IDT-DIALOUT: primary path — dial directly via JsSIP/Kamailio → IDT carrier
+  // IDT-DIALOUT STEP 1: is this number on OCP? → free direct call
+  if (dhtReady) {
+    showDialHint('Checking OCP…', false);
+    const ocpAddr = await dhtLookupPhone(to);
+    if (ocpAddr) {
+      showDialHint('OCP user — direct call', false);
+      callWithOcp(ocpAddr, to, false);
+      return;
+    }
+  }
+  // IDT-DIALOUT STEP 2: not on OCP — dial via JsSIP/Kamailio → IDT carrier
   if (USE_IDT_DIALOUT) {
     callWith = to;
     currentDialedNumber = to;
