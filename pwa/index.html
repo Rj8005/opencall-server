@@ -5430,12 +5430,14 @@ function placeSipCall(e164) {
     });
     _sipSession = session;
 
-    // Wire remote audio as soon as the RTCPeerConnection is created
+    // Wire remote audio as soon as the RTCPeerConnection is created.
+    // Use addEventListener (not ontrack=) so JsSIP's internal handler doesn't overwrite ours.
     session.on('peerconnection', ({ peerconnection }) => {
-      peerconnection.ontrack = ev => {
+      peerconnection.addEventListener('track', ev => {
         if (ev.track.kind !== 'audio') return;
         const audio = document.getElementById('remote-audio');
         audio.srcObject = ev.streams[0] || new MediaStream([ev.track]);
+        console.log('[IDT] remote audio track attached, stream:', audio.srcObject.id);
         audio.play().catch(err => {
           console.warn('[IDT] remote-audio play blocked:', err.message);
           let b = document.getElementById('tap-to-hear');
@@ -5451,7 +5453,7 @@ function placeSipCall(e164) {
           b.style.display = 'block';
           b.onclick = () => { audio.play(); b.style.display = 'none'; };
         });
-      };
+      });
     });
 
     session.on('progress', () => {
@@ -5462,6 +5464,8 @@ function placeSipCall(e164) {
 
     session.on('confirmed', () => {
       console.log('[IDT] confirmed — call connected');
+      const _pc = session.connection;
+      console.log('[IDT] senders:', _pc?.getSenders().map(s=>s.track?.kind), 'receivers:', _pc?.getReceivers().map(r=>r.track?.kind));
       stopRingback();
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'Connected via PSTN';
@@ -5474,6 +5478,8 @@ function placeSipCall(e164) {
       console.log('[IDT] ended — cause:', ev.cause);
       _sipSession = null;
       ua.stop();
+      const _ra = document.getElementById('remote-audio');
+      if (_ra) _ra.srcObject = null;
       endCall();
       setConnectionStatus('online');
     });
@@ -5482,6 +5488,8 @@ function placeSipCall(e164) {
       console.error('[IDT] failed — cause:', ev.cause);
       _sipSession = null;
       ua.stop();
+      const _ra = document.getElementById('remote-audio');
+      if (_ra) _ra.srcObject = null;
       toast('Call failed (' + (ev.cause || 'unknown') + ')');
       endCall();
       setConnectionStatus('online');
