@@ -5426,7 +5426,7 @@ function placeSipCall(e164) {
 
     const session = ua.call(target, {
       mediaConstraints: { audio: true, video: false },
-      pcConfig: { iceServers: [{ urls: 'stun:node.opencall.space:3478' }] }
+      pcConfig: RTC_CFG
     });
     _sipSession = session;
 
@@ -5435,7 +5435,12 @@ function placeSipCall(e164) {
     session.on('peerconnection', ({ peerconnection }) => {
       peerconnection.addEventListener('track', ev => {
         if (ev.track.kind !== 'audio') return;
-        const audio = document.getElementById('remote-audio');
+        let audio = document.getElementById('remote-audio');
+        if (!audio) {
+          audio = document.createElement('audio');
+          audio.id = 'remote-audio'; audio.autoplay = true; audio.setAttribute('playsinline', '');
+          document.body.appendChild(audio);
+        }
         audio.srcObject = ev.streams[0] || new MediaStream([ev.track]);
         console.log('[IDT] remote audio track attached, stream:', audio.srcObject.id);
         audio.play().catch(err => {
@@ -5466,6 +5471,24 @@ function placeSipCall(e164) {
       console.log('[IDT] confirmed — call connected');
       const _pc = session.connection;
       console.log('[IDT] senders:', _pc?.getSenders().map(s=>s.track?.kind), 'receivers:', _pc?.getReceivers().map(r=>r.track?.kind));
+      // Race guard: if the track event fired before addEventListener was registered,
+      // attach audio now from the existing receiver.
+      if (_pc) {
+        const _rx = _pc.getReceivers().find(r => r.track && r.track.kind === 'audio');
+        if (_rx) {
+          let _ra = document.getElementById('remote-audio');
+          if (!_ra) {
+            _ra = document.createElement('audio');
+            _ra.id = 'remote-audio'; _ra.autoplay = true; _ra.setAttribute('playsinline', '');
+            document.body.appendChild(_ra);
+          }
+          if (!_ra.srcObject) {
+            _ra.srcObject = new MediaStream([_rx.track]);
+            console.log('[IDT] confirmed: late-attached audio receiver track');
+            _ra.play().catch(err => console.warn('[IDT] confirmed play blocked:', err.message));
+          }
+        }
+      }
       stopRingback();
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'Connected via PSTN';
