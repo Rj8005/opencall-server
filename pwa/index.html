@@ -812,9 +812,44 @@ input::placeholder { color: var(--text-muted); }
   color:#c8f55a; font-size:11px; cursor:pointer;
 }
 .qr-btn:hover { background:rgba(200,245,90,.16); }
+
+/* ── app-embed mode ──────────────────────────────────────────────
+   Set by the tiny inline script at the top of <body> when the page is
+   loaded with ?app=1 (the native OpenCall Android app's Tab 1 WebView —
+   see OcpCallWebView.kt). Native chrome already renders identity + a
+   settings gear on every tab, so the embed hides this page's own
+   header/name-number strip, the "Claim my number" registration form,
+   every OCP-address/handle-claim/back-up surface, the "Add to
+   Home Screen" install card, the find-by-handle-or-code card (handles
+   and DHT direct-call aren't available in app mode — see doCall()),
+   and the DHT/connection status footer (would sit on "Connecting..."
+   forever with no signal-server WS in this mode) — dialer only.
+   Browser users (no ?app=1) are completely unaffected; nothing here
+   changes their styling. */
+html.app-embed .app-header,
+html.app-embed #register-form-card,
+html.app-embed #register-address-block,
+html.app-embed #register-backup-link,
+html.app-embed #install-hint-card,
+html.app-embed #dialer-identity-card,
+html.app-embed #find-peer-card,
+html.app-embed .status-footer { display: none !important; }
 </style>
 </head>
 <body>
+<script>
+// app-embed detection — MUST run before SCREEN 1/2 below are parsed, so the
+// html.app-embed CSS rules already apply and nothing flashes on screen.
+// See OcpCallWebView.kt (Android) for the ?app=1&name=...&number=... URL
+// this is reacting to.
+// APP_EMBED is a top-level `const` in a classic (non-module) script, so it
+// lives in the shared global lexical scope and is readable from the main
+// script block below — see getOrCreateIdentity().
+const APP_EMBED = new URLSearchParams(location.search).get('app') === '1';
+if (APP_EMBED) {
+  document.documentElement.classList.add('app-embed');
+}
+</script>
 
 <!-- ════════════════════════════════════════════════════════
      SCREEN 1 — REGISTER
@@ -845,7 +880,7 @@ input::placeholder { color: var(--text-muted); }
       <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Internet calls · No carrier · No cost</div>
     </div>
 
-    <div class="card">
+    <div class="card" id="register-form-card">
       <div class="field-group">
         <label class="card-label">Your name</label>
         <input type="text" id="input-name" placeholder="Name" style="margin-top:4px"/>
@@ -866,7 +901,7 @@ input::placeholder { color: var(--text-muted); }
       </button>
     </div>
 
-    <div style="margin-top:10px">
+    <div style="margin-top:10px" id="register-address-block">
       <div class="card-label" style="margin-bottom:6px">Your OCP address</div>
       <div class="identity-val">
         <span id="ocp-address-display"
@@ -896,7 +931,7 @@ input::placeholder { color: var(--text-muted); }
     </div>
 
     <!-- Back up identity link -->
-    <div style="margin-top:10px;text-align:right">
+    <div id="register-backup-link" style="margin-top:10px;text-align:right">
       <span onclick="backupIdentity()" style="font-size:11px;color:var(--blue,#63b4ff);
         cursor:pointer;font-family:'DM Mono',monospace;
         text-decoration:underline;text-underline-offset:3px">
@@ -943,7 +978,7 @@ input::placeholder { color: var(--text-muted); }
     <span style="display:none" id="lbl-mynum"></span>
     <span style="display:none" id="lbl-ocpaddr"></span>
 
-    <div class="card">
+    <div class="card" id="dialer-identity-card">
       <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
         <span>Your identity</span>
         <span onclick="backupIdentity()" style="font-size:10px;color:rgba(99,180,255,.55);
@@ -977,7 +1012,7 @@ input::placeholder { color: var(--text-muted); }
     </div>
 
     <!-- Find / add by handle or OCP code -->
-    <div class="card" style="margin-top:8px;">
+    <div class="card" id="find-peer-card" style="margin-top:8px;">
       <div class="card-label">Find by handle or code</div>
       <div class="handle-claim-row">
         <input id="inp-add-handle" class="handle-inp"
@@ -1461,6 +1496,9 @@ async function loadIdentity() {
 }
 
 async function getOrCreateIdentity() {
+  // App mode: the native Android app owns the only identity (Ed25519, in its
+  // Keystore). Never generate, read, or write a second web wallet here.
+  if (APP_EMBED) return null;
   const cached = await loadIdentity();
   if (cached) {
     console.log('[OCP] Identity loaded:', cached.ocp_address);
@@ -2557,13 +2595,17 @@ let _iceWasConnected  = false;
 let _backupNudgeShown = false;   // show the banner at most once per session
 getOrCreateIdentity().then(async id => {
   myIdentity = id;
-  await ensureChatEcdhKeys(myIdentity);  // generate P-256 ECDH keys if this is a new/old identity
-  // Update all OCP address display elements (register + dialer screens)
-  const reg    = document.getElementById('ocp-address-display');
-  const dialer = document.getElementById('ocp-addr-dialer');
-  if (reg)    reg.textContent    = id.ocp_address;
-  if (dialer) dialer.textContent = id.ocp_address;
-  console.log('[OCP] Ready ✓ Identity:', id.ocp_address);
+  // App mode: id is always null here (getOrCreateIdentity() short-circuits),
+  // so there is no wallet to derive ECDH keys for or display an address for.
+  if (id) {
+    await ensureChatEcdhKeys(myIdentity);  // generate P-256 ECDH keys if this is a new/old identity
+    // Update all OCP address display elements (register + dialer screens)
+    const reg    = document.getElementById('ocp-address-display');
+    const dialer = document.getElementById('ocp-addr-dialer');
+    if (reg)    reg.textContent    = id.ocp_address;
+    if (dialer) dialer.textContent = id.ocp_address;
+    console.log('[OCP] Ready ✓ Identity:', id.ocp_address);
+  }
   initDHT().then(() => {
     if (dhtReady && myIdentity) {
       dhtAnnounce(myIdentity.ocp_address, 'online');
@@ -3216,7 +3258,7 @@ async function initSignalServer(server, name, number) {
 async function doRegister() {
   if (!myIdentity) {
     myIdentity = await getOrCreateIdentity();
-    console.log('[OCP] Using identity:', myIdentity.ocp_address);
+    console.log('[OCP] Using identity:', myIdentity?.ocp_address);
   }
 
   const name   = document.getElementById('input-name')?.value.trim()  || '';
@@ -5301,6 +5343,12 @@ async function doCall() {
   }
   // Handle/code intercept: @alice or OCP-XXXX-XXXX → resolve first
   if (_isHandleInput(to)) {
+    // App mode has no signal-server connection (see initFlow()) and no DHT
+    // identity to resolve against — handles/codes can't be routed here.
+    if (APP_EMBED) {
+      showDialHint("Handles and OCP codes aren't available here yet. Dial a full number with country code.", true);
+      return;
+    }
     if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
     showDialHint('Looking up ' + to + '…', false);
     _resolveAndAct(to, 'call');
@@ -6453,6 +6501,36 @@ function initFlow() {
 
   loadContacts();
   renderContacts();
+
+  // app-embed: the native app already knows the caller's name/number
+  // (AccountStore) and passes them once, at load time, as ?app=1&name=...
+  // &number=... — see OcpCallWebView.kt. Register straight into the dialer
+  // with those values; #screen-register (and its own claim form) is never
+  // shown in this mode, so there is nothing here for the user to fill in.
+  //
+  // App mode is PSTN dial-out only: it deliberately does NOT call
+  // initSignalServer(). That call is what reaches getOrCreateIdentity() and
+  // would mint + register a second, web-only ocp: wallet identity alongside
+  // the native app's own Ed25519 identity. Skipping it means no signal-server
+  // WebSocket, no web wallet, and — as a consequence — no handle claim, no
+  // DHT direct-call, no signal-server presence. PSTN calling (placeSipCall)
+  // talks straight to the IP-authed Kamailio SBC and needs none of that.
+  if (APP_EMBED) {
+    // Unconditional return below — app mode must never fall through to the
+    // generic claimed-check branch further down, which calls
+    // initSignalServer(). Fall back to any previously-cached name/number
+    // (e.g. from an earlier load that did pass them) so a param-less reload
+    // still shows a usable dialer instead of a blank one.
+    const appQP     = new URLSearchParams(window.location.search);
+    const appName   = appQP.get('name')   || localStorage.getItem('user_name')   || '';
+    const appNumber = appQP.get('number') || localStorage.getItem('user_number') || '';
+    if (appName)   localStorage.setItem('user_name',   appName);
+    if (appNumber) localStorage.setItem('user_number', appNumber);
+    localStorage.setItem('claimed', 'true');
+    show('dialer');
+    updateHeaderInfo(appName, appNumber);
+    return;
+  }
 
   const claimed = localStorage.getItem('claimed');
   const name    = localStorage.getItem('user_name');

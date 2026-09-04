@@ -1,4 +1,4 @@
-const CACHE = 'ocp-v6';
+const CACHE = 'ocp-v7';
 const ASSETS = ['/', '/index.html', '/manifest.json', '/lib/jssip.min.js'];
 
 self.addEventListener('install', e => {
