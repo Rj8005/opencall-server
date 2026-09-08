@@ -5461,14 +5461,22 @@ function placeSipCall(e164) {
 
   JsSIP.debug.disable('JsSIP:*');  // suppress verbose internal logs
 
-  const ua = new JsSIP.UA({
+    const ua = new JsSIP.UA({
     sockets:  [ new JsSIP.WebSocketInterface('wss://sbc.opencall.space:4443') ],
     uri:      'sip:webrtc@sbc.opencall.space',
-    register: false   // IP-authed on Kamailio; no SIP registration needed
+    authorization_user: 'webrtc',
+    password: '123456',
+    realm:    'sbc.opencall.space',
+    register: true,
+    register_expires: 300
   });
 
-  ua.on('connected', () => {
-    console.log('[IDT] UA connected to SBC — placing call');
+      ua.on('registrationFailed', (e) => {
+    console.error('[IDT] REGISTER failed:', e.cause, e.response && e.response.status_code);
+  });
+
+  ua.on('registered', () => {
+    console.log('[IDT] UA registered — placing call');
     document.getElementById('call-status-detail').textContent = 'Connecting via PSTN…';
     document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
 
