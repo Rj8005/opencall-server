@@ -185,14 +185,93 @@ export async function waitForNumber(identity, pubkey, { tries = 20, delayMs = 30
 
 /* -------------------------------------------------------------- format */
 
-/** Formats a bare E.164 string for display, e.g. 15412041214 -> +1 541 204 1214 */
-export function formatNumber(did) {
-  if (!did) return '';
-  const d = String(did).replace(/\D/g, '');
-  if (d.length === 11 && d[0] === '1') {
-    return `+1 ${d.slice(1, 4)} ${d.slice(4, 7)} ${d.slice(7)}`;
+// Calling codes for the countries /did/countries can return. Keyed by the
+// ISO alpha-2 the API uses. Used two ways: to show "+CC" next to a country
+// name, and — reversed — to find where a bare DID's country code ends so the
+// rest can be grouped readably.
+const CALLING_CODES = {
+  US: '1', CA: '1', GB: '44', IE: '353', FR: '33', DE: '49', IT: '39', ES: '34',
+  PT: '351', NL: '31', BE: '32', LU: '352', CH: '41', AT: '43', SE: '46',
+  NO: '47', DK: '45', FI: '358', IS: '354', PL: '48', CZ: '420', SK: '421',
+  HU: '36', RO: '40', BG: '359', GR: '30', HR: '385', SI: '386', EE: '372',
+  LV: '371', LT: '370', UA: '380', RU: '7', TR: '90', IL: '972', AE: '971',
+  SA: '966', QA: '974', KW: '965', BH: '973', OM: '968', JO: '962', EG: '20',
+  ZA: '27', NG: '234', KE: '254', GH: '233', MA: '212', TN: '216', IN: '91',
+  PK: '92', BD: '880', LK: '94', NP: '977', CN: '86', HK: '852', MO: '853',
+  TW: '886', JP: '81', KR: '82', SG: '65', MY: '60', TH: '66', VN: '84',
+  PH: '63', ID: '62', AU: '61', NZ: '64', BR: '55', AR: '54', MX: '52',
+  CL: '56', CO: '57', PE: '51', VE: '58', EC: '593', UY: '598', PY: '595',
+  BO: '591', CR: '506', PA: '507', DO: '1', GT: '502', HN: '504', SV: '503',
+  NI: '505', JM: '1', TT: '1', PR: '1', CY: '357', MT: '356',
+};
+
+/** "+CC" for a country's ISO code, or '' if unmapped. */
+export function callingCodeFor(iso) {
+  return CALLING_CODES[String(iso || '').toUpperCase()] || '';
+}
+
+// Unique codes, longest first, so "971" is tried before "97" before "9" etc.
+const _CC_BY_LENGTH = [...new Set(Object.values(CALLING_CODES))]
+  .sort((a, b) => b.length - a.length);
+
+/**
+ * IDT returns some non-US numbers with a leading "011" international dial
+ * prefix baked into the DID (e.g. 011542914856437 for an Argentine number).
+ * Strips exactly one such prefix, guarding against mangling real NANP
+ * numbers that happen to start with those digits (a US/CA number always
+ * starts with "1" after any such prefix would be stripped).
+ */
+export function normalizeE164(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (d.startsWith('011')) {
+    const rest = d.slice(3);
+    if (rest.length >= 7 && rest.length <= 15 && !rest.startsWith('1')) {
+      d = rest;
+    }
   }
-  return '+' + d;
+  return d;
+}
+
+// A handful of countries read oddly under the generic length guess below
+// (e.g. Brazil's 2-digit DDD area code). Exact chunk sizes, used only when
+// they add up to the number's actual length.
+const GROUPING_OVERRIDES = {
+  '55': [2, 4, 4], // Brazil: DDD + 8-digit local number
+};
+
+/** Groups a national number into readable chunks — not authoritative
+ *  per-country formatting, just sensible spacing for display. */
+function groupDigits(n, cc) {
+  const override = GROUPING_OVERRIDES[cc];
+  if (override && override.reduce((a, b) => a + b, 0) === n.length) {
+    let i = 0;
+    return override.map(size => { const part = n.slice(i, i + size); i += size; return part; }).join(' ');
+  }
+  const len = n.length;
+  if (len <= 4) return n;
+  if (len === 8) return `${n.slice(0, 4)} ${n.slice(4)}`;
+  if (len === 9) return `${n.slice(0, 3)} ${n.slice(3, 6)} ${n.slice(6)}`;
+  if (len === 10) return `${n.slice(0, 3)} ${n.slice(3, 6)} ${n.slice(6)}`;
+  if (len === 11) return `${n.slice(0, 4)} ${n.slice(4, 7)} ${n.slice(7)}`;
+  const groups = [];
+  let i = 0;
+  while (len - i > 4) { groups.push(n.slice(i, i + 3)); i += 3; }
+  groups.push(n.slice(i));
+  return groups.join(' ');
+}
+
+/** Formats a bare (possibly 011-prefixed) DID for display,
+ *  e.g. 011542914856437 -> +54 291 485 6437, 15412041214 -> +1 541 204 1214 */
+export function formatNumber(did) {
+  const d = normalizeE164(did);
+  if (!d) return '';
+  const cc = _CC_BY_LENGTH.find(c => d.startsWith(c));
+  if (cc) {
+    return `+${cc} ${groupDigits(d.slice(cc.length), cc)}`;
+  }
+  // Unmapped country — best-effort split, still better than a raw digit dump.
+  const guessLen = d.length > 10 ? d.length - 10 : 1;
+  return `+${d.slice(0, guessLen)} ${groupDigits(d.slice(guessLen))}`;
 }
 
 /** Formats paise as rupees, e.g. 19900 -> ₹199.00 */

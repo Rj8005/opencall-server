@@ -1026,16 +1026,28 @@ if (APP_EMBED) {
 
     <!-- International number — entry point for the buy-a-number flow.
          Deliberately outside #dialer-identity-card so it stays visible in
-         app-embed mode; the click handler itself gates on APP_EMBED. -->
+         app-embed mode; the click handler itself gates on APP_EMBED.
+         Two states (no number / has number) are swapped in by
+         _setIntlCardOwned() / _resetIntlCard() in the script below. -->
     <div class="card" id="intl-number-card" style="margin-top:8px;cursor:pointer;" onclick="openInternationalFlow()">
-      <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
-        <span id="intl-number-label">Get a number</span>
-        <span style="font-size:10px;color:var(--blue);opacity:.7">&#8594;</span>
-      </div>
-      <div class="identity-val">
-        <span id="intl-number-value">International number</span>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div style="min-width:0;">
+          <div id="intl-number-title" style="font-family:'Syne',sans-serif;font-size:14px;
+               font-weight:700;color:var(--text-primary);">Get a number</div>
+          <div id="intl-number-subtitle" style="font-family:'DM Mono',monospace;font-size:11px;
+               color:var(--text-secondary);margin-top:3px;">Your own international number — from ₹199/mo</div>
+          <div id="intl-number-meta" style="display:none;font-family:'DM Mono',monospace;font-size:11px;
+               color:var(--text-secondary);margin-top:2px;"></div>
+        </div>
+        <span style="font-size:12px;color:var(--blue);opacity:.7;flex-shrink:0;margin-top:2px;">&#8594;</span>
       </div>
     </div>
+
+    <!-- Low balance — not dismissible, so it only ever reflects real state -->
+    <div id="intl-low-balance-banner" style="display:none;margin-top:8px;padding:10px 14px;
+         background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.25);
+         border-radius:var(--radius-md);font-family:'DM Mono',monospace;font-size:11px;
+         color:var(--amber);line-height:1.5;"></div>
 
     <div class="dial-display">
       <div class="dial-number" id="dial-number-display">+</div>
@@ -1881,19 +1893,69 @@ function _runWalletOnboarding() {
 // openInternationalFlow()): the native app owns the only identity key there,
 // so there is nothing to sign the /account/challenge nonce with.
 
+// Local SIM / Offline are Android-only today. The three-way chooser stays
+// intact below so the APK build can flip this back on; web skips straight
+// to the account step.
+const SHOW_MODE_CHOOSER = false;
+
+function _isoToFlagEmoji(iso2) {
+  const cc = String(iso2 || '').toUpperCase();
+  if (cc.length !== 2 || !/^[A-Z]{2}$/.test(cc)) return '';
+  return String.fromCodePoint(...[...cc].map(c => 127397 + c.charCodeAt(0)));
+}
+
+function _formatDateShort(dateLike) {
+  if (!dateLike) return null;
+  const d = new Date(dateLike);
+  if (isNaN(d.getTime())) return null;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+}
+
+function _getAutorenew() {
+  const v = localStorage.getItem('ocp_autorenew');
+  return v === null ? true : v === 'true';
+}
+function _setAutorenewPref(on) {
+  localStorage.setItem('ocp_autorenew', on ? 'true' : 'false');
+}
+
 // Last line this session learned about, kept only in memory (not persisted —
 // /account/session is cheap and always the source of truth). Lets the entry
 // card show a number without a network round trip on every render, and lets
 // clicking the card jump straight past the purchase flow when one exists.
 let _intlKnownLine = null;
 
-function _setIntlCardNumber(did_) {
-  _intlKnownLine = _intlKnownLine || {};
-  _intlKnownLine.did = did_;
-  const label = document.getElementById('intl-number-label');
-  const value = document.getElementById('intl-number-value');
-  if (label) label.textContent = 'Your number';
-  if (value) value.textContent = did_;
+function _setIntlCardOwned(info) {
+  const title = document.getElementById('intl-number-title');
+  const sub   = document.getElementById('intl-number-subtitle');
+  const meta  = document.getElementById('intl-number-meta');
+  if (title) { title.textContent = info.numberFormatted; title.style.fontFamily = "'DM Mono',monospace"; }
+  if (sub)   sub.textContent = info.city || 'Your international number';
+  if (meta) {
+    meta.style.display = '';
+    meta.textContent = 'Balance ' + info.balanceFormatted;
+  }
+}
+
+function _resetIntlCard() {
+  const title = document.getElementById('intl-number-title');
+  const sub   = document.getElementById('intl-number-subtitle');
+  const meta  = document.getElementById('intl-number-meta');
+  if (title) { title.textContent = 'Get a number'; title.style.fontFamily = "'Syne',sans-serif"; }
+  if (sub)   sub.textContent = 'Your own international number — from ₹199/mo';
+  if (meta)  { meta.style.display = 'none'; meta.textContent = ''; }
+}
+
+function _updateLowBalanceBanner(did, balancePaise) {
+  const el = document.getElementById('intl-low-balance-banner');
+  if (!el) return;
+  if (balancePaise != null && balancePaise < 10000) {
+    el.style.display = '';
+    el.textContent = 'Low balance — ' + did.formatPaise(balancePaise) + ' left.';
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 let _intlCardChecked = false;
@@ -1906,7 +1968,16 @@ async function _refreshIntlCard(force) {
     const did = await import('./ocp-did.js');
     const line = await did.getLine(myIdentity, myIdentity.ocp_address);
     _intlKnownLine = line;
-    if (line && line.did) _setIntlCardNumber(did.formatNumber(line.did));
+    if (line && line.did) {
+      _setIntlCardOwned({
+        numberFormatted: did.formatNumber(line.did),
+        city: null,
+        balanceFormatted: did.formatPaise(line.balance_paise)
+      });
+    } else {
+      _resetIntlCard();
+    }
+    _updateLowBalanceBanner(did, line ? line.balance_paise : null);
   } catch (e) {
     // Not registered yet (404) or offline — leave the "Get a number" default.
   }
@@ -1933,6 +2004,8 @@ async function _runInternationalFlow(direct) {
     'margin:0;font-weight:700;';
   const SUB = 'font-family:"DM Mono",monospace;font-size:13px;color:#8aabb8;' +
     'margin:0 0 16px;line-height:1.55;';
+  const PROGRESS = 'font-family:"DM Mono",monospace;font-size:10px;color:var(--text-muted,rgba(99,180,255,.35));' +
+    'text-transform:uppercase;letter-spacing:.6px;margin:-6px 0 14px;';
   const BTN_PRI = 'width:100%;padding:15px;background:var(--blue,#63b4ff);color:#03161b;border:0;' +
     'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
   const BTN_PRI_DISABLED = 'width:100%;padding:15px;background:rgba(99,180,255,.25);color:rgba(3,22,27,.6);' +
@@ -1941,6 +2014,8 @@ async function _runInternationalFlow(direct) {
     'border-radius:14px;font-weight:600;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;margin-top:10px;';
   const BTN_GHOST = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
     'margin-top:8px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
+  const BTN_DANGER = 'width:100%;padding:15px;background:var(--red,#ff6b6b);color:#1a0505;border:0;' +
+    'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
   const INP = 'width:100%;box-sizing:border-box;padding:12px 14px;' +
     'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);' +
     'border-radius:10px;color:#e8f4f7;font-size:15px;font-family:"DM Mono",monospace;margin-bottom:12px;';
@@ -1948,12 +2023,17 @@ async function _runInternationalFlow(direct) {
     'margin:0 0 12px;line-height:1.5;';
   const WARN = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--amber,#f5a623);' +
     'margin:8px 0 0;line-height:1.5;';
+  const MUTED = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-muted,#667);' +
+    'line-height:1.6;margin:10px 0 0;text-align:center;';
   const LIST = 'max-height:52vh;overflow-y:auto;border:1px solid rgba(255,255,255,.08);' +
     'border-radius:12px;margin-bottom:14px;-webkit-overflow-scrolling:touch;';
   const LIST_ITEM = 'padding:13px 14px;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer;' +
     'display:flex;justify-content:space-between;align-items:center;gap:10px;';
   const LIST_EMPTY = 'padding:22px 14px;text-align:center;color:var(--text-muted);' +
     'font-family:"DM Mono",monospace;font-size:12px;';
+  const TIER_SEP = 'padding:8px 14px 5px;font-family:"DM Mono",monospace;font-size:10px;' +
+    'color:var(--text-muted,rgba(99,180,255,.35));text-transform:uppercase;letter-spacing:.6px;' +
+    'background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.06);';
 
   function makeOvl() {
     const o = document.createElement('div');
@@ -1969,7 +2049,7 @@ async function _runInternationalFlow(direct) {
 
   function addHeader(wrap, ovl, title) {
     const bar = document.createElement('div');
-    bar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;';
+    bar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;';
     const h = document.createElement('h2');
     h.textContent = title;
     h.style.cssText = H2;
@@ -1981,6 +2061,12 @@ async function _runInternationalFlow(direct) {
     bar.appendChild(h);
     bar.appendChild(x);
     wrap.appendChild(bar);
+  }
+  function addProgress(wrap, step) {
+    const p = document.createElement('div');
+    p.style.cssText = PROGRESS;
+    p.textContent = 'Step ' + step + ' of 4';
+    wrap.appendChild(p);
   }
   function addBack(wrap, ovl, onBack) {
     const back = document.createElement('button');
@@ -2009,7 +2095,7 @@ async function _runInternationalFlow(direct) {
     return (e && e.message) ? e.message : fallback;
   }
 
-  // ── Step 0: mode chooser ───────────────────────────────
+  // ── Step 0: mode chooser — Android only (SHOW_MODE_CHOOSER) ─
   function showModeChooser() {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, 'Get a number');
@@ -2056,6 +2142,10 @@ async function _runInternationalFlow(direct) {
     status.style.cssText = SUB;
     status.textContent = '⏳ Setting up your account…';
     wrap.appendChild(status);
+    const security = document.createElement('p');
+    security.style.cssText = MUTED;
+    security.textContent = 'Your identity key stays on this device. We never see it.';
+    wrap.appendChild(security);
     mount(ovl);
 
     try {
@@ -2068,7 +2158,10 @@ async function _runInternationalFlow(direct) {
       _intlKnownLine = line;
       unmount(ovl);
       if (line && line.did) {
-        _setIntlCardNumber(did.formatNumber(line.did));
+        _setIntlCardOwned({
+          numberFormatted: did.formatNumber(line.did), city: null,
+          balanceFormatted: did.formatPaise(line.balance_paise)
+        });
         showYourNumberStep({
           number: line.did, renewsOn: line.did_renews_on, balancePaise: line.balance_paise
         });
@@ -2085,6 +2178,7 @@ async function _runInternationalFlow(direct) {
   async function showCountryStep(ctx) {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, 'Choose a country');
+    addProgress(wrap, 1);
 
     const bal = document.createElement('p');
     bal.style.cssText = SUB;
@@ -2107,10 +2201,16 @@ async function _runInternationalFlow(direct) {
     }
     status.remove();
 
+    // Cheapest tier first, alphabetical within a tier.
+    countries = countries.slice().sort((a, b) => {
+      const t = String(a.tier || '').localeCompare(String(b.tier || ''));
+      return t !== 0 ? t : a.name.localeCompare(b.name);
+    });
+
     const filterInp = document.createElement('input');
     filterInp.type = 'text';
-    filterInp.placeholder = 'Search countries…';
-    filterInp.style.cssText = INP;
+    filterInp.placeholder = 'Search countries or dial code…';
+    filterInp.style.cssText = INP + 'position:sticky;top:0;z-index:1;background:var(--bg-deep,#060a10);';
     wrap.appendChild(filterInp);
 
     const list = document.createElement('div');
@@ -2119,8 +2219,12 @@ async function _runInternationalFlow(direct) {
 
     function render(filter) {
       list.textContent = '';
-      const f = (filter || '').trim().toLowerCase();
-      const matches = countries.filter(c => !f || c.name.toLowerCase().includes(f));
+      const f = (filter || '').trim().toLowerCase().replace(/^\+/, '');
+      const matches = countries.filter(c => {
+        if (!f) return true;
+        const cc = did.callingCodeFor(c.iso).toLowerCase();
+        return c.name.toLowerCase().includes(f) || cc.includes(f);
+      });
       if (!matches.length) {
         const empty = document.createElement('div');
         empty.style.cssText = LIST_EMPTY;
@@ -2128,11 +2232,20 @@ async function _runInternationalFlow(direct) {
         list.appendChild(empty);
         return;
       }
+      let lastTier = undefined;
       matches.forEach(c => {
+        if (c.tier !== lastTier) {
+          lastTier = c.tier;
+          const sep = document.createElement('div');
+          sep.style.cssText = TIER_SEP;
+          sep.textContent = '₹' + c.monthly + '/mo';
+          list.appendChild(sep);
+        }
         const row = document.createElement('div');
         row.style.cssText = LIST_ITEM;
+        const cc = did.callingCodeFor(c.iso);
         const name = document.createElement('span');
-        name.textContent = c.name;
+        name.textContent = (_isoToFlagEmoji(c.iso) + '  ' + c.name + (cc ? '  +' + cc : '')).trim();
         name.style.cssText = 'font-family:"Syne",sans-serif;font-size:14px;color:var(--text-primary,#e8f4ff);';
         const price = document.createElement('span');
         price.textContent = '₹' + c.monthly + '/mo';
@@ -2151,13 +2264,14 @@ async function _runInternationalFlow(direct) {
     render('');
     filterInp.oninput = () => render(filterInp.value);
 
-    addBack(wrap, ovl, showModeChooser);
+    if (SHOW_MODE_CHOOSER) addBack(wrap, ovl, showModeChooser);
   }
 
-  // ── Step 3: region (only when country.has_regions) ─────
+  // ── Step 2 (cont.): region — only when country.has_regions ─
   async function showRegionStep(ctx) {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, ctx.country.name);
+    addProgress(wrap, 2);
     const status = document.createElement('p');
     status.style.cssText = SUB;
     status.textContent = '⏳ Loading regions…';
@@ -2198,10 +2312,11 @@ async function _runInternationalFlow(direct) {
     addBack(wrap, ovl, () => showCountryStep(ctx));
   }
 
-  // ── Step 4: city / group ────────────────────────────────
+  // ── Step 2 (cont.): city / group, with lazy sample numbers ─
   async function showCityStep(ctx) {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, ctx.region ? ctx.region.name : ctx.country.name);
+    addProgress(wrap, 2);
     const status = document.createElement('p');
     status.style.cssText = SUB;
     status.textContent = '⏳ Loading cities…';
@@ -2221,29 +2336,64 @@ async function _runInternationalFlow(direct) {
     const available = groups.filter(g => (g.quantity || 0) > 0);
     const list = document.createElement('div');
     list.style.cssText = LIST;
+    wrap.appendChild(list);
+
     if (!available.length) {
       const empty = document.createElement('div');
       empty.style.cssText = LIST_EMPTY;
       empty.textContent = 'No numbers available here right now.';
       list.appendChild(empty);
     } else {
-      available.forEach(g => {
-        const row = document.createElement('div');
-        row.style.cssText = LIST_ITEM;
-        const left = document.createElement('span');
-        left.style.cssText = 'font-family:"Syne",sans-serif;font-size:14px;color:var(--text-primary,#e8f4ff);';
-        left.textContent = g.name + (g.area_code ? ' (' + g.area_code + ')' : '');
-        const right = document.createElement('span');
-        right.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-secondary,#6b8fad);' +
-          'white-space:nowrap;text-align:right;';
-        right.textContent = g.quantity + ' available';
-        row.appendChild(left);
-        row.appendChild(right);
-        row.onclick = () => { unmount(ovl); showNumberStep({ ...ctx, group: g }); };
-        list.appendChild(row);
+      const BATCH = 8;
+      let shown = 0;
+
+      function renderBatch() {
+        const batch = available.slice(shown, shown + BATCH);
+        batch.forEach(g => {
+          const row = document.createElement('div');
+          row.style.cssText = 'padding:13px 14px;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer;';
+          const top = document.createElement('div');
+          top.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;';
+          const left = document.createElement('span');
+          left.style.cssText = 'font-family:"Syne",sans-serif;font-size:14px;color:var(--text-primary,#e8f4ff);';
+          left.textContent = g.name + (g.area_code ? ' (' + g.area_code + ')' : '');
+          const right = document.createElement('span');
+          right.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-secondary,#6b8fad);' +
+            'white-space:nowrap;text-align:right;';
+          right.textContent = g.quantity + ' available';
+          top.appendChild(left);
+          top.appendChild(right);
+          row.appendChild(top);
+
+          const sample = document.createElement('div');
+          sample.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-muted,#667);' +
+            'margin-top:4px;min-height:14px;';
+          row.appendChild(sample);
+
+          row.onclick = () => { unmount(ovl); showNumberStep({ ...ctx, group: g }); };
+          list.appendChild(row);
+
+          if (g.supports_browse) {
+            did.numbers(g.id, 3)
+              .then(nums => {
+                sample.textContent = nums.length
+                  ? nums.map(n => did.formatNumber(n.number)).join('  ·  ')
+                  : '';
+              })
+              .catch(() => { sample.textContent = ''; });
+          } else {
+            sample.textContent = 'Number assigned on purchase';
+          }
+        });
+        shown += batch.length;
+      }
+
+      renderBatch();
+      list.addEventListener('scroll', () => {
+        if (shown >= available.length) return;
+        if (list.scrollTop + list.clientHeight >= list.scrollHeight - 40) renderBatch();
       });
     }
-    wrap.appendChild(list);
 
     addBack(wrap, ovl, () => {
       if (ctx.region) showRegionStep(ctx);
@@ -2251,10 +2401,11 @@ async function _runInternationalFlow(direct) {
     });
   }
 
-  // ── Step 5: pick a number (or accept carrier-assigned) ──
+  // ── Step 3: pick a number (or accept carrier-assigned) ──
   async function showNumberStep(ctx) {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, ctx.group.name);
+    addProgress(wrap, 3);
 
     if (!ctx.group.supports_browse) {
       const msg = document.createElement('p');
@@ -2311,10 +2462,11 @@ async function _runInternationalFlow(direct) {
     addBack(wrap, ovl, () => showCityStep(ctx));
   }
 
-  // ── Step 6: confirm price and buy ───────────────────────
+  // ── Step 4: confirm price and buy ───────────────────────
   async function showConfirmStep(ctx) {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, 'Confirm');
+    addProgress(wrap, 4);
     const status = document.createElement('p');
     status.style.cssText = SUB;
     status.textContent = '⏳ Getting a price…';
@@ -2334,8 +2486,8 @@ async function _runInternationalFlow(direct) {
     status.remove();
 
     const numLine = document.createElement('div');
-    numLine.style.cssText = 'font-family:"DM Mono",monospace;font-size:20px;color:var(--text-primary,#e8f4ff);' +
-      'text-align:center;margin-bottom:4px;';
+    numLine.style.cssText = 'font-family:"DM Mono",monospace;font-size:22px;font-weight:700;' +
+      'color:var(--text-primary,#e8f4ff);text-align:center;margin-bottom:4px;word-break:break-all;';
     numLine.textContent = ctx.numberPreview ? did.formatNumber(ctx.numberPreview) : 'Assigned at purchase';
     wrap.appendChild(numLine);
 
@@ -2345,25 +2497,62 @@ async function _runInternationalFlow(direct) {
     cityLine.textContent = ctx.group.name + ', ' + ctx.country.name;
     wrap.appendChild(cityLine);
 
+    // ── What you get ──
+    const getLabel = document.createElement('div');
+    getLabel.style.cssText = 'font-family:"DM Mono",monospace;font-size:10px;color:var(--text-muted,#667);' +
+      'text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;';
+    getLabel.textContent = 'What you get';
+    wrap.appendChild(getLabel);
+
+    const benefits = [
+      'Make calls showing this number as your caller ID',
+      'Receive calls to this number in the app',
+      'Keep the number as long as you renew',
+      'Release it anytime — no cancellation fee',
+    ];
+    const benefitsBox = document.createElement('div');
+    benefitsBox.style.cssText = 'margin-bottom:18px;';
+    benefits.forEach(text => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:flex-start;padding:3px 0;' +
+        'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);line-height:1.5;';
+      const check = document.createElement('span');
+      check.textContent = '✓';
+      check.style.cssText = 'color:var(--green,#1d9e75);flex-shrink:0;';
+      const label = document.createElement('span');
+      label.textContent = text;
+      row.appendChild(check);
+      row.appendChild(label);
+      benefitsBox.appendChild(row);
+    });
+    wrap.appendChild(benefitsBox);
+
+    // ── What you pay ──
+    const payLabel = document.createElement('div');
+    payLabel.style.cssText = getLabel.style.cssText;
+    payLabel.textContent = 'You pay';
+    wrap.appendChild(payLabel);
+
+    const renewDate = _formatDateShort(new Date(new Date().setMonth(new Date().getMonth() + 1)));
     const balanceAfter = (quote.balance_paise || 0) - (quote.total_paise || 0);
     const rows = [
-      ['Monthly price', '₹' + quote.monthly + '/mo'],
-      ['Current balance', did.formatPaise(quote.balance_paise)],
-      ['Balance after', did.formatPaise(balanceAfter)],
+      ['Today', did.formatPaise(quote.total_paise)],
+      ['Then monthly from' + (renewDate ? ' ' + renewDate : ''), did.formatPaise(quote.monthly_paise)],
+      ['Your balance after', did.formatPaise(balanceAfter)],
     ];
     const card = document.createElement('div');
     card.style.cssText = 'background:var(--bg-card,rgba(13,31,53,.75));border:1px solid var(--border,rgba(99,180,255,.1));' +
       'border-radius:var(--radius-md,12px);padding:14px;margin-bottom:14px;';
     rows.forEach(([label, value]) => {
       const r = document.createElement('div');
-      r.style.cssText = 'display:flex;justify-content:space-between;padding:5px 0;' +
+      r.style.cssText = 'display:flex;justify-content:space-between;gap:10px;padding:5px 0;' +
         'font-family:"DM Mono",monospace;font-size:13px;';
       const l = document.createElement('span');
       l.textContent = label;
       l.style.cssText = 'color:var(--text-secondary,#6b8fad);';
       const v = document.createElement('span');
       v.textContent = value;
-      v.style.cssText = 'color:var(--text-primary,#e8f4ff);';
+      v.style.cssText = 'color:var(--text-primary,#e8f4ff);white-space:nowrap;';
       r.appendChild(l); r.appendChild(v);
       card.appendChild(r);
     });
@@ -2373,122 +2562,229 @@ async function _runInternationalFlow(direct) {
     if (quote.affordable === false) {
       buyBtn.textContent = 'Insufficient balance';
       buyBtn.style.cssText = BTN_PRI_DISABLED;
+      buyBtn.disabled = true;
       wrap.appendChild(buyBtn);
       const shortfall = Math.max(0, (quote.total_paise || 0) - (quote.balance_paise || 0));
       const warn = document.createElement('p');
       warn.style.cssText = WARN;
       warn.textContent = 'You need ' + did.formatPaise(shortfall) + ' more to buy this number.';
       wrap.appendChild(warn);
+      const addBalance = document.createElement('button');
+      addBalance.textContent = 'Add balance';
+      addBalance.style.cssText = BTN_SEC;
+      addBalance.onclick = () => toast('Coming soon');
+      wrap.appendChild(addBalance);
     } else {
-      buyBtn.textContent = 'Buy →';
+      buyBtn.textContent = 'Buy this number';
       buyBtn.style.cssText = BTN_PRI;
-      buyBtn.onclick = async () => {
-        buyBtn.disabled = true;
-        buyBtn.textContent = '⏳ Buying number…';
-        try {
-          const order = await did.purchase(ctx.identity, ctx.identity.ocp_address, {
-            country: ctx.country.iso, groupId: ctx.group.id, sku: ctx.sku
-          });
-          unmount(ovl);
-          if (order.state === 'processing') {
-            showProcessingStep(ctx, order);
-          } else {
-            const number = order.number || ctx.numberPreview;
-            _setIntlCardNumber(did.formatNumber(number));
-            showYourNumberStep({
-              number, renewsOn: order.renews_on, balancePaise: order.balance_paise, city: ctx.group.name
-            });
-          }
-        } catch (e) {
-          buyBtn.disabled = false;
-          buyBtn.textContent = 'Buy →';
-          toast(errMsg(e, 'Purchase failed — try again.'));
-        }
-      };
+      buyBtn.onclick = () => { unmount(ovl); showPurchasingStep(ctx); };
       wrap.appendChild(buyBtn);
+      const fine = document.createElement('p');
+      fine.style.cssText = MUTED;
+      fine.textContent = 'Charged from your OpenCall balance. No card is stored.';
+      wrap.appendChild(fine);
     }
+
+    const limits = document.createElement('p');
+    limits.style.cssText = MUTED;
+    limits.textContent = 'Not for emergency calls. Some services may not accept virtual numbers for verification.';
+    wrap.appendChild(limits);
 
     addBack(wrap, ovl, () => showNumberStep(ctx));
   }
 
-  // ── Step 6b: purchase accepted, carrier still provisioning ─
-  async function showProcessingStep(ctx, order) {
+  // ── Step 4 (cont.): purchase in flight — real progress, not a spinner ─
+  async function showPurchasingStep(ctx) {
     const { ovl, wrap } = makeOvl();
-    addHeader(wrap, ovl, 'Setting up');
-    const status = document.createElement('p');
-    status.style.cssText = SUB;
-    status.textContent = '⏳ Setting up your number… this can take a minute.';
-    wrap.appendChild(status);
-    mount(ovl);
+    addHeader(wrap, ovl, 'Buying your number');
+    addProgress(wrap, 4);
 
-    let line;
-    try {
-      line = await did.waitForNumber(ctx.identity, ctx.identity.ocp_address);
-    } catch (e) {
-      line = null;
+    const rowsBox = document.createElement('div');
+    rowsBox.style.cssText = 'margin:12px 0 6px;';
+    const labels = ['Reserving your number…', 'Confirming with carrier…', 'Setting up calling…'];
+    const icons = [];
+    labels.forEach((label, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 0;' +
+        'font-family:"DM Mono",monospace;font-size:14px;color:var(--text-secondary,#6b8fad);';
+      const icon = document.createElement('span');
+      icon.textContent = '○';
+      icon.style.cssText = 'width:16px;text-align:center;flex-shrink:0;color:var(--text-muted,#667);';
+      const text = document.createElement('span');
+      text.textContent = label;
+      row.appendChild(icon);
+      row.appendChild(text);
+      rowsBox.appendChild(row);
+      icons.push(icon);
+    });
+    wrap.appendChild(rowsBox);
+
+    function setState(i, state) {
+      const icon = icons[i];
+      if (!icon) return;
+      if (state === 'done')        { icon.textContent = '✓'; icon.style.color = 'var(--green,#1d9e75)'; }
+      else if (state === 'active') { icon.textContent = '●'; icon.style.color = 'var(--blue,#63b4ff)'; }
+      else                         { icon.textContent = '○'; icon.style.color = 'var(--text-muted,#667)'; }
     }
 
-    if (line && line.did) {
-      unmount(ovl);
-      _setIntlCardNumber(did.formatNumber(line.did));
-      showYourNumberStep({
-        number: line.did, renewsOn: line.did_renews_on, balancePaise: line.balance_paise, city: ctx.group.name
+    mount(ovl);
+    setState(0, 'active');
+
+    const monthlyFormatted = ctx.group.monthly
+      ? '₹' + ctx.group.monthly
+      : did.formatPaise(ctx.group.monthly_paise);
+
+    let order;
+    try {
+      order = await did.purchase(ctx.identity, ctx.identity.ocp_address, {
+        country: ctx.country.iso, groupId: ctx.group.id, sku: ctx.sku
       });
+    } catch (e) {
+      unmount(ovl);
+      toast(errMsg(e, 'Purchase failed — you have not been charged. Try again.'));
+      showConfirmStep(ctx);
+      return;
+    }
+
+    setState(0, 'done');
+    setState(1, 'active');
+
+    if (order.state === 'processing') {
+      let line;
+      try { line = await did.waitForNumber(ctx.identity, ctx.identity.ocp_address); }
+      catch (e) { line = null; }
+
+      if (line && line.did) {
+        setState(1, 'done');
+        setState(2, 'done');
+        _setIntlCardOwned({
+          numberFormatted: did.formatNumber(line.did), city: ctx.group.name,
+          balanceFormatted: did.formatPaise(line.balance_paise)
+        });
+        unmount(ovl);
+        showYourNumberStep({
+          number: line.did, renewsOn: line.did_renews_on, balancePaise: line.balance_paise,
+          city: ctx.group.name, monthlyFormatted
+        });
+      } else {
+        unmount(ovl);
+        showStillProcessingStep();
+      }
     } else {
-      status.remove();
-      const msg = document.createElement('p');
-      msg.style.cssText = SUB;
-      msg.textContent = 'Your order was accepted and is still being provisioned by the carrier — ' +
-        'this is normal for some cities. You have not been charged twice. Reopen this screen in a ' +
-        'minute and your number will be here.';
-      wrap.appendChild(msg);
-      const close = document.createElement('button');
-      close.textContent = 'Close';
-      close.style.cssText = BTN_PRI;
-      close.onclick = () => unmount(ovl);
-      wrap.appendChild(close);
+      setState(1, 'done');
+      setState(2, 'done');
+      const number = order.number || ctx.numberPreview;
+      _setIntlCardOwned({
+        numberFormatted: did.formatNumber(number), city: ctx.group.name,
+        balanceFormatted: did.formatPaise(order.balance_paise)
+      });
+      unmount(ovl);
+      showYourNumberStep({
+        number, renewsOn: order.renews_on, balancePaise: order.balance_paise,
+        city: ctx.group.name, monthlyFormatted
+      });
     }
   }
 
-  // ── Step 7: your number ─────────────────────────────────
+  // ── Step 4 (cont.): carrier still provisioning past our poll window ─
+  function showStillProcessingStep() {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Setting up');
+    const msg = document.createElement('p');
+    msg.style.cssText = SUB;
+    msg.textContent = 'Your number is still being set up. You’ve been charged once and the number ' +
+      'will appear here shortly — reopen this screen in a few minutes.';
+    wrap.appendChild(msg);
+    const close = document.createElement('button');
+    close.textContent = 'Close';
+    close.style.cssText = BTN_PRI;
+    close.onclick = () => unmount(ovl);
+    wrap.appendChild(close);
+    mount(ovl);
+  }
+
+  // ── Step 5: your number ─────────────────────────────────
   function showYourNumberStep(info) {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, 'Your number');
 
+    const numberText = did.formatNumber(info.number);
     const big = document.createElement('div');
     big.style.cssText = 'font-family:"DM Mono",monospace;font-size:26px;font-weight:700;' +
-      'color:var(--text-primary,#e8f4ff);text-align:center;margin:12px 0 6px;word-break:break-all;';
-    big.textContent = did.formatNumber(info.number);
+      'color:var(--text-primary,#e8f4ff);text-align:center;margin:12px 0 2px;word-break:break-all;' +
+      'cursor:pointer;';
+    big.textContent = numberText;
+    big.title = 'Tap to copy';
+    big.onclick = () => {
+      navigator.clipboard.writeText(numberText).then(() => toast('Number copied'));
+    };
     wrap.appendChild(big);
+
+    const copyHint = document.createElement('div');
+    copyHint.style.cssText = 'text-align:center;font-family:"DM Mono",monospace;font-size:10px;' +
+      'color:var(--blue,#63b4ff);opacity:.6;margin-bottom:14px;';
+    copyHint.textContent = 'tap to copy';
+    wrap.appendChild(copyHint);
 
     if (info.city) {
       const city = document.createElement('div');
       city.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);' +
-        'text-align:center;margin-bottom:20px;';
+        'text-align:center;margin-bottom:16px;';
       city.textContent = info.city;
       wrap.appendChild(city);
     }
 
+    const renewDate = _formatDateShort(info.renewsOn);
+    const summary = document.createElement('div');
+    summary.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);' +
+      'text-align:center;margin-bottom:16px;';
+    summary.textContent = (renewDate ? 'Renews ' + renewDate : 'Renewal date pending') +
+      (info.monthlyFormatted ? ' · ' + info.monthlyFormatted + '/mo' : '');
+    wrap.appendChild(summary);
+
     const card = document.createElement('div');
     card.style.cssText = 'background:var(--bg-card,rgba(13,31,53,.75));border:1px solid var(--border,rgba(99,180,255,.1));' +
       'border-radius:var(--radius-md,12px);padding:14px;margin:14px 0;';
-    const rows = [
-      ['Renews', info.renewsOn ? String(info.renewsOn).slice(0, 10) : '—'],
-      ['Balance', did.formatPaise(info.balancePaise)],
-    ];
-    rows.forEach(([label, value]) => {
-      const r = document.createElement('div');
-      r.style.cssText = 'display:flex;justify-content:space-between;padding:5px 0;' +
-        'font-family:"DM Mono",monospace;font-size:13px;';
-      const l = document.createElement('span');
-      l.textContent = label;
-      l.style.cssText = 'color:var(--text-secondary,#6b8fad);';
-      const v = document.createElement('span');
-      v.textContent = value;
-      v.style.cssText = 'color:var(--text-primary,#e8f4ff);';
-      r.appendChild(l); r.appendChild(v);
-      card.appendChild(r);
-    });
+
+    const balRow = document.createElement('div');
+    balRow.style.cssText = 'display:flex;justify-content:space-between;padding:5px 0;' +
+      'font-family:"DM Mono",monospace;font-size:13px;';
+    const balL = document.createElement('span');
+    balL.textContent = 'Balance';
+    balL.style.cssText = 'color:var(--text-secondary,#6b8fad);';
+    const balV = document.createElement('span');
+    balV.textContent = did.formatPaise(info.balancePaise);
+    balV.style.cssText = 'color:var(--text-primary,#e8f4ff);';
+    balRow.appendChild(balL); balRow.appendChild(balV);
+    card.appendChild(balRow);
+
+    const arRow = document.createElement('div');
+    arRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 0 2px;' +
+      'font-family:"DM Mono",monospace;font-size:13px;border-top:1px solid rgba(255,255,255,.06);margin-top:5px;';
+    const arL = document.createElement('span');
+    arL.textContent = 'Auto-renew';
+    arL.style.cssText = 'color:var(--text-secondary,#6b8fad);';
+    const arToggle = document.createElement('span');
+    let autorenewOn = _getAutorenew();
+    function paintToggle() {
+      arToggle.style.cssText = 'display:inline-block;width:38px;height:22px;border-radius:11px;' +
+        'position:relative;cursor:pointer;transition:background .15s;' +
+        'background:' + (autorenewOn ? 'var(--green,#1d9e75)' : 'rgba(255,255,255,.15)') + ';';
+      arToggle.innerHTML = '<span style="position:absolute;top:2px;' +
+        (autorenewOn ? 'right:2px' : 'left:2px') +
+        ';width:18px;height:18px;border-radius:50%;background:#fff;transition:all .15s;"></span>';
+    }
+    paintToggle();
+    arToggle.onclick = () => {
+      autorenewOn = !autorenewOn;
+      _setAutorenewPref(autorenewOn);
+      paintToggle();
+      toast(autorenewOn ? 'Auto-renew on' : 'Auto-renew off');
+    };
+    arRow.appendChild(arL);
+    arRow.appendChild(arToggle);
+    card.appendChild(arRow);
+
     wrap.appendChild(card);
 
     const note = document.createElement('p');
@@ -2503,6 +2799,56 @@ async function _runInternationalFlow(direct) {
     done.onclick = () => unmount(ovl);
     wrap.appendChild(done);
 
+    const releaseLink = document.createElement('div');
+    releaseLink.textContent = 'Release number';
+    releaseLink.style.cssText = 'text-align:center;margin-top:18px;font-family:"DM Mono",monospace;' +
+      'font-size:12px;color:var(--text-muted,#667);cursor:pointer;text-decoration:underline;' +
+      'text-underline-offset:2px;';
+    releaseLink.onclick = () => showReleaseConfirmStep(info, ovl);
+    wrap.appendChild(releaseLink);
+
+    mount(ovl);
+  }
+
+  // ── Release — quiet entry point, loud confirmation ──────
+  function showReleaseConfirmStep(info, parentOvl) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Release number');
+
+    const warn = document.createElement('p');
+    warn.style.cssText = ERR;
+    warn.textContent = 'You will permanently lose ' + did.formatNumber(info.number) + '. This cannot be ' +
+      'undone — this exact number cannot be restored once released.';
+    wrap.appendChild(warn);
+
+    const releaseBtn = document.createElement('button');
+    releaseBtn.textContent = 'Release it';
+    releaseBtn.style.cssText = BTN_DANGER;
+    releaseBtn.onclick = async () => {
+      releaseBtn.disabled = true;
+      releaseBtn.textContent = '⏳ Releasing…';
+      try {
+        const identity = myIdentity || await getOrCreateIdentity();
+        await did.release(identity, identity.ocp_address);
+        unmount(ovl);
+        unmount(parentOvl);
+        _intlKnownLine = null;
+        _resetIntlCard();
+        toast('Number released');
+      } catch (e) {
+        releaseBtn.disabled = false;
+        releaseBtn.textContent = 'Release it';
+        toast(errMsg(e, 'Could not release — you have not lost your number. Try again.'));
+      }
+    };
+    wrap.appendChild(releaseBtn);
+
+    const keep = document.createElement('button');
+    keep.textContent = 'Keep my number';
+    keep.style.cssText = BTN_SEC;
+    keep.onclick = () => unmount(ovl);
+    wrap.appendChild(keep);
+
     mount(ovl);
   }
 
@@ -2513,8 +2859,10 @@ async function _runInternationalFlow(direct) {
       renewsOn: direct.line.did_renews_on,
       balancePaise: direct.line.balance_paise
     });
-  } else {
+  } else if (SHOW_MODE_CHOOSER) {
     showModeChooser();
+  } else {
+    showAccountStep();
   }
 }
 
