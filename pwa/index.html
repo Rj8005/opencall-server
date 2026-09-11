@@ -1024,6 +1024,19 @@ if (APP_EMBED) {
            font-family:'DM Mono',monospace;margin-top:4px;min-height:16px;"></div>
     </div>
 
+    <!-- International number — entry point for the buy-a-number flow.
+         Deliberately outside #dialer-identity-card so it stays visible in
+         app-embed mode; the click handler itself gates on APP_EMBED. -->
+    <div class="card" id="intl-number-card" style="margin-top:8px;cursor:pointer;" onclick="openInternationalFlow()">
+      <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
+        <span id="intl-number-label">Get a number</span>
+        <span style="font-size:10px;color:var(--blue);opacity:.7">&#8594;</span>
+      </div>
+      <div class="identity-val">
+        <span id="intl-number-value">International number</span>
+      </div>
+    </div>
+
     <div class="dial-display">
       <div class="dial-number" id="dial-number-display">+</div>
       <div class="dial-hint" id="dial-hint">Enter number to call</div>
@@ -1495,6 +1508,19 @@ async function loadIdentity() {
   return JSON.parse(stored);
 }
 
+// ── SIP credentials (from /account/create — issued once) ──
+const OCP_SIP_STORAGE = 'ocp_sip_creds_v1';
+
+function _saveSipCreds(creds) {
+  localStorage.setItem(OCP_SIP_STORAGE, JSON.stringify(creds));
+}
+
+function _loadSipCreds() {
+  const stored = localStorage.getItem(OCP_SIP_STORAGE);
+  if (!stored) return null;
+  try { return JSON.parse(stored); } catch { return null; }
+}
+
 async function getOrCreateIdentity() {
   // App mode: the native Android app owns the only identity (Ed25519, in its
   // Keystore). Never generate, read, or write a second web wallet here.
@@ -1845,6 +1871,651 @@ function _runWalletOnboarding() {
       showWelcome();
     }).catch(reject);
   });
+}
+
+// ── International number flow ──────────────────────────────
+// Entry point on the dialer: buy a real PSTN number via the Go DID service
+// at node.opencall.space (client: ocp-did.js). Modeled on
+// _runWalletOnboarding() above — a JS-built full-screen overlay, one fresh
+// div per step, no router. Never called under APP_EMBED (see
+// openInternationalFlow()): the native app owns the only identity key there,
+// so there is nothing to sign the /account/challenge nonce with.
+
+// Last line this session learned about, kept only in memory (not persisted —
+// /account/session is cheap and always the source of truth). Lets the entry
+// card show a number without a network round trip on every render, and lets
+// clicking the card jump straight past the purchase flow when one exists.
+let _intlKnownLine = null;
+
+function _setIntlCardNumber(did_) {
+  _intlKnownLine = _intlKnownLine || {};
+  _intlKnownLine.did = did_;
+  const label = document.getElementById('intl-number-label');
+  const value = document.getElementById('intl-number-value');
+  if (label) label.textContent = 'Your number';
+  if (value) value.textContent = did_;
+}
+
+let _intlCardChecked = false;
+async function _refreshIntlCard(force) {
+  if (APP_EMBED) return;
+  if (_intlCardChecked && !force) return;
+  if (!myIdentity) return; // not ready yet — card keeps its default text
+  _intlCardChecked = true;
+  try {
+    const did = await import('./ocp-did.js');
+    const line = await did.getLine(myIdentity, myIdentity.ocp_address);
+    _intlKnownLine = line;
+    if (line && line.did) _setIntlCardNumber(did.formatNumber(line.did));
+  } catch (e) {
+    // Not registered yet (404) or offline — leave the "Get a number" default.
+  }
+}
+
+function openInternationalFlow() {
+  if (APP_EMBED) {
+    toast('International numbers aren\'t available inside the app yet');
+    return;
+  }
+  if (_intlKnownLine && _intlKnownLine.did) {
+    _runInternationalFlow({ line: _intlKnownLine });
+  } else {
+    _runInternationalFlow();
+  }
+}
+
+async function _runInternationalFlow(direct) {
+  const did = await import('./ocp-did.js');
+
+  const BASE = 'position:fixed;inset:0;z-index:20000;background:var(--bg-deep,#060a10);' +
+    'overflow-y:auto;display:flex;flex-direction:column;align-items:center;padding:24px 20px 56px;';
+  const H2 = 'font-family:"Syne",sans-serif;font-size:20px;color:var(--text-primary,#e8f4ff);' +
+    'margin:0;font-weight:700;';
+  const SUB = 'font-family:"DM Mono",monospace;font-size:13px;color:#8aabb8;' +
+    'margin:0 0 16px;line-height:1.55;';
+  const BTN_PRI = 'width:100%;padding:15px;background:var(--blue,#63b4ff);color:#03161b;border:0;' +
+    'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
+  const BTN_PRI_DISABLED = 'width:100%;padding:15px;background:rgba(99,180,255,.25);color:rgba(3,22,27,.6);' +
+    'border:0;border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:default;';
+  const BTN_SEC = 'width:100%;padding:12px;background:rgba(255,255,255,.06);color:#c8dff5;border:0;' +
+    'border-radius:14px;font-weight:600;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;margin-top:10px;';
+  const BTN_GHOST = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
+    'margin-top:8px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
+  const INP = 'width:100%;box-sizing:border-box;padding:12px 14px;' +
+    'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);' +
+    'border-radius:10px;color:#e8f4f7;font-size:15px;font-family:"DM Mono",monospace;margin-bottom:12px;';
+  const ERR = 'font-family:"DM Mono",monospace;font-size:13px;color:var(--red,#ff6b6b);' +
+    'margin:0 0 12px;line-height:1.5;';
+  const WARN = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--amber,#f5a623);' +
+    'margin:8px 0 0;line-height:1.5;';
+  const LIST = 'max-height:52vh;overflow-y:auto;border:1px solid rgba(255,255,255,.08);' +
+    'border-radius:12px;margin-bottom:14px;-webkit-overflow-scrolling:touch;';
+  const LIST_ITEM = 'padding:13px 14px;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer;' +
+    'display:flex;justify-content:space-between;align-items:center;gap:10px;';
+  const LIST_EMPTY = 'padding:22px 14px;text-align:center;color:var(--text-muted);' +
+    'font-family:"DM Mono",monospace;font-size:12px;';
+
+  function makeOvl() {
+    const o = document.createElement('div');
+    o.id = '_ocp-intl';
+    o.style.cssText = BASE;
+    const w = document.createElement('div');
+    w.style.cssText = 'max-width:460px;width:100%;';
+    o.appendChild(w);
+    return { ovl: o, wrap: w };
+  }
+  function mount(ovl) { document.body.appendChild(ovl); }
+  function unmount(ovl) { if (ovl.parentNode) document.body.removeChild(ovl); }
+
+  function addHeader(wrap, ovl, title) {
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;';
+    const h = document.createElement('h2');
+    h.textContent = title;
+    h.style.cssText = H2;
+    const x = document.createElement('span');
+    x.textContent = '✕';
+    x.setAttribute('aria-label', 'Close');
+    x.style.cssText = 'cursor:pointer;color:#667;font-size:18px;padding:4px 6px;line-height:1;';
+    x.onclick = () => unmount(ovl);
+    bar.appendChild(h);
+    bar.appendChild(x);
+    wrap.appendChild(bar);
+  }
+  function addBack(wrap, ovl, onBack) {
+    const back = document.createElement('button');
+    back.textContent = '← Back';
+    back.style.cssText = BTN_GHOST;
+    back.onclick = () => { unmount(ovl); onBack(); };
+    wrap.appendChild(back);
+  }
+  function addRetryClose(wrap, ovl, message, onRetry) {
+    const err = document.createElement('p');
+    err.style.cssText = ERR;
+    err.textContent = message;
+    wrap.appendChild(err);
+    const retry = document.createElement('button');
+    retry.textContent = 'Try again';
+    retry.style.cssText = BTN_PRI;
+    retry.onclick = () => { unmount(ovl); onRetry(); };
+    wrap.appendChild(retry);
+    const close = document.createElement('button');
+    close.textContent = 'Close';
+    close.style.cssText = BTN_GHOST;
+    close.onclick = () => unmount(ovl);
+    wrap.appendChild(close);
+  }
+  function errMsg(e, fallback) {
+    return (e && e.message) ? e.message : fallback;
+  }
+
+  // ── Step 0: mode chooser ───────────────────────────────
+  function showModeChooser() {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Get a number');
+
+    const modes = [
+      {
+        label: 'International', desc: 'Buy a real number in another country', enabled: true,
+        onSelect: () => { unmount(ovl); showAccountStep(); }
+      },
+      { label: 'Local SIM', desc: 'Coming soon', enabled: false },
+      { label: 'Offline',   desc: 'Coming soon', enabled: false },
+    ];
+
+    modes.forEach(m => {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:16px;border:1px solid var(--border,rgba(99,180,255,.1));' +
+        'border-radius:var(--radius-md,12px);margin-bottom:10px;cursor:pointer;' +
+        (m.enabled ? '' : 'opacity:.5;');
+      const t = document.createElement('div');
+      t.textContent = m.label;
+      t.style.cssText = 'font-family:"Syne",sans-serif;font-size:15px;font-weight:700;' +
+        'color:var(--text-primary,#e8f4ff);';
+      const d = document.createElement('div');
+      d.textContent = m.desc;
+      d.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-secondary,#6b8fad);' +
+        'margin-top:3px;';
+      row.appendChild(t);
+      row.appendChild(d);
+      row.onclick = () => {
+        if (!m.enabled) { unmount(ovl); toast('Coming soon'); return; }
+        m.onSelect();
+      };
+      wrap.appendChild(row);
+    });
+
+    mount(ovl);
+  }
+
+  // ── Step 1: ensure the account exists, persist creds once ─
+  async function showAccountStep() {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Setting up');
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Setting up your account…';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    try {
+      const identity = myIdentity || await getOrCreateIdentity();
+      if (!identity) throw new Error('No identity available on this device');
+      const { line, credentials } = await did.ensureAccount(identity, identity.ocp_address);
+      if (credentials) {
+        _saveSipCreds({ user: credentials.sip_user, password: credentials.sip_password, realm: credentials.realm });
+      }
+      _intlKnownLine = line;
+      unmount(ovl);
+      if (line && line.did) {
+        _setIntlCardNumber(did.formatNumber(line.did));
+        showYourNumberStep({
+          number: line.did, renewsOn: line.did_renews_on, balancePaise: line.balance_paise
+        });
+      } else {
+        showCountryStep({ identity, balancePaise: line ? line.balance_paise : 0 });
+      }
+    } catch (e) {
+      status.remove();
+      addRetryClose(wrap, ovl, errMsg(e, 'Could not set up your account.'), showAccountStep);
+    }
+  }
+
+  // ── Step 2: country ─────────────────────────────────────
+  async function showCountryStep(ctx) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Choose a country');
+
+    const bal = document.createElement('p');
+    bal.style.cssText = SUB;
+    bal.textContent = 'Balance: ' + did.formatPaise(ctx.balancePaise || 0);
+    wrap.appendChild(bal);
+
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Loading countries…';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    let countries;
+    try {
+      countries = await did.countries();
+    } catch (e) {
+      status.remove();
+      addRetryClose(wrap, ovl, errMsg(e, 'Could not load countries.'), () => showCountryStep(ctx));
+      return;
+    }
+    status.remove();
+
+    const filterInp = document.createElement('input');
+    filterInp.type = 'text';
+    filterInp.placeholder = 'Search countries…';
+    filterInp.style.cssText = INP;
+    wrap.appendChild(filterInp);
+
+    const list = document.createElement('div');
+    list.style.cssText = LIST;
+    wrap.appendChild(list);
+
+    function render(filter) {
+      list.textContent = '';
+      const f = (filter || '').trim().toLowerCase();
+      const matches = countries.filter(c => !f || c.name.toLowerCase().includes(f));
+      if (!matches.length) {
+        const empty = document.createElement('div');
+        empty.style.cssText = LIST_EMPTY;
+        empty.textContent = 'No countries match.';
+        list.appendChild(empty);
+        return;
+      }
+      matches.forEach(c => {
+        const row = document.createElement('div');
+        row.style.cssText = LIST_ITEM;
+        const name = document.createElement('span');
+        name.textContent = c.name;
+        name.style.cssText = 'font-family:"Syne",sans-serif;font-size:14px;color:var(--text-primary,#e8f4ff);';
+        const price = document.createElement('span');
+        price.textContent = '₹' + c.monthly + '/mo';
+        price.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);' +
+          'white-space:nowrap;';
+        row.appendChild(name);
+        row.appendChild(price);
+        row.onclick = () => {
+          unmount(ovl);
+          if (c.has_regions) showRegionStep({ ...ctx, country: c });
+          else showCityStep({ ...ctx, country: c, region: undefined });
+        };
+        list.appendChild(row);
+      });
+    }
+    render('');
+    filterInp.oninput = () => render(filterInp.value);
+
+    addBack(wrap, ovl, showModeChooser);
+  }
+
+  // ── Step 3: region (only when country.has_regions) ─────
+  async function showRegionStep(ctx) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, ctx.country.name);
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Loading regions…';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    let regions;
+    try {
+      regions = await did.regions(ctx.country.iso);
+    } catch (e) {
+      status.remove();
+      addRetryClose(wrap, ovl, errMsg(e, 'Could not load regions.'), () => showRegionStep(ctx));
+      return;
+    }
+    status.remove();
+
+    const list = document.createElement('div');
+    list.style.cssText = LIST;
+    if (!regions.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = LIST_EMPTY;
+      empty.textContent = 'No regions available.';
+      list.appendChild(empty);
+    } else {
+      regions.forEach(r => {
+        const row = document.createElement('div');
+        row.style.cssText = LIST_ITEM;
+        const name = document.createElement('span');
+        name.textContent = r.name;
+        name.style.cssText = 'font-family:"Syne",sans-serif;font-size:14px;color:var(--text-primary,#e8f4ff);';
+        row.appendChild(name);
+        row.onclick = () => { unmount(ovl); showCityStep({ ...ctx, region: r }); };
+        list.appendChild(row);
+      });
+    }
+    wrap.appendChild(list);
+
+    addBack(wrap, ovl, () => showCountryStep(ctx));
+  }
+
+  // ── Step 4: city / group ────────────────────────────────
+  async function showCityStep(ctx) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, ctx.region ? ctx.region.name : ctx.country.name);
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Loading cities…';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    let groups;
+    try {
+      groups = await did.groups(ctx.country.iso, ctx.region ? ctx.region.code : undefined);
+    } catch (e) {
+      status.remove();
+      addRetryClose(wrap, ovl, errMsg(e, 'Could not load cities.'), () => showCityStep(ctx));
+      return;
+    }
+    status.remove();
+
+    const available = groups.filter(g => (g.quantity || 0) > 0);
+    const list = document.createElement('div');
+    list.style.cssText = LIST;
+    if (!available.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = LIST_EMPTY;
+      empty.textContent = 'No numbers available here right now.';
+      list.appendChild(empty);
+    } else {
+      available.forEach(g => {
+        const row = document.createElement('div');
+        row.style.cssText = LIST_ITEM;
+        const left = document.createElement('span');
+        left.style.cssText = 'font-family:"Syne",sans-serif;font-size:14px;color:var(--text-primary,#e8f4ff);';
+        left.textContent = g.name + (g.area_code ? ' (' + g.area_code + ')' : '');
+        const right = document.createElement('span');
+        right.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-secondary,#6b8fad);' +
+          'white-space:nowrap;text-align:right;';
+        right.textContent = g.quantity + ' available';
+        row.appendChild(left);
+        row.appendChild(right);
+        row.onclick = () => { unmount(ovl); showNumberStep({ ...ctx, group: g }); };
+        list.appendChild(row);
+      });
+    }
+    wrap.appendChild(list);
+
+    addBack(wrap, ovl, () => {
+      if (ctx.region) showRegionStep(ctx);
+      else showCountryStep(ctx);
+    });
+  }
+
+  // ── Step 5: pick a number (or accept carrier-assigned) ──
+  async function showNumberStep(ctx) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, ctx.group.name);
+
+    if (!ctx.group.supports_browse) {
+      const msg = document.createElement('p');
+      msg.style.cssText = SUB;
+      msg.textContent = 'A number in ' + ctx.group.name + ' will be assigned to you when you buy.';
+      wrap.appendChild(msg);
+      const cont = document.createElement('button');
+      cont.textContent = 'Continue →';
+      cont.style.cssText = BTN_PRI;
+      cont.onclick = () => { unmount(ovl); showConfirmStep({ ...ctx, sku: '', numberPreview: null }); };
+      wrap.appendChild(cont);
+      addBack(wrap, ovl, () => showCityStep(ctx));
+      mount(ovl);
+      return;
+    }
+
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Loading numbers…';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    let numbers;
+    try {
+      numbers = await did.numbers(ctx.group.id, 30);
+    } catch (e) {
+      status.remove();
+      addRetryClose(wrap, ovl, errMsg(e, 'Could not load numbers.'), () => showNumberStep(ctx));
+      return;
+    }
+    status.remove();
+
+    const list = document.createElement('div');
+    list.style.cssText = LIST;
+    if (!numbers.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = LIST_EMPTY;
+      empty.textContent = 'No numbers available right now.';
+      list.appendChild(empty);
+    } else {
+      numbers.forEach(n => {
+        const row = document.createElement('div');
+        row.style.cssText = LIST_ITEM;
+        const label = document.createElement('span');
+        label.textContent = did.formatNumber(n.number);
+        label.style.cssText = 'font-family:"DM Mono",monospace;font-size:15px;color:var(--text-primary,#e8f4ff);';
+        row.appendChild(label);
+        row.onclick = () => { unmount(ovl); showConfirmStep({ ...ctx, sku: n.sku, numberPreview: n.number }); };
+        list.appendChild(row);
+      });
+    }
+    wrap.appendChild(list);
+
+    addBack(wrap, ovl, () => showCityStep(ctx));
+  }
+
+  // ── Step 6: confirm price and buy ───────────────────────
+  async function showConfirmStep(ctx) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Confirm');
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Getting a price…';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    let quote;
+    try {
+      quote = await did.quote(ctx.identity, ctx.identity.ocp_address, {
+        country: ctx.country.iso, groupId: ctx.group.id, sku: ctx.sku
+      });
+    } catch (e) {
+      status.remove();
+      addRetryClose(wrap, ovl, errMsg(e, 'Could not price this number.'), () => showConfirmStep(ctx));
+      return;
+    }
+    status.remove();
+
+    const numLine = document.createElement('div');
+    numLine.style.cssText = 'font-family:"DM Mono",monospace;font-size:20px;color:var(--text-primary,#e8f4ff);' +
+      'text-align:center;margin-bottom:4px;';
+    numLine.textContent = ctx.numberPreview ? did.formatNumber(ctx.numberPreview) : 'Assigned at purchase';
+    wrap.appendChild(numLine);
+
+    const cityLine = document.createElement('div');
+    cityLine.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-secondary,#6b8fad);' +
+      'text-align:center;margin-bottom:18px;';
+    cityLine.textContent = ctx.group.name + ', ' + ctx.country.name;
+    wrap.appendChild(cityLine);
+
+    const balanceAfter = (quote.balance_paise || 0) - (quote.total_paise || 0);
+    const rows = [
+      ['Monthly price', '₹' + quote.monthly + '/mo'],
+      ['Current balance', did.formatPaise(quote.balance_paise)],
+      ['Balance after', did.formatPaise(balanceAfter)],
+    ];
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-card,rgba(13,31,53,.75));border:1px solid var(--border,rgba(99,180,255,.1));' +
+      'border-radius:var(--radius-md,12px);padding:14px;margin-bottom:14px;';
+    rows.forEach(([label, value]) => {
+      const r = document.createElement('div');
+      r.style.cssText = 'display:flex;justify-content:space-between;padding:5px 0;' +
+        'font-family:"DM Mono",monospace;font-size:13px;';
+      const l = document.createElement('span');
+      l.textContent = label;
+      l.style.cssText = 'color:var(--text-secondary,#6b8fad);';
+      const v = document.createElement('span');
+      v.textContent = value;
+      v.style.cssText = 'color:var(--text-primary,#e8f4ff);';
+      r.appendChild(l); r.appendChild(v);
+      card.appendChild(r);
+    });
+    wrap.appendChild(card);
+
+    const buyBtn = document.createElement('button');
+    if (quote.affordable === false) {
+      buyBtn.textContent = 'Insufficient balance';
+      buyBtn.style.cssText = BTN_PRI_DISABLED;
+      wrap.appendChild(buyBtn);
+      const shortfall = Math.max(0, (quote.total_paise || 0) - (quote.balance_paise || 0));
+      const warn = document.createElement('p');
+      warn.style.cssText = WARN;
+      warn.textContent = 'You need ' + did.formatPaise(shortfall) + ' more to buy this number.';
+      wrap.appendChild(warn);
+    } else {
+      buyBtn.textContent = 'Buy →';
+      buyBtn.style.cssText = BTN_PRI;
+      buyBtn.onclick = async () => {
+        buyBtn.disabled = true;
+        buyBtn.textContent = '⏳ Buying number…';
+        try {
+          const order = await did.purchase(ctx.identity, ctx.identity.ocp_address, {
+            country: ctx.country.iso, groupId: ctx.group.id, sku: ctx.sku
+          });
+          unmount(ovl);
+          if (order.state === 'processing') {
+            showProcessingStep(ctx, order);
+          } else {
+            const number = order.number || ctx.numberPreview;
+            _setIntlCardNumber(did.formatNumber(number));
+            showYourNumberStep({
+              number, renewsOn: order.renews_on, balancePaise: order.balance_paise, city: ctx.group.name
+            });
+          }
+        } catch (e) {
+          buyBtn.disabled = false;
+          buyBtn.textContent = 'Buy →';
+          toast(errMsg(e, 'Purchase failed — try again.'));
+        }
+      };
+      wrap.appendChild(buyBtn);
+    }
+
+    addBack(wrap, ovl, () => showNumberStep(ctx));
+  }
+
+  // ── Step 6b: purchase accepted, carrier still provisioning ─
+  async function showProcessingStep(ctx, order) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Setting up');
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Setting up your number… this can take a minute.';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    let line;
+    try {
+      line = await did.waitForNumber(ctx.identity, ctx.identity.ocp_address);
+    } catch (e) {
+      line = null;
+    }
+
+    if (line && line.did) {
+      unmount(ovl);
+      _setIntlCardNumber(did.formatNumber(line.did));
+      showYourNumberStep({
+        number: line.did, renewsOn: line.did_renews_on, balancePaise: line.balance_paise, city: ctx.group.name
+      });
+    } else {
+      status.remove();
+      const msg = document.createElement('p');
+      msg.style.cssText = SUB;
+      msg.textContent = 'Your order was accepted and is still being provisioned by the carrier — ' +
+        'this is normal for some cities. You have not been charged twice. Reopen this screen in a ' +
+        'minute and your number will be here.';
+      wrap.appendChild(msg);
+      const close = document.createElement('button');
+      close.textContent = 'Close';
+      close.style.cssText = BTN_PRI;
+      close.onclick = () => unmount(ovl);
+      wrap.appendChild(close);
+    }
+  }
+
+  // ── Step 7: your number ─────────────────────────────────
+  function showYourNumberStep(info) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Your number');
+
+    const big = document.createElement('div');
+    big.style.cssText = 'font-family:"DM Mono",monospace;font-size:26px;font-weight:700;' +
+      'color:var(--text-primary,#e8f4ff);text-align:center;margin:12px 0 6px;word-break:break-all;';
+    big.textContent = did.formatNumber(info.number);
+    wrap.appendChild(big);
+
+    if (info.city) {
+      const city = document.createElement('div');
+      city.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);' +
+        'text-align:center;margin-bottom:20px;';
+      city.textContent = info.city;
+      wrap.appendChild(city);
+    }
+
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-card,rgba(13,31,53,.75));border:1px solid var(--border,rgba(99,180,255,.1));' +
+      'border-radius:var(--radius-md,12px);padding:14px;margin:14px 0;';
+    const rows = [
+      ['Renews', info.renewsOn ? String(info.renewsOn).slice(0, 10) : '—'],
+      ['Balance', did.formatPaise(info.balancePaise)],
+    ];
+    rows.forEach(([label, value]) => {
+      const r = document.createElement('div');
+      r.style.cssText = 'display:flex;justify-content:space-between;padding:5px 0;' +
+        'font-family:"DM Mono",monospace;font-size:13px;';
+      const l = document.createElement('span');
+      l.textContent = label;
+      l.style.cssText = 'color:var(--text-secondary,#6b8fad);';
+      const v = document.createElement('span');
+      v.textContent = value;
+      v.style.cssText = 'color:var(--text-primary,#e8f4ff);';
+      r.appendChild(l); r.appendChild(v);
+      card.appendChild(r);
+    });
+    wrap.appendChild(card);
+
+    const note = document.createElement('p');
+    note.style.cssText = SUB;
+    note.style.textAlign = 'center';
+    note.textContent = 'Outgoing calls now show this number.';
+    wrap.appendChild(note);
+
+    const done = document.createElement('button');
+    done.textContent = 'Done';
+    done.style.cssText = BTN_PRI;
+    done.onclick = () => unmount(ovl);
+    wrap.appendChild(done);
+
+    mount(ovl);
+  }
+
+  // ── Entry ────────────────────────────────────────────────
+  if (direct && direct.line && direct.line.did) {
+    showYourNumberStep({
+      number: direct.line.did,
+      renewsOn: direct.line.did_renews_on,
+      balancePaise: direct.line.balance_paise
+    });
+  } else {
+    showModeChooser();
+  }
 }
 
 // ── Backup identity (overlay UI) ──────────────────────────
@@ -5461,12 +6132,21 @@ function placeSipCall(e164) {
 
   JsSIP.debug.disable('JsSIP:*');  // suppress verbose internal logs
 
+  // Prefer a provisioned international line (see /account/create via
+  // openInternationalFlow()); fall back to the shared demo trunk so existing
+  // behaviour doesn't regress for users who haven't bought a number.
+  const sipCreds = _loadSipCreds();
+  if (!sipCreds) console.warn('[IDT] No stored SIP credentials — using fallback webrtc/123456');
+  const sipUser     = sipCreds?.user     || 'webrtc';
+  const sipPassword = sipCreds?.password || '123456';
+  const sipRealm    = sipCreds?.realm    || 'sbc.opencall.space';
+
     const ua = new JsSIP.UA({
     sockets:  [ new JsSIP.WebSocketInterface('wss://sbc.opencall.space:4443') ],
-    uri:      'sip:webrtc@sbc.opencall.space',
-    authorization_user: 'webrtc',
-    password: '123456',
-    realm:    'sbc.opencall.space',
+    uri:      'sip:' + sipUser + '@' + sipRealm,
+    authorization_user: sipUser,
+    password: sipPassword,
+    realm:    sipRealm,
     register: true,
     register_expires: 300
   });
@@ -6310,6 +6990,7 @@ function showScreen(name) {
   if (name === 'dialer') {
     const inp = document.getElementById('inp-dial');
     if (inp && !inp.value) { inp.value = '+'; syncDialDisplay(); }
+    _refreshIntlCard();
   }
 }
 

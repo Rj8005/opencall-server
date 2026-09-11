@@ -1,5 +1,5 @@
-const CACHE = 'ocp-v8';
-const ASSETS = ['/lib/jssip.min.js', '/manifest.json', '/ocp-identity.js'];
+const CACHE = 'ocp-v9';
+const ASSETS = ['/lib/jssip.min.js', '/manifest.json', '/ocp-identity.js', '/ocp-did.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
@@ -28,6 +28,7 @@ self.addEventListener('fetch', event => {
       url.includes('/reach/') ||
       url.includes('/invite/') ||
       url.includes('/did/') ||
+      url.includes('/account/') ||
       url.includes('/health')) {
     return;
   }
