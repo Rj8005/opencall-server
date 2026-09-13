@@ -1488,11 +1488,28 @@ document.addEventListener('click', () => {
 }, { once: false });
 
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible' && window._callPending) {
-    await requestWakeLock();
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      reconnectAndRejoin();
+  if (document.visibilityState === 'visible') {
+    if (window._callPending) {
+      await requestWakeLock();
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        reconnectAndRejoin();
+      }
     }
+    // IDT-DIALOUT: re-register the persistent SIP UA if it dropped while the
+    // tab was hidden (mobile browsers suspend WebSocket-backed connections
+    // in the background) — otherwise inbound calls silently stop routing.
+    if (_sipUA && !_sipRegistered) {
+      _sipUA.register();
+    }
+  }
+});
+
+// IDT-DIALOUT: release the SIP binding cleanly on tab close/navigate-away
+// instead of leaving it to sit stale in Kamailio's location table until the
+// 300s registration expiry.
+window.addEventListener('pagehide', () => {
+  if (_sipUA) {
+    try { _sipUA.stop(); } catch (e) {}
   }
 });
 
@@ -3794,6 +3811,10 @@ let _contactsRenderCache = []; // last sorted order, used by _contactAct
 // IDT-DIALOUT: feature flag — set to false to revert to relay/simbank/share-link
 const USE_IDT_DIALOUT = true;
 let _sipSession = null;  // active JsSIP RTCSession for phone-number calls
+let _sipUA = null;               // persistent registered UA (inbound + outbound); null if no stored creds
+let _sipRegistered = false;      // true while _sipUA has a live REGISTER binding
+let _incomingSipSession = null;  // inbound RTCSession awaiting answer/decline
+let _incomingCallType = null;    // 'ocp' | 'sip' | null — tells doAnswer/doDecline which path to run
 
 // ── AI Notes (browser SpeechRecognition live transcript) ──
 // TODO: replace SpeechRecognition with Whisper/Deepgram for better accuracy
@@ -4426,6 +4447,7 @@ async function onMessage(msg) {
       pendingCall = msg;
       callWith    = msg.from;
       callMode    = 'direct';
+      _incomingCallType = 'ocp';
       showIncomingOverlay(msg.fromName || 'Unknown', msg.from);
       startRingtone();
       break;
@@ -6443,6 +6465,97 @@ async function callWithOcp(ocp, name, withVideo = false) {
 
 // ── answer / decline ───────────────────────────────────────
 async function doAnswer() {
+  // IDT-DIALOUT: inbound PSTN call — see initSipUA()'s 'newRTCSession' handler.
+  if (_incomingCallType === 'sip') {
+    stopRingtone();
+    hideIncomingOverlay();
+    showActiveCallOverlay();
+
+    const session = _incomingSipSession;
+    session.answer({
+      mediaConstraints: { audio: true, video: false },
+      pcConfig: RTC_CFG
+    });
+    _sipSession = session;
+    _incomingSipSession = null;
+
+    // Same remote-audio wiring as outbound (placeSipCall / attachPersistentSessionHandlers).
+    session.on('peerconnection', ({ peerconnection }) => {
+      peerconnection.addEventListener('track', ev => {
+        if (ev.track.kind !== 'audio') return;
+        let audio = document.getElementById('remote-audio');
+        if (!audio) {
+          audio = document.createElement('audio');
+          audio.id = 'remote-audio'; audio.autoplay = true; audio.setAttribute('playsinline', '');
+          document.body.appendChild(audio);
+        }
+        audio.srcObject = ev.streams[0] || new MediaStream([ev.track]);
+        console.log('[IDT] inbound remote audio track attached, stream:', audio.srcObject.id);
+        audio.play().catch(err => {
+          console.warn('[IDT] inbound remote-audio play blocked:', err.message);
+          let b = document.getElementById('tap-to-hear');
+          if (!b) {
+            b = document.createElement('button');
+            b.id = 'tap-to-hear';
+            b.textContent = '🔊 Tap to hear';
+            b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);' +
+              'z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;' +
+              'color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+            document.body.appendChild(b);
+          }
+          b.style.display = 'block';
+          b.onclick = () => { audio.play(); b.style.display = 'none'; };
+        });
+      });
+    });
+
+    // Race guard, matching outbound's 'confirmed' handling.
+    session.on('confirmed', () => {
+      const _pc = session.connection;
+      if (_pc) {
+        const _rx = _pc.getReceivers().find(r => r.track && r.track.kind === 'audio');
+        if (_rx) {
+          let _ra = document.getElementById('remote-audio');
+          if (!_ra) {
+            _ra = document.createElement('audio');
+            _ra.id = 'remote-audio'; _ra.autoplay = true; _ra.setAttribute('playsinline', '');
+            document.body.appendChild(_ra);
+          }
+          if (!_ra.srcObject) {
+            _ra.srcObject = new MediaStream([_rx.track]);
+            console.log('[IDT] inbound confirmed: late-attached audio receiver track');
+            _ra.play().catch(err => console.warn('[IDT] inbound confirmed play blocked:', err.message));
+          }
+        }
+      }
+    });
+
+    session.on('ended', ev => {
+      console.log('[IDT] inbound call ended — cause:', ev.cause);
+      _sipSession = null;
+      _incomingCallType = null;
+      const _ra = document.getElementById('remote-audio');
+      if (_ra) _ra.srcObject = null;
+      endCall();
+      setConnectionStatus('online');
+    });
+    session.on('failed', ev => {
+      console.error('[IDT] inbound call failed — cause:', ev.cause);
+      _sipSession = null;
+      _incomingCallType = null;
+      const _ra = document.getElementById('remote-audio');
+      if (_ra) _ra.srcObject = null;
+      toast('Call failed (' + (ev.cause || 'unknown') + ')');
+      endCall();
+      setConnectionStatus('online');
+    });
+
+    callWith = session._ocpCallerNumber || 'Unknown';
+    startTimer();
+    setConnectionStatus('calling');
+    return;
+  }
+
   stopRingtone();
   hideIncomingOverlay();
   showActiveCallOverlay();
@@ -6456,11 +6569,115 @@ async function doAnswer() {
   initWebRTC(false);
 }
 async function doDecline() {
+  // IDT-DIALOUT: inbound PSTN call — see initSipUA()'s 'newRTCSession' handler.
+  if (_incomingCallType === 'sip') {
+    stopRingtone();
+    hideIncomingOverlay();
+    try { _incomingSipSession.terminate({ status_code: 603, reason_phrase: 'Decline' }); } catch (e) {}
+    _incomingSipSession = null;
+    _incomingCallType = null;
+    show('dialer');
+    return;
+  }
+
   stopRingtone();
   hideIncomingOverlay();
   await wsSend({ type:'reject', callId:pendingCall.callId, from:pendingCall.from });
   pendingCall = null;
   show('dialer');
+}
+
+// ── persistent SIP registration (inbound + outbound) ────────
+// IDT-DIALOUT: only users who bought a real number get a persistent
+// registration — see _loadSipCreds(). Without one, Kamailio has no binding
+// to route inbound calls to, and outbound falls back to a fresh per-call UA
+// on the shared demo trunk (see placeSipCall()). Deliberately no fallback to
+// webrtc/123456 here: every unprovisioned user sharing one registration
+// would each steal the previous one's binding.
+function initSipUA() {
+  if (!window.JsSIP) return;
+  if (_sipUA) return;
+  const sipCreds = _loadSipCreds();
+  if (!sipCreds) {
+    console.info('[IDT] No stored SIP credentials — skipping persistent registration');
+    return;
+  }
+
+  const ua = new JsSIP.UA({
+    sockets:  [ new JsSIP.WebSocketInterface('wss://sbc.opencall.space:4443') ],
+    uri:      'sip:' + sipCreds.user + '@' + sipCreds.realm,
+    authorization_user: sipCreds.user,
+    password: sipCreds.password,
+    realm:    sipCreds.realm,
+    register: true,
+    register_expires: 300
+  });
+
+  ua.on('registered', () => {
+    _sipRegistered = true;
+    console.log('[IDT] persistent UA registered');
+  });
+  ua.on('unregistered', (e) => {
+    _sipRegistered = false;
+    console.log('[IDT] persistent UA unregistered:', e?.cause);
+  });
+  ua.on('registrationFailed', (e) => {
+    _sipRegistered = false;
+    console.error('[IDT] persistent UA registration failed:', e.cause, e.response && e.response.status_code);
+  });
+  ua.on('disconnected', () => {
+    _sipRegistered = false;
+    console.error('[IDT] persistent UA disconnected');
+  });
+
+  // ── inbound calls ──────────────────────────────────────────
+  // No busy/routing guard existed anywhere before this — callId, pendingCall
+  // and _sipSession are shared across the OCP and SIP paths, so an inbound
+  // SIP call arriving mid-call must check all of them before touching UI.
+  ua.on('newRTCSession', (data) => {
+    if (data.originator === 'local') return; // our own outbound call
+
+    if (_sipSession || _incomingSipSession || pendingCall || callId) {
+      console.warn('[IDT] inbound call while busy — sending 486');
+      try { data.session.terminate({ status_code: 486, reason_phrase: 'Busy Here' }); } catch (e) {}
+      return;
+    }
+
+    const session = data.session;
+    let callerNumber = 'Unknown';
+    try {
+      const u = session.remote_identity && session.remote_identity.uri && session.remote_identity.uri.user;
+      if (u) callerNumber = String(u).replace(/^\+/, '');
+    } catch (e) {}
+    session._ocpCallerNumber = callerNumber; // stashed for doAnswer() to reuse
+
+    _incomingSipSession = session;
+    _incomingCallType = 'sip';
+
+    console.log('[IDT] inbound call from', callerNumber);
+    showIncomingOverlay(callerNumber, callerNumber);
+    startRingtone();
+
+    session.on('failed', ev => {
+      console.error('[IDT] inbound call failed before answer — cause:', ev.cause);
+      stopRingtone();
+      hideIncomingOverlay();
+      _incomingSipSession = null;
+      _incomingCallType = null;
+      endCall();
+    });
+    session.on('ended', ev => {
+      console.log('[IDT] inbound call ended before answer — cause:', ev.cause);
+      stopRingtone();
+      hideIncomingOverlay();
+      _incomingSipSession = null;
+      _incomingCallType = null;
+      endCall();
+    });
+  });
+
+  ua.start();
+  _sipUA = ua;
 }
 
 // ── hangup ─────────────────────────────────────────────────
@@ -6480,9 +6697,134 @@ function placeSipCall(e164) {
 
   JsSIP.debug.disable('JsSIP:*');  // suppress verbose internal logs
 
-  // Prefer a provisioned international line (see /account/create via
-  // openInternationalFlow()); fall back to the shared demo trunk so existing
-  // behaviour doesn't regress for users who haven't bought a number.
+  // Wires remote audio + status UI for a call placed on the persistent UA
+  // (_sipUA). Unlike the throwaway-UA fallback below, this never calls
+  // ua.stop() on ended/failed — stopping the shared UA would drop the
+  // registration and kill inbound routing for the rest of the session.
+  function attachPersistentSessionHandlers(session) {
+    _sipSession = session;
+
+    session.on('peerconnection', ({ peerconnection }) => {
+      peerconnection.addEventListener('track', ev => {
+        if (ev.track.kind !== 'audio') return;
+        let audio = document.getElementById('remote-audio');
+        if (!audio) {
+          audio = document.createElement('audio');
+          audio.id = 'remote-audio'; audio.autoplay = true; audio.setAttribute('playsinline', '');
+          document.body.appendChild(audio);
+        }
+        audio.srcObject = ev.streams[0] || new MediaStream([ev.track]);
+        console.log('[IDT] remote audio track attached, stream:', audio.srcObject.id);
+        audio.play().catch(err => {
+          console.warn('[IDT] remote-audio play blocked:', err.message);
+          let b = document.getElementById('tap-to-hear');
+          if (!b) {
+            b = document.createElement('button');
+            b.id = 'tap-to-hear';
+            b.textContent = '🔊 Tap to hear';
+            b.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);' +
+              'z-index:9999;padding:14px 22px;border:0;border-radius:24px;background:#3ddc84;' +
+              'color:#03161b;font-weight:700;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);';
+            document.body.appendChild(b);
+          }
+          b.style.display = 'block';
+          b.onclick = () => { audio.play(); b.style.display = 'none'; };
+        });
+      });
+    });
+
+    session.on('progress', () => {
+      console.log('[IDT] progress — ringing');
+      document.getElementById('call-status-detail').textContent = 'Ringing…';
+      document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
+    });
+
+    session.on('confirmed', () => {
+      console.log('[IDT] confirmed — call connected');
+      const _pc = session.connection;
+      console.log('[IDT] senders:', _pc?.getSenders().map(s=>s.track?.kind), 'receivers:', _pc?.getReceivers().map(r=>r.track?.kind));
+      // Race guard: if the track event fired before addEventListener was registered,
+      // attach audio now from the existing receiver.
+      if (_pc) {
+        const _rx = _pc.getReceivers().find(r => r.track && r.track.kind === 'audio');
+        if (_rx) {
+          let _ra = document.getElementById('remote-audio');
+          if (!_ra) {
+            _ra = document.createElement('audio');
+            _ra.id = 'remote-audio'; _ra.autoplay = true; _ra.setAttribute('playsinline', '');
+            document.body.appendChild(_ra);
+          }
+          if (!_ra.srcObject) {
+            _ra.srcObject = new MediaStream([_rx.track]);
+            console.log('[IDT] confirmed: late-attached audio receiver track');
+            _ra.play().catch(err => console.warn('[IDT] confirmed play blocked:', err.message));
+          }
+        }
+      }
+      stopRingback();
+      setConnectionStatus('calling');
+      document.getElementById('call-status-detail').textContent = 'Connected via PSTN';
+      document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
+      console.log('[DIAG] startTimer called via IDT-sip-confirmed');
+      startTimer();
+    });
+
+    session.on('ended', ev => {
+      console.log('[IDT] ended — cause:', ev.cause);
+      _sipSession = null;
+      const _ra = document.getElementById('remote-audio');
+      if (_ra) _ra.srcObject = null;
+      endCall();
+      setConnectionStatus('online');
+    });
+
+    session.on('failed', ev => {
+      console.error('[IDT] failed — cause:', ev.cause);
+      _sipSession = null;
+      const _ra = document.getElementById('remote-audio');
+      if (_ra) _ra.srcObject = null;
+      toast('Call failed (' + (ev.cause || 'unknown') + ')');
+      endCall();
+      setConnectionStatus('online');
+    });
+  }
+
+  function callOnPersistentUA() {
+    document.getElementById('call-status-detail').textContent = 'Connecting via PSTN…';
+    document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
+    const session = _sipUA.call(target, {
+      mediaConstraints: { audio: true, video: false },
+      pcConfig: RTC_CFG
+    });
+    attachPersistentSessionHandlers(session);
+  }
+
+  if (_sipUA) {
+    if (_sipRegistered) {
+      callOnPersistentUA();
+    } else {
+      // Registration can still be in flight right after page load — give it
+      // up to 5s rather than silently failing the call.
+      let settled = false;
+      const regTimeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        console.error('[IDT] persistent UA did not register within 5s — aborting call');
+        toast('Could not connect — try again in a moment');
+        endCall();
+      }, 5000);
+      _sipUA.once('registered', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(regTimeout);
+        callOnPersistentUA();
+      });
+    }
+    return;
+  }
+
+  // No persistent UA (no stored credentials) — fall back to a throwaway UA
+  // on the shared demo trunk, exactly as before.
   const sipCreds = _loadSipCreds();
   if (!sipCreds) console.warn('[IDT] No stored SIP credentials — using fallback webrtc/123456');
   const sipUser     = sipCreds?.user     || 'webrtc';
@@ -7566,6 +7908,7 @@ function initFlow() {
     localStorage.setItem('claimed', 'true');
     show('dialer');
     updateHeaderInfo(appName, appNumber);
+    initSipUA();
     return;
   }
 
@@ -7578,6 +7921,7 @@ function initFlow() {
     show('dialer');
     updateHeaderInfo(name, number);
     initSignalServer(server, name, number);
+    initSipUA();
   } else {
     show('register');
     // Pre-fill saved values into the form
