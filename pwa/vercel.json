@@ -1,7 +1,11 @@
-{
+﻿{
   "rewrites": [
-    { "source": "/answer", "destination": "/answer.html"     },
-    { "source": "/relay",  "destination": "/relay.html"      },
-    { "source": "/u/:id",  "destination": "/connect.html?id=:id" }
+    { "source": "/answer",  "destination": "/answer.html"          },
+    { "source": "/relay",   "destination": "/relay.html"           },
+    { "source": "/u/:id",   "destination": "/connect.html?id=:id"  },
+    { "source": "/terms",   "destination": "/terms.html"           },
+    { "source": "/privacy", "destination": "/privacy.html"         },
+    { "source": "/refunds", "destination": "/refunds.html"         },
+    { "source": "/aup",     "destination": "/aup.html"             }
   ]
 }
