@@ -1,0 +1,195 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy â€” OpenCall</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/legal.css">
+</head>
+<body>
+<main>
+
+<header>
+  <a class="brand" href="/">â† OpenCall</a>
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated: 17 September 2026</p>
+</header>
+
+<p>
+  OpenCall is operated by <strong>Rahul Jha</strong>, an individual
+  based in Bhagalpur, Bihar, India. This policy explains what we collect, why,
+  and what we do not collect. Questions go to <strong>support@opencall.space</strong>.
+</p>
+
+<div class="callout ok">
+  <p>
+    <strong>The short version.</strong> Your identity keys are generated on your
+    device and never sent to us. We cannot read your messages or listen to your
+    calls. We keep the minimum needed to route calls, bill you, and let you
+    recover your identity if you ask us to hold an encrypted backup.
+  </p>
+</div>
+
+<h2>1. What we collect</h2>
+
+<div class="wrap">
+<table>
+  <tr><th>Data</th><th>Why</th><th>Kept</th></tr>
+  <tr>
+    <td>Your public identity address</td>
+    <td>To route calls to you and to link a number to your account</td>
+    <td>While your account exists</td>
+  </tr>
+  <tr>
+    <td>Your rented number and its renewal date</td>
+    <td>To deliver incoming calls and manage the rental</td>
+    <td>While the rental is active, then 12 months</td>
+  </tr>
+  <tr>
+    <td>Call records: time, your account, number dialled, number shown, duration, result</td>
+    <td>To bill minutes, detect fraud, and diagnose faults. Required by carriers.</td>
+    <td>12 months</td>
+  </tr>
+  <tr>
+    <td>Payment records: amount, currency, item, provider reference, status</td>
+    <td>To fulfil purchases and meet tax and accounting obligations</td>
+    <td>8 years (Indian statutory requirement)</td>
+  </tr>
+  <tr>
+    <td>If you use Google backup: your Google account identifier, your email address, and an encrypted blob</td>
+    <td>So you can recover your identity after losing a device</td>
+    <td>Until you delete the backup or your account</td>
+  </tr>
+  <tr>
+    <td>Server logs: IP address, timestamps, request paths</td>
+    <td>Security, abuse prevention, fault diagnosis</td>
+    <td>30 days</td>
+  </tr>
+</table>
+</div>
+
+<h2>2. What we never collect</h2>
+<ul>
+  <li><strong>Your private key or recovery phrase.</strong> These are generated on your device and never transmitted.</li>
+  <li><strong>The content of your calls or messages.</strong> Calls between OpenCall users are end-to-end encrypted and travel directly between devices wherever possible. Offline mesh traffic never touches our servers at all.</li>
+  <li><strong>Call audio.</strong> We do not record calls. Recording is disabled at our carriers.</li>
+  <li><strong>Your card or bank details.</strong> These go directly to Razorpay or PayPal. We only receive a reference and a result.</li>
+  <li><strong>Your contacts.</strong> Contacts stay on your device.</li>
+  <li><strong>Your location.</strong></li>
+</ul>
+
+<h2>3. Google Sign-In and the identity backup</h2>
+<p>
+  If you choose to back up your identity with Google, this is what happens:
+</p>
+<ul>
+  <li>Google tells us three things: a permanent account identifier, your email address, and whether that email is verified. We request nothing else â€” no access to Gmail, Drive, Contacts, Calendar or any other Google service.</li>
+  <li>Your device encrypts your identity with a password you choose, using AES-256-GCM with a key derived from that password. The encryption happens entirely on your device.</li>
+  <li>We store the resulting encrypted blob against your Google account identifier.</li>
+</ul>
+<div class="callout ok">
+  <p>
+    <strong>We cannot decrypt this backup.</strong> We never receive your
+    password and there is no recovery route through us. If you forget the
+    password, the backup is unusable â€” use your 12-word recovery phrase instead.
+  </p>
+</div>
+<p>
+  You can delete the backup at any time from the backup screen in the app. This
+  removes the encrypted blob, your email address and the account identifier from
+  our systems permanently. We do not use your email for marketing.
+</p>
+
+<h2>4. Who we share data with</h2>
+<p>We share only what is necessary, with:</p>
+<ul>
+  <li><strong>Telecom carriers</strong> (IDT Express, Telnyx) â€” the number dialled and the number shown, so calls can be connected. They keep their own records under their own policies.</li>
+  <li><strong>Payment processors</strong> (Razorpay, PayPal) â€” you provide your payment details to them directly.</li>
+  <li><strong>Our hosting provider</strong> (DigitalOcean) â€” servers located in Bangalore, India.</li>
+  <li><strong>Google</strong> â€” only if you use Google Sign-In, and only to verify who you are.</li>
+</ul>
+<p>
+  We do not sell your data, share it with advertisers, or use it to build
+  advertising profiles.
+</p>
+
+<h2>5. Legal disclosure</h2>
+<p>
+  We may disclose data where we are legally required to by a valid order from an
+  Indian court or a competent authority. We will tell you unless we are
+  prohibited from doing so. We cannot disclose call content or your keys, because
+  we do not have them.
+</p>
+
+<h2>6. Where your data is</h2>
+<p>
+  Our servers are in Bangalore, India. Carriers and payment processors may process
+  data outside India in the course of connecting your calls and payments.
+</p>
+
+<h2>7. Your rights</h2>
+<p>You can ask us to:</p>
+<ul>
+  <li>Tell you what data we hold about you</li>
+  <li>Correct anything inaccurate</li>
+  <li>Delete your data, subject to records we must keep by law, such as payment records</li>
+  <li>Provide your data in a portable form</li>
+</ul>
+<p>
+  Write to <strong>support@opencall.space</strong>. We aim to respond within 30 days.
+  You can delete a Google backup yourself, immediately, from within the app.
+</p>
+
+<h2>8. Security</h2>
+<p>
+  All traffic to our servers uses TLS. Identity backups are encrypted on your
+  device before transmission. Passwords are never stored.
+</p>
+<p>
+  We are a one-person operation. We take security seriously but we cannot promise
+  any system is impenetrable. If you find a vulnerability, please write to
+  <strong>support@opencall.space</strong> rather than disclosing it publicly.
+</p>
+
+<h2>9. Children</h2>
+<p>
+  The Service is not intended for anyone under 18. We do not knowingly collect
+  data from children. If you believe a child has provided us with data, write to
+  us and we will delete it.
+</p>
+
+<h2>10. Cookies</h2>
+<p>
+  We do not use advertising or tracking cookies and we run no analytics that
+  identify individuals. The app stores data locally in your browser â€” your
+  identity, your settings, your conversation history â€” which is not transmitted
+  to us and which you can clear at any time through your browser settings.
+  Clearing it will erase your identity if you have no backup.
+</p>
+
+<h2>11. Changes</h2>
+<p>
+  We will post changes here and update the date at the top. Material changes will
+  be notified in the app.
+</p>
+
+<h2>12. Contact</h2>
+<p>
+  <strong>Rahul Jha</strong><br>
+  Bhagalpur, Bihar, India<br>
+  <strong>support@opencall.space</strong>
+</p>
+
+<footer>
+  <a href="/terms">Terms</a>
+  <a href="/privacy">Privacy</a>
+  <a href="/refunds">Refunds</a>
+  <a href="/aup">Acceptable Use</a>
+</footer>
+
+</main>
+</body>
+</html>

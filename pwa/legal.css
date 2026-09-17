@@ -1,0 +1,117 @@
+/* Shared styling for OpenCall legal pages. Matches the PWA palette:
+   Syne for headings, DM Mono for body, dark blue ground, green accent. */
+
+:root {
+  --bg:      #061019;
+  --card:    rgba(13, 31, 53, .6);
+  --line:    rgba(99, 180, 255, .12);
+  --text:    #e8f4f7;
+  --muted:   #8aabb8;
+  --blue:    #63b4ff;
+  --green:   #3ddc84;
+  --warn:    #f87171;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 32px 20px 96px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+main { max-width: 760px; margin: 0 auto; }
+
+a { color: var(--blue); }
+
+header { margin-bottom: 36px; }
+
+.brand {
+  font-family: "Syne", system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: .5px;
+  color: var(--green);
+  text-decoration: none;
+}
+
+h1 {
+  font-family: "Syne", system-ui, sans-serif;
+  font-size: 30px;
+  font-weight: 800;
+  margin: 18px 0 6px;
+  line-height: 1.2;
+}
+
+h2 {
+  font-family: "Syne", system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--blue);
+  letter-spacing: .4px;
+  margin: 34px 0 10px;
+}
+
+.updated { color: var(--muted); font-size: 13px; margin: 0; }
+
+p, li { color: var(--text); }
+
+ul { padding-left: 20px; }
+li { margin-bottom: 8px; }
+
+strong { color: #fff; }
+
+.callout {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin: 22px 0;
+}
+
+.callout.ok { border-left-color: var(--green); }
+
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child  { margin-bottom: 0; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 18px 0;
+  font-size: 14px;
+}
+
+th, td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  font-family: "Syne", system-ui, sans-serif;
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.wrap { overflow-x: auto; }
+
+footer {
+  margin-top: 56px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+footer a { margin-right: 16px; }
+
+@media (max-width: 520px) {
+  body { padding: 24px 16px 72px; font-size: 14px; }
+  h1 { font-size: 24px; }
+}
