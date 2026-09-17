@@ -1,4 +1,4 @@
-﻿{
+{
   "rewrites": [
     { "source": "/answer",  "destination": "/answer.html"          },
     { "source": "/relay",   "destination": "/relay.html"           },
