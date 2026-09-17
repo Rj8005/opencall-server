@@ -11,6 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root {
   --bg-deep: #060a10;
@@ -1597,10 +1598,12 @@ function _buildIdentityFromPhrase(phrase, mnemonicToKeypair, publicKeyToOcp) {
 // ── Wallet restore flow ────────────────────────────────────
 // Used when a user wants to recover an existing identity from their phrase.
 // NOT called on first launch — new identities are created silently by
-// getOrCreateIdentity(). Call _runWalletOnboarding() from settings to trigger
-// the restore UI. showPhrase() / showConfirm() are kept here for reuse by the
-// backup overlay (wired up separately). Phrase is NEVER logged, NEVER transmitted.
-function _runWalletOnboarding() {
+// getOrCreateIdentity(). Launched from backupIdentity()'s "Restore from
+// recovery phrase" button via _runWalletOnboarding('restore'), which enters
+// directly at showRestore() instead of showWelcome() (still reachable, so
+// "Create new identity" keeps working from that same screen too).
+// Phrase is NEVER logged, NEVER transmitted.
+function _runWalletOnboarding(startAt) {
   return new Promise((resolve, reject) => {
     import('./ocp-identity.js').then(({ generateMnemonic, mnemonicToKeypair, publicKeyToOcp }) => {
 
@@ -1897,7 +1900,7 @@ function _runWalletOnboarding() {
         resolve(_buildIdentityFromPhrase(phrase, mnemonicToKeypair, publicKeyToOcp));
       }
 
-      showWelcome();
+      if (startAt === 'restore') showRestore(); else showWelcome();
     }).catch(reject);
   });
 }
@@ -2589,7 +2592,7 @@ async function _runInternationalFlow(direct) {
       const addBalance = document.createElement('button');
       addBalance.textContent = 'Add balance';
       addBalance.style.cssText = BTN_SEC;
-      addBalance.onclick = () => toast('Coming soon');
+      addBalance.onclick = () => { unmount(ovl); showTopUpStep(ctx, shortfall); };
       wrap.appendChild(addBalance);
     } else {
       buyBtn.textContent = 'Buy this number';
@@ -2608,6 +2611,152 @@ async function _runInternationalFlow(direct) {
     wrap.appendChild(limits);
 
     addBack(wrap, ovl, () => showNumberStep(ctx));
+  }
+
+  // ── Step 4 (cont.): balance top-up ───────────────────────
+  // Reached from showConfirmStep()'s "Add balance" button when the quote
+  // comes back unaffordable. Razorpay's checkout `handler` firing is NOT
+  // proof of payment — only orderStatus() returning 'captured' means the
+  // server verified and credited it, so both a successful checkout and a
+  // dismissed one land in the same polling step below.
+  async function showTopUpStep(ctx, shortfallPaise) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Add balance');
+
+    const bal = document.createElement('p');
+    bal.style.cssText = SUB;
+    bal.textContent = 'Current balance: ' + did.formatPaise(ctx.balancePaise || 0);
+    wrap.appendChild(bal);
+
+    const AMOUNTS = [10000, 20000, 50000, 100000]; // ₹100/200/500/1000 — server-enforced
+    const need = Math.max(0, shortfallPaise || 0);
+    let selected = AMOUNTS.find(a => a >= need) || AMOUNTS[AMOUNTS.length - 1];
+
+    const AMOUNT_BTN_OFF = 'padding:16px 8px;border-radius:12px;font-weight:700;font-size:15px;' +
+      'font-family:"Syne",sans-serif;cursor:pointer;border:1px solid rgba(255,255,255,.1);' +
+      'background:rgba(255,255,255,.06);color:#c8dff5;';
+    const AMOUNT_BTN_SEL = 'padding:16px 8px;border-radius:12px;font-weight:700;font-size:15px;' +
+      'font-family:"Syne",sans-serif;cursor:pointer;border:0;background:var(--blue,#63b4ff);color:#03161b;';
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;';
+    const amountBtns = AMOUNTS.map(amount => {
+      const b = document.createElement('button');
+      b.textContent = did.formatPaise(amount);
+      grid.appendChild(b);
+      return { amount, el: b };
+    });
+    function refreshAmountButtons() {
+      amountBtns.forEach(({ amount, el }) => {
+        el.style.cssText = amount === selected ? AMOUNT_BTN_SEL : AMOUNT_BTN_OFF;
+      });
+    }
+    amountBtns.forEach(({ amount, el }) => {
+      el.onclick = () => { selected = amount; refreshAmountButtons(); };
+    });
+    refreshAmountButtons();
+    wrap.appendChild(grid);
+
+    const payErr = document.createElement('p');
+    payErr.style.cssText = ERR;
+    wrap.appendChild(payErr);
+
+    const payBtn = document.createElement('button');
+    payBtn.textContent = 'Pay with Razorpay';
+    payBtn.style.cssText = BTN_PRI;
+    wrap.appendChild(payBtn);
+
+    const fine = document.createElement('p');
+    fine.style.cssText = MUTED;
+    fine.textContent = 'Payment is processed by Razorpay. We never see your card details.';
+    wrap.appendChild(fine);
+
+    addBack(wrap, ovl, () => showConfirmStep(ctx));
+
+    payBtn.onclick = async () => {
+      payErr.textContent = '';
+      payBtn.disabled = true;
+      payBtn.textContent = 'Starting checkout…';
+      try {
+        const billing = await import('./ocp-billing.js');
+        const order = await billing.createOrder(ctx.identity, ctx.identity.ocp_address, selected);
+        await billing.loadRazorpay();
+        const rzp = new window.Razorpay({
+          key: order.key_id,
+          order_id: order.order_id,
+          amount: order.amount_paise,
+          currency: 'INR',
+          name: 'OpenCall',
+          description: 'Balance top-up',
+          theme: { color: '#3ddc84' },
+          handler: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise); },
+          modal: { ondismiss: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise); } }
+        });
+        rzp.open();
+      } catch (e) {
+        payErr.textContent = errMsg(e, 'Could not start checkout — try again.');
+        payBtn.disabled = false;
+        payBtn.textContent = 'Pay with Razorpay';
+      }
+    };
+
+    mount(ovl);
+  }
+
+  // ── Step 4 (cont.): confirming a top-up payment ──────────
+  // Polls the server rather than trusting the Razorpay client event — see
+  // the CRITICAL note on showTopUpStep above.
+  async function showConfirmingPayment(ctx, orderId, shortfallPaise) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Confirming payment');
+
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Confirming your payment…';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    const billing = await import('./ocp-billing.js');
+
+    for (let i = 0; i < 30; i++) {
+      let res;
+      try {
+        res = await billing.orderStatus(ctx.identity, ctx.identity.ocp_address, orderId);
+      } catch (e) {
+        // Transient network error while polling — keep trying rather than
+        // failing the user out; the order itself is unaffected.
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      if (res.state === 'captured') {
+        unmount(ovl);
+        toast('Payment received — balance updated: ' + did.formatPaise(res.balance_paise));
+        showConfirmStep({ ...ctx, balancePaise: res.balance_paise });
+        return;
+      }
+      if (res.state === 'failed') {
+        status.remove();
+        addRetryClose(wrap, ovl, 'Payment failed — you have not been charged.',
+          () => showTopUpStep(ctx, shortfallPaise));
+        return;
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Still pending after ~60s — not a failure. The webhook may still land
+    // and the balance will update on its own once it does.
+    status.remove();
+    const msg = document.createElement('p');
+    msg.style.cssText = SUB;
+    msg.textContent = 'Payment is taking longer than usual. Your balance will update ' +
+      'automatically — check back in a minute.';
+    wrap.appendChild(msg);
+    const okBtn = document.createElement('button');
+    okBtn.textContent = 'OK';
+    okBtn.style.cssText = BTN_PRI;
+    okBtn.onclick = () => { unmount(ovl); showConfirmStep(ctx); };
+    wrap.appendChild(okBtn);
   }
 
   // ── Step 4 (cont.): purchase in flight — real progress, not a spinner ─
@@ -2883,10 +3032,109 @@ async function _runInternationalFlow(direct) {
   }
 }
 
+// ── Encrypted keystore crypto (PBKDF2-SHA256 + AES-256-GCM) ───────────
+// Canonical package shape: {version:3, salt, nonce, data} — all base64.
+// Shared by backupIdentity()'s download and importIdentity()'s restore so
+// the two sides can never drift out of sync with each other again (v2 files
+// were written with a mismatched reader — see decryptIdentity below).
+const KEYSTORE_PBKDF2_ITERATIONS = 250000;
+
+async function encryptIdentity(identity, passphrase) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const km   = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase),
+    { name: 'PBKDF2' }, false, ['deriveKey']);
+  const key  = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: KEYSTORE_PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ct    = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce },
+    key, new TextEncoder().encode(JSON.stringify(identity)));
+  const b64 = arr => btoa(String.fromCharCode(...new Uint8Array(arr)));
+  return { version: 3, salt: b64(salt), nonce: b64(nonce), data: b64(ct) };
+}
+
+async function decryptIdentity(pkg, passphrase) {
+  if (pkg && pkg.version === 2) {
+    // Written by the old encrypt/decrypt pair, which disagreed with itself
+    // on field name (iv vs nonce) and PBKDF2 iteration count — not reliably
+    // recoverable. Fail loudly instead of guessing.
+    const err = new Error('This backup was made by an older version and cannot be opened. ' +
+      'Use your 12-word recovery phrase instead.');
+    err.code = 'legacy-v2';
+    throw err;
+  }
+  const salt  = Uint8Array.from(atob(pkg.salt),  c => c.charCodeAt(0));
+  const nonce = Uint8Array.from(atob(pkg.nonce), c => c.charCodeAt(0));
+  const data  = Uint8Array.from(atob(pkg.data),  c => c.charCodeAt(0));
+  const km  = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase),
+    { name: 'PBKDF2' }, false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: KEYSTORE_PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const pt  = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, key, data);
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+// ── Overwrite guard for identity restore ──────────────────
+// Shown only when a different identity is already stored on this device.
+// Resolves true to proceed with the restore, false to cancel it. Used by
+// both restore paths (recovery phrase and backup file) in backupIdentity()
+// / importIdentity() below.
+function _confirmIdentityOverwrite(newOcp) {
+  return loadIdentity().then(current => {
+    if (!current || !current.ocp_address || current.ocp_address === newOcp) {
+      return true;
+    }
+    return new Promise((resolve) => {
+      const ovl = document.createElement('div');
+      ovl.style.cssText = 'position:fixed;inset:0;z-index:21000;background:var(--bg-deep,#060a10);' +
+        'overflow-y:auto;display:flex;flex-direction:column;align-items:center;padding:32px 20px 56px;';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'max-width:460px;width:100%;';
+      ovl.appendChild(wrap);
+
+      const h = document.createElement('h2');
+      h.textContent = 'Replace Current Identity?';
+      h.style.cssText = 'font-family:"Syne",sans-serif;font-size:22px;color:#f87171;' +
+        'text-align:center;margin:0 0 16px;font-weight:700;';
+      wrap.appendChild(h);
+
+      const warn = document.createElement('div');
+      warn.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#c8dff5;' +
+        'background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);' +
+        'border-radius:12px;padding:14px 16px;margin-bottom:20px;line-height:1.6;';
+      const mk = (text, cssText) => { const el = document.createElement('div'); el.textContent = text; if (cssText) el.style.cssText = cssText; return el; };
+      warn.appendChild(mk('You already have an identity on this device:'));
+      warn.appendChild(mk(current.ocp_address, 'color:#e8f4f7;font-weight:700;word-break:break-all;margin:6px 0 14px;'));
+      warn.appendChild(mk('Restoring will replace it with:'));
+      warn.appendChild(mk(newOcp, 'color:#c8f55a;font-weight:700;word-break:break-all;margin:6px 0 14px;'));
+      warn.appendChild(mk('The current identity will be gone unless you already have its own recovery phrase or backup file.'));
+      wrap.appendChild(warn);
+
+      const btnYes = document.createElement('button');
+      btnYes.textContent = 'Replace it';
+      btnYes.style.cssText = 'width:100%;padding:13px;background:#f87171;color:#1a0505;border:0;' +
+        'border-radius:12px;font-weight:700;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;';
+      btnYes.onclick = () => { document.body.removeChild(ovl); resolve(true); };
+      wrap.appendChild(btnYes);
+
+      const btnNo = document.createElement('button');
+      btnNo.textContent = 'Cancel';
+      btnNo.style.cssText = 'width:100%;padding:12px;background:transparent;color:#667;border:0;' +
+        'margin-top:10px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
+      btnNo.onclick = () => { document.body.removeChild(ovl); resolve(false); };
+      wrap.appendChild(btnNo);
+
+      document.body.appendChild(ovl);
+    });
+  });
+}
+
 // ── Backup identity (overlay UI) ──────────────────────────
 // Replaces the old prompt()-based exportIdentity().
 // Section A: re-show the 12-word recovery phrase (wallet identities only).
 // Section B: download AES-GCM / PBKDF2 encrypted keystore (all identities).
+// Section C: restore a different identity from phrase or backup file.
 async function backupIdentity() {
   const identity = await loadIdentity();
   if (!identity) return toast('No identity to back up');
@@ -2915,6 +3163,162 @@ async function backupIdentity() {
   h.style.cssText = 'font-family:"Syne",sans-serif;font-size:22px;color:#c8f55a;' +
     'text-align:center;margin:0 0 20px;font-weight:700;';
   wrap.appendChild(h);
+
+  // ── Section A0: back up with Google ─────────────────────
+  // Native app owns the only identity in APP_EMBED mode — nothing to
+  // encrypt or upload here (mirrors Section C's APP_EMBED gate).
+  if (!APP_EMBED) {
+    const secA0 = document.createElement('div');
+    secA0.style.cssText = CARD;
+    wrap.appendChild(secA0);
+
+    const lblA0 = document.createElement('span');
+    lblA0.textContent = 'BACK UP WITH GOOGLE';
+    lblA0.style.cssText = LABEL;
+    secA0.appendChild(lblA0);
+
+    const noteA0 = document.createElement('p');
+    noteA0.textContent = 'Sign in with Google and choose a password. We store an encrypted copy ' +
+      'of your identity that only your password can open — we cannot read it.';
+    noteA0.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin:0 0 12px;line-height:1.55;';
+    secA0.appendChild(noteA0);
+
+    const a0Body = document.createElement('div');
+    secA0.appendChild(a0Body);
+
+    const a0Err = document.createElement('p');
+    a0Err.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#f87171;min-height:16px;margin:8px 0 0;';
+    secA0.appendChild(a0Err);
+
+    function renderGoogleSignedOut() {
+      a0Body.innerHTML = '';
+      a0Err.textContent = '';
+      const btn = document.createElement('button');
+      btn.textContent = 'Back up with Google';
+      btn.style.cssText = BTN_PRI;
+      btn.onclick = () => startGoogleBackup();
+      a0Body.appendChild(btn);
+    }
+
+    function renderGoogleSigningIn() {
+      a0Body.innerHTML = '';
+      a0Err.textContent = '';
+      const status = document.createElement('p');
+      status.textContent = 'Signing in with Google…';
+      status.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#c8dff5;margin:0 0 10px;';
+      a0Body.appendChild(status);
+      const container = document.createElement('div');
+      container.style.cssText = 'display:flex;justify-content:center;margin-bottom:10px;';
+      a0Body.appendChild(container);
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.style.cssText = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
+        'cursor:pointer;font-size:13px;font-family:"DM Mono",monospace;';
+      a0Body.appendChild(cancelBtn);
+      return { container, cancelBtn };
+    }
+
+    function renderGooglePasswordStep(email, onSubmit) {
+      a0Body.innerHTML = '';
+      a0Err.textContent = '';
+      const emailLine = document.createElement('p');
+      emailLine.textContent = 'Signed in as ' + email;
+      emailLine.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#c8f55a;margin:0 0 10px;';
+      a0Body.appendChild(emailLine);
+
+      const gpw1 = document.createElement('input');
+      gpw1.type = 'password'; gpw1.placeholder = 'Password';
+      gpw1.style.cssText = INP;
+      const gpw2 = document.createElement('input');
+      gpw2.type = 'password'; gpw2.placeholder = 'Confirm password';
+      gpw2.style.cssText = INP;
+      a0Body.appendChild(gpw1);
+      a0Body.appendChild(gpw2);
+
+      const submitBtn = document.createElement('button');
+      submitBtn.textContent = 'Encrypt & back up';
+      submitBtn.style.cssText = BTN_PRI;
+      a0Body.appendChild(submitBtn);
+
+      submitBtn.onclick = () => onSubmit(gpw1, gpw2, submitBtn);
+    }
+
+    function renderGoogleBackedUp() {
+      a0Body.innerHTML = '';
+      a0Err.textContent = '';
+      const doneLine = document.createElement('p');
+      doneLine.textContent = '✓ Backed up to Google.';
+      doneLine.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#c8f55a;margin:0 0 8px;';
+      a0Body.appendChild(doneLine);
+      const removeLink = document.createElement('span');
+      removeLink.textContent = 'Remove Google backup';
+      removeLink.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;' +
+        'cursor:pointer;text-decoration:underline;text-underline-offset:2px;';
+      removeLink.onclick = () => startGoogleRemove();
+      a0Body.appendChild(removeLink);
+    }
+
+    async function startGoogleBackup() {
+      const { container, cancelBtn } = renderGoogleSigningIn();
+      let cancelled = false;
+      const cancelPromise = new Promise((_, reject) => {
+        cancelBtn.onclick = () => { cancelled = true; reject(new Error('Google sign-in was cancelled.')); };
+      });
+      try {
+        const vault = await import('./ocp-vault.js');
+        const { idToken, email } = await Promise.race([vault.signInWithGoogle(container), cancelPromise]);
+        if (cancelled) return;
+        renderGooglePasswordStep(email, async (gpw1, gpw2, submitBtn) => {
+          a0Err.textContent = '';
+          const pass = gpw1.value;
+          if (!pass) { a0Err.textContent = 'Enter a password.'; return; }
+          if (pass !== gpw2.value) { a0Err.textContent = 'Passwords do not match.'; return; }
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Encrypting…';
+          try {
+            const pkg = await encryptIdentity(identity, pass);
+            await vault.vaultStore(idToken, pkg, identity.ocp_address);
+            localStorage.setItem('ocp_backed_up', 'true');
+            toast('Backed up to Google');
+            renderGoogleBackedUp();
+          } catch (e) {
+            a0Err.textContent = 'Backup failed — try again.';
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Encrypt & back up';
+          }
+        });
+      } catch (e) {
+        if (!cancelled) a0Err.textContent = 'Google sign-in was cancelled.';
+        renderGoogleSignedOut();
+      }
+    }
+
+    async function startGoogleRemove() {
+      const { container, cancelBtn } = renderGoogleSigningIn();
+      let cancelled = false;
+      const cancelPromise = new Promise((_, reject) => {
+        cancelBtn.onclick = () => { cancelled = true; reject(new Error('Google sign-in was cancelled.')); };
+      });
+      try {
+        const vault = await import('./ocp-vault.js');
+        const { idToken, email } = await Promise.race([vault.signInWithGoogle(container), cancelPromise]);
+        if (cancelled) return;
+        if (!confirm('Remove the Google backup for ' + email + '? You will need your recovery ' +
+          'phrase or a downloaded backup file to restore this identity afterward.')) {
+          renderGoogleBackedUp();
+          return;
+        }
+        await vault.vaultDelete(idToken);
+        toast('Google backup removed');
+        renderGoogleSignedOut();
+      } catch (e) {
+        if (!cancelled) a0Err.textContent = 'Could not remove backup — try again.';
+        renderGoogleBackedUp();
+      }
+    }
+
+    renderGoogleSignedOut();
+  }
 
   // ── Section A: recovery phrase ─────────────────────────
   const secA = document.createElement('div');
@@ -3035,17 +3439,7 @@ async function backupIdentity() {
     dlBtn.disabled = true;
     dlBtn.textContent = 'Encrypting…';
     try {
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      const km   = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass),
-        { name: 'PBKDF2' }, false, ['deriveKey']);
-      const key  = await crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
-        km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
-      const iv   = crypto.getRandomValues(new Uint8Array(12));
-      const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv },
-        key, new TextEncoder().encode(JSON.stringify(identity)));
-      const b64  = arr => btoa(String.fromCharCode(...new Uint8Array(arr)));
-      const pkg  = { version: 2, salt: b64(salt), iv: b64(iv), data: b64(ct) };
+      const pkg  = await encryptIdentity(identity, pass);
       const blob = new Blob([JSON.stringify(pkg)], { type: 'application/json' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
@@ -3061,6 +3455,66 @@ async function backupIdentity() {
       dlBtn.textContent = 'Download encrypted backup';
     }
   };
+
+  // ── Section C: restore an existing identity ─────────────
+  // Native app owns the only identity in APP_EMBED mode — nothing to
+  // restore here (mirrors openInternationalFlow()'s APP_EMBED gate).
+  if (!APP_EMBED) {
+    const secC = document.createElement('div');
+    secC.style.cssText = CARD;
+    wrap.appendChild(secC);
+
+    const lblC = document.createElement('span');
+    lblC.textContent = 'RESTORE IDENTITY';
+    lblC.style.cssText = LABEL;
+    secC.appendChild(lblC);
+
+    const noteC = document.createElement('p');
+    noteC.textContent = 'Switch this device to a different identity using its recovery phrase or an encrypted backup file. This replaces the identity currently on this device.';
+    noteC.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin:0 0 12px;line-height:1.55;';
+    secC.appendChild(noteC);
+
+    const restorePhraseBtn = document.createElement('button');
+    restorePhraseBtn.textContent = 'Restore from recovery phrase';
+    restorePhraseBtn.style.cssText = BTN_PRI;
+    restorePhraseBtn.onclick = async () => {
+      if (ovl.parentNode) document.body.removeChild(ovl);
+      try {
+        const restored = await _runWalletOnboarding('restore');
+        const proceed = await _confirmIdentityOverwrite(restored.ocp_address);
+        if (!proceed) { toast('Restore cancelled'); return; }
+        await saveIdentity(restored);
+        localStorage.setItem('ocp_backed_up', 'true');
+        toast('Identity restored — reloading…');
+        setTimeout(() => location.reload(), 600);
+      } catch (e) {
+        toast('Could not start restore — try again');
+      }
+    };
+    secC.appendChild(restorePhraseBtn);
+
+    const restoreFileBtn = document.createElement('button');
+    restoreFileBtn.textContent = 'Restore from backup file';
+    restoreFileBtn.style.cssText = 'width:100%;padding:11px;background:transparent;' +
+      'color:#8aabb8;border:1px solid rgba(255,255,255,.1);border-radius:10px;' +
+      'font-size:14px;font-family:"DM Mono",monospace;cursor:pointer;margin-top:10px;';
+    restoreFileBtn.onclick = () => {
+      if (ovl.parentNode) document.body.removeChild(ovl);
+      importIdentity();
+    };
+    secC.appendChild(restoreFileBtn);
+
+    const restoreGoogleBtn = document.createElement('button');
+    restoreGoogleBtn.textContent = 'Restore with Google';
+    restoreGoogleBtn.style.cssText = 'width:100%;padding:11px;background:transparent;' +
+      'color:#8aabb8;border:1px solid rgba(255,255,255,.1);border-radius:10px;' +
+      'font-size:14px;font-family:"DM Mono",monospace;cursor:pointer;margin-top:10px;';
+    restoreGoogleBtn.onclick = () => {
+      if (ovl.parentNode) document.body.removeChild(ovl);
+      _restoreIdentityWithGoogle();
+    };
+    secC.appendChild(restoreGoogleBtn);
+  }
 
   // ── Close button ───────────────────────────────────────
   const closeBtn = document.createElement('button');
@@ -3090,47 +3544,102 @@ async function importIdentity() {
     if (!passphrase) return;
 
     try {
-      const salt  = Uint8Array.from(atob(backup.salt),  c => c.charCodeAt(0));
-      const nonce = Uint8Array.from(atob(backup.nonce), c => c.charCodeAt(0));
-      const data  = Uint8Array.from(atob(backup.data),  c => c.charCodeAt(0));
-
-      const keyMaterial = await crypto.subtle.importKey(
-        'raw',
-        new TextEncoder().encode(passphrase),
-        { name: 'PBKDF2' },
-        false,
-        ['deriveKey']
-      );
-      const encryptionKey = await crypto.subtle.deriveKey(
-        {
-          name: 'PBKDF2',
-          salt,
-          iterations: 100000,
-          hash: 'SHA-256'
-        },
-        keyMaterial,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['decrypt']
-      );
-      const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: nonce },
-        encryptionKey,
-        data
-      );
-      const identity = JSON.parse(new TextDecoder().decode(decrypted));
+      const identity = await decryptIdentity(backup, passphrase);
+      const proceed = await _confirmIdentityOverwrite(identity.ocp_address);
+      if (!proceed) { toast('Restore cancelled'); return; }
       await saveIdentity(identity);
+      localStorage.setItem('ocp_backed_up', 'true');
       myIdentity = identity;
-      const _r = document.getElementById('ocp-address-display');
-      const _d = document.getElementById('ocp-addr-dialer');
-      if (_r) _r.textContent = identity.ocp_address;
-      if (_d) _d.textContent = identity.ocp_address;
-      toast('Identity imported successfully');
+      toast('Identity restored — reloading…');
+      setTimeout(() => location.reload(), 600);
     } catch(e) {
-      toast('Wrong passphrase or corrupted file');
+      toast(e && e.code === 'legacy-v2' ? e.message : 'Wrong passphrase or corrupted file');
     }
   };
   input.click();
+}
+
+// ── Restore identity from a Google-backed vault ───────────
+// Reuses the same overwrite-guard + save + reload tail as the file-restore
+// path in importIdentity() above — only the source of the encrypted blob
+// differs (vaultFetch() instead of a picked file).
+async function _restoreIdentityWithGoogle() {
+  const ovl = document.createElement('div');
+  ovl.style.cssText = 'position:fixed;inset:0;z-index:20500;background:var(--bg-deep,#060a10);' +
+    'overflow-y:auto;display:flex;flex-direction:column;align-items:center;padding:32px 20px 56px;';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'max-width:460px;width:100%;';
+  ovl.appendChild(wrap);
+
+  const h = document.createElement('h2');
+  h.textContent = 'Restore with Google';
+  h.style.cssText = 'font-family:"Syne",sans-serif;font-size:22px;color:#c8f55a;' +
+    'text-align:center;margin:0 0 20px;font-weight:700;';
+  wrap.appendChild(h);
+
+  const status = document.createElement('p');
+  status.textContent = 'Signing in with Google…';
+  status.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#c8dff5;' +
+    'text-align:center;margin:0 0 14px;';
+  wrap.appendChild(status);
+
+  const container = document.createElement('div');
+  container.style.cssText = 'display:flex;justify-content:center;margin-bottom:14px;';
+  wrap.appendChild(container);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'width:100%;padding:12px;background:transparent;color:#667;border:0;' +
+    'cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
+  wrap.appendChild(cancelBtn);
+
+  document.body.appendChild(ovl);
+
+  let cancelled = false;
+  const cancelPromise = new Promise((_, reject) => {
+    cancelBtn.onclick = () => { cancelled = true; reject(new Error('Google sign-in was cancelled.')); };
+  });
+
+  try {
+    const vault = await import('./ocp-vault.js');
+    const { idToken } = await Promise.race([vault.signInWithGoogle(container), cancelPromise]);
+    if (cancelled) return;
+
+    status.textContent = 'Fetching your backup…';
+    container.innerHTML = '';
+
+    let fetched;
+    try {
+      fetched = await vault.vaultFetch(idToken);
+    } catch (e) {
+      if (e && e.status === 404) throw new Error('No Google backup found for this account.');
+      throw e;
+    }
+
+    if (ovl.parentNode) document.body.removeChild(ovl);
+
+    const passphrase = prompt('Enter your backup passphrase:');
+    if (!passphrase) return;
+
+    let identity;
+    try {
+      identity = await decryptIdentity(fetched.blob, passphrase);
+    } catch (e) {
+      if (e && e.code === 'legacy-v2') { toast(e.message); return; }
+      toast('Wrong passphrase or corrupted file');
+      return;
+    }
+
+    const proceed = await _confirmIdentityOverwrite(identity.ocp_address);
+    if (!proceed) { toast('Restore cancelled'); return; }
+    await saveIdentity(identity);
+    localStorage.setItem('ocp_backed_up', 'true');
+    toast('Identity restored — reloading…');
+    setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    if (ovl.parentNode) document.body.removeChild(ovl);
+    toast(!cancelled && e && e.message ? e.message : 'Google sign-in was cancelled.');
+  }
 }
 
 async function signMessage(identity, messageObj) {

@@ -160,6 +160,28 @@ export async function quote(identity, pubkey, { country, groupId, sku }) {
  * the carrier is slow — in that case poll getLine() until did is set.
  */
 export async function purchase(identity, pubkey, { country, groupId, sku }) {
+  if (localStorage.getItem('ocp_backed_up') !== 'true') {
+    if (typeof window !== 'undefined' && typeof window.backupIdentity === 'function') {
+      window.backupIdentity();
+    }
+    throw new Error('Back up your identity before buying a number — we just opened the backup screen.');
+  }
+
+  const persisted = (navigator.storage && navigator.storage.persist)
+    ? await navigator.storage.persist()
+    : false;
+  if (!persisted) {
+    const proceed = confirm(
+      'This browser did not grant persistent storage to OpenCall. Your identity could be erased — ' +
+      'private/incognito windows erase it on close, and Safari can evict site data after about a ' +
+      'week of inactivity. Make sure you have a backup, then press OK to continue anyway, or ' +
+      'Cancel to stop.'
+    );
+    if (!proceed) {
+      throw new Error('Purchase cancelled — storage may not persist on this browser.');
+    }
+  }
+
   const auth = await authFields(identity, pubkey);
   return req('/did/purchase', {
     method: 'POST',
