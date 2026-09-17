@@ -71,3 +71,43 @@ export function loadRazorpay() {
   });
   return _razorpayLoading;
 }
+
+/** Creates a PayPal order for a balance top-up (amount in USD cents). */
+export async function createPaypalOrder(identity, pubkey, amountCents) {
+  const auth = await authFields(identity, pubkey);
+  return req('/billing/paypal/order', {
+    method: 'POST',
+    body: JSON.stringify({ ...auth, amount_cents: amountCents })
+  });
+}
+
+let _paypalLoading = null;
+
+/** Injects the PayPal SDK script once for the given client id; resolves once window.paypal exists. */
+export function loadPaypalSdk(clientId) {
+  if (window.paypal) return Promise.resolve();
+  if (_paypalLoading) return _paypalLoading;
+  _paypalLoading = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://www.paypal.com/sdk/js?client-id=' + encodeURIComponent(clientId) +
+      '&currency=USD&intent=capture';
+    s.onload = () => {
+      if (window.paypal) resolve();
+      else reject(new Error('PayPal failed to load.'));
+    };
+    s.onerror = () => {
+      _paypalLoading = null;
+      reject(new Error('Could not load the payment SDK — check your connection.'));
+    };
+    document.head.appendChild(s);
+  });
+  return _paypalLoading;
+}
+
+/** Server-enforced allowed top-up tiers — USD cents charged, paise credited. */
+export const TOPUP_TIERS_USD = [
+  { cents: 500,  label: '$5',  paise: 40000  },
+  { cents: 1000, label: '$10', paise: 80000  },
+  { cents: 2500, label: '$25', paise: 200000 },
+  { cents: 5000, label: '$50', paise: 400000 },
+];

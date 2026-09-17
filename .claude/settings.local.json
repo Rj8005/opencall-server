@@ -4,7 +4,13 @@
       "Bash(npm init *)",
       "Bash(npm install *)",
       "PowerShell(Invoke-WebRequest -Uri \"https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.11/dist/modules/libsodium-wrappers.js\" -OutFile \"F:\\\\OpenCall\\\\pwa\\\\libsodium-wrappers.js\")",
-      "PowerShell(\\(Invoke-WebRequest -Uri \"https://unpkg.com/libsodium-wrappers@0.7.11/dist/browsers/sodium.js\" -UseBasicParsing\\).Content.Substring\\(0,200\\))"
+      "PowerShell(\\(Invoke-WebRequest -Uri \"https://unpkg.com/libsodium-wrappers@0.7.11/dist/browsers/sodium.js\" -UseBasicParsing\\).Content.Substring\\(0,200\\))",
+      "Bash(git -C /e/OpenCall status)",
+      "Bash(curl -sL \"https://api.cdnjs.com/libraries/jssip?fields=version,filename,files\")",
+      "Bash(curl -sL \"https://cdnjs.cloudflare.com/ajax/libs/jssip/3.10.1/jssip.min.js\")",
+      "Bash(curl -sL \"https://api.github.com/repos/versatica/JsSIP/releases/latest\")",
+      "Bash(ssh root@sbc.opencall.space \"rtpengine --version 2>&1; echo '---CAPS---'; rtpengine --version 2>&1 | grep -i 'transcod\\\\|codec\\\\|DTMF\\\\|play\\\\|compile\\\\|feature' || true\")",
+      "Bash(ssh root@sbc.opencall.space \"cat /etc/kamailio/kamailio.cfg 2>/dev/null || echo 'NOT FOUND'\")"
     ]
   }
 }

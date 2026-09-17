@@ -1918,6 +1918,11 @@ function _runWalletOnboarding(startAt) {
 // to the account step.
 const SHOW_MODE_CHOOSER = false;
 
+// Top-up moved from Razorpay (INR) to PayPal (USD). The Razorpay UI in
+// showTopUpStep is guarded on this rather than deleted — its server routes
+// stay live, so flipping this back to true restores a working button.
+const ENABLE_RAZORPAY = false;
+
 function _isoToFlagEmoji(iso2) {
   const cc = String(iso2 || '').toUpperCase();
   if (cc.length !== 2 || !/^[A-Z]{2}$/.test(cc)) return '';
@@ -2615,10 +2620,10 @@ async function _runInternationalFlow(direct) {
 
   // ── Step 4 (cont.): balance top-up ───────────────────────
   // Reached from showConfirmStep()'s "Add balance" button when the quote
-  // comes back unaffordable. Razorpay's checkout `handler` firing is NOT
-  // proof of payment — only orderStatus() returning 'captured' means the
-  // server verified and credited it, so both a successful checkout and a
-  // dismissed one land in the same polling step below.
+  // comes back unaffordable. PayPal's onApprove firing is NOT proof of
+  // payment — only orderStatus() returning 'captured' means the server
+  // verified and credited it, so approval routes into the same polling
+  // step used for the pending/cancelled cases (showConfirmingPayment).
   async function showTopUpStep(ctx, shortfallPaise) {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, 'Add balance');
@@ -2628,84 +2633,222 @@ async function _runInternationalFlow(direct) {
     bal.textContent = 'Current balance: ' + did.formatPaise(ctx.balancePaise || 0);
     wrap.appendChild(bal);
 
-    const AMOUNTS = [10000, 20000, 50000, 100000]; // ₹100/200/500/1000 — server-enforced
+    const billing = await import('./ocp-billing.js');
+    const TIERS = billing.TOPUP_TIERS_USD;
     const need = Math.max(0, shortfallPaise || 0);
-    let selected = AMOUNTS.find(a => a >= need) || AMOUNTS[AMOUNTS.length - 1];
+    let selected = TIERS.find(t => t.paise >= need) || TIERS[TIERS.length - 1];
+    const coversShortfall = selected.paise >= need;
 
-    const AMOUNT_BTN_OFF = 'padding:16px 8px;border-radius:12px;font-weight:700;font-size:15px;' +
+    const TIER_BTN_OFF = 'padding:14px 6px;border-radius:12px;font-weight:700;' +
       'font-family:"Syne",sans-serif;cursor:pointer;border:1px solid rgba(255,255,255,.1);' +
-      'background:rgba(255,255,255,.06);color:#c8dff5;';
-    const AMOUNT_BTN_SEL = 'padding:16px 8px;border-radius:12px;font-weight:700;font-size:15px;' +
-      'font-family:"Syne",sans-serif;cursor:pointer;border:0;background:var(--blue,#63b4ff);color:#03161b;';
+      'background:rgba(255,255,255,.06);color:#c8dff5;text-align:center;';
+    const TIER_BTN_SEL = 'padding:14px 6px;border-radius:12px;font-weight:700;' +
+      'font-family:"Syne",sans-serif;cursor:pointer;border:0;background:var(--blue,#63b4ff);' +
+      'color:#03161b;text-align:center;';
 
     const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;';
-    const amountBtns = AMOUNTS.map(amount => {
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;';
+    const tierBtns = TIERS.map(tier => {
       const b = document.createElement('button');
-      b.textContent = did.formatPaise(amount);
+      const top = document.createElement('div');
+      top.style.cssText = 'font-size:16px;';
+      top.textContent = tier.label;
+      const bottom = document.createElement('div');
+      bottom.style.cssText = 'font-size:11px;font-weight:400;font-family:"DM Mono",monospace;' +
+        'margin-top:3px;opacity:.85;';
+      bottom.textContent = did.formatPaise(tier.paise);
+      b.appendChild(top);
+      b.appendChild(bottom);
       grid.appendChild(b);
-      return { amount, el: b };
+      return { tier, el: b };
     });
-    function refreshAmountButtons() {
-      amountBtns.forEach(({ amount, el }) => {
-        el.style.cssText = amount === selected ? AMOUNT_BTN_SEL : AMOUNT_BTN_OFF;
+
+    let busy = false;
+    function refreshTierButtons() {
+      tierBtns.forEach(({ tier, el }) => {
+        el.disabled = busy;
+        el.style.cssText = (tier.cents === selected.cents ? TIER_BTN_SEL : TIER_BTN_OFF) +
+          (busy ? 'opacity:.5;' : '');
       });
     }
-    amountBtns.forEach(({ amount, el }) => {
-      el.onclick = () => { selected = amount; refreshAmountButtons(); };
+    tierBtns.forEach(({ tier, el }) => {
+      el.onclick = () => {
+        if (tier.cents === selected.cents) return;
+        selected = tier;
+        refreshTierButtons();
+        renderPaypalButton();
+      };
     });
-    refreshAmountButtons();
+    refreshTierButtons();
     wrap.appendChild(grid);
+
+    if (!coversShortfall) {
+      const warn = document.createElement('p');
+      warn.style.cssText = WARN;
+      warn.textContent = 'Even the largest amount does not fully cover what you need — you can top up again afterward.';
+      wrap.appendChild(warn);
+    }
 
     const payErr = document.createElement('p');
     payErr.style.cssText = ERR;
     wrap.appendChild(payErr);
 
-    const payBtn = document.createElement('button');
-    payBtn.textContent = 'Pay with Razorpay';
-    payBtn.style.cssText = BTN_PRI;
-    wrap.appendChild(payBtn);
+    const retryLink = document.createElement('span');
+    retryLink.textContent = 'Try again';
+    retryLink.style.cssText = 'display:none;font-family:"DM Mono",monospace;font-size:12px;' +
+      'color:var(--blue,#63b4ff);cursor:pointer;text-decoration:underline;text-underline-offset:2px;' +
+      'margin:-10px 0 12px;';
+    retryLink.onclick = () => renderPaypalButton();
+    wrap.appendChild(retryLink);
+
+    function setPaypalError(msg) {
+      payErr.textContent = msg;
+      retryLink.style.display = msg ? 'inline-block' : 'none';
+    }
+
+    const paypalContainer = document.createElement('div');
+    paypalContainer.id = 'paypal-button-container';
+    paypalContainer.style.cssText = 'min-height:48px;margin-bottom:6px;';
+    wrap.appendChild(paypalContainer);
+
+    const paypalStatus = document.createElement('p');
+    paypalStatus.style.cssText = SUB;
+    wrap.appendChild(paypalStatus);
 
     const fine = document.createElement('p');
     fine.style.cssText = MUTED;
-    fine.textContent = 'Payment is processed by Razorpay. We never see your card details.';
+    fine.textContent = 'Paid in USD. Your balance is credited in rupees at a fixed rate.';
     wrap.appendChild(fine);
 
-    addBack(wrap, ovl, () => showConfirmStep(ctx));
+    // ── Legacy Razorpay path — disabled by default (ENABLE_RAZORPAY) ──
+    // Left intact and self-contained (own amount grid, own button) so
+    // flipping the flag back on restores the old flow without rewriting
+    // it. Server routes it calls (createOrder/loadRazorpay) are unchanged.
+    if (ENABLE_RAZORPAY) {
+      const AMOUNTS = billing.TOPUP_AMOUNTS_PAISE;
+      let rzSelected = AMOUNTS.find(a => a >= need) || AMOUNTS[AMOUNTS.length - 1];
 
-    payBtn.onclick = async () => {
-      payErr.textContent = '';
-      payBtn.disabled = true;
-      payBtn.textContent = 'Starting checkout…';
-      try {
-        const billing = await import('./ocp-billing.js');
-        const order = await billing.createOrder(ctx.identity, ctx.identity.ocp_address, selected);
-        await billing.loadRazorpay();
-        const rzp = new window.Razorpay({
-          key: order.key_id,
-          order_id: order.order_id,
-          amount: order.amount_paise,
-          currency: 'INR',
-          name: 'OpenCall',
-          description: 'Balance top-up',
-          theme: { color: '#3ddc84' },
-          handler: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise); },
-          modal: { ondismiss: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise); } }
+      const rzGrid = document.createElement('div');
+      rzGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:18px 0 18px;';
+      const rzAmountBtns = AMOUNTS.map(amount => {
+        const b = document.createElement('button');
+        b.textContent = did.formatPaise(amount);
+        rzGrid.appendChild(b);
+        return { amount, el: b };
+      });
+      function refreshRzButtons() {
+        rzAmountBtns.forEach(({ amount, el }) => {
+          el.style.cssText = amount === rzSelected ? TIER_BTN_SEL : TIER_BTN_OFF;
         });
-        rzp.open();
-      } catch (e) {
-        payErr.textContent = errMsg(e, 'Could not start checkout — try again.');
-        payBtn.disabled = false;
-        payBtn.textContent = 'Pay with Razorpay';
       }
-    };
+      rzAmountBtns.forEach(({ amount, el }) => {
+        el.onclick = () => { rzSelected = amount; refreshRzButtons(); };
+      });
+      refreshRzButtons();
+      wrap.appendChild(rzGrid);
 
+      const rzErr = document.createElement('p');
+      rzErr.style.cssText = ERR;
+      wrap.appendChild(rzErr);
+
+      const payBtn = document.createElement('button');
+      payBtn.textContent = 'Pay with Razorpay';
+      payBtn.style.cssText = BTN_PRI;
+      wrap.appendChild(payBtn);
+
+      const rzFine = document.createElement('p');
+      rzFine.style.cssText = MUTED;
+      rzFine.textContent = 'Payment is processed by Razorpay. We never see your card details.';
+      wrap.appendChild(rzFine);
+
+      payBtn.onclick = async () => {
+        rzErr.textContent = '';
+        payBtn.disabled = true;
+        payBtn.textContent = 'Starting checkout…';
+        try {
+          const order = await billing.createOrder(ctx.identity, ctx.identity.ocp_address, rzSelected);
+          await billing.loadRazorpay();
+          const rzp = new window.Razorpay({
+            key: order.key_id,
+            order_id: order.order_id,
+            amount: order.amount_paise,
+            currency: 'INR',
+            name: 'OpenCall',
+            description: 'Balance top-up',
+            theme: { color: '#3ddc84' },
+            handler: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise); },
+            modal: { ondismiss: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise); } }
+          });
+          rzp.open();
+        } catch (e) {
+          rzErr.textContent = errMsg(e, 'Could not start checkout — try again.');
+          payBtn.disabled = false;
+          payBtn.textContent = 'Pay with Razorpay';
+        }
+      };
+    }
+
+    addBack(wrap, ovl, () => showConfirmStep(ctx));
     mount(ovl);
+
+    let currentButtons = null;
+    let renderToken = 0;
+
+    async function renderPaypalButton() {
+      const myToken = ++renderToken;
+      setPaypalError('');
+      paypalStatus.textContent = '⏳ Preparing checkout…';
+      busy = true;
+      refreshTierButtons();
+
+      if (currentButtons) {
+        try { currentButtons.close(); } catch (e) {}
+        currentButtons = null;
+      }
+      paypalContainer.innerHTML = '';
+
+      try {
+        const order = await billing.createPaypalOrder(ctx.identity, ctx.identity.ocp_address, selected.cents);
+        await billing.loadPaypalSdk(order.client_id);
+        if (myToken !== renderToken) return; // selection changed while we were preparing
+
+        paypalStatus.textContent = '';
+        currentButtons = window.paypal.Buttons({
+          createOrder: () => order.order_id,
+          onApprove: () => {
+            unmount(ovl);
+            showConfirmingPayment(ctx, order.order_id, shortfallPaise);
+          },
+          onCancel: () => {
+            paypalStatus.textContent = '';
+            busy = false;
+            refreshTierButtons();
+          },
+          onError: (err) => {
+            setPaypalError('PayPal checkout failed — try again.');
+            busy = false;
+            refreshTierButtons();
+          }
+        });
+        currentButtons.render('#paypal-button-container');
+        busy = false;
+        refreshTierButtons();
+      } catch (e) {
+        if (myToken !== renderToken) return;
+        paypalStatus.textContent = '';
+        setPaypalError(errMsg(e, 'Could not start checkout — try again.'));
+        busy = false;
+        refreshTierButtons();
+      }
+    }
+
+    renderPaypalButton();
   }
 
   // ── Step 4 (cont.): confirming a top-up payment ──────────
-  // Polls the server rather than trusting the Razorpay client event — see
-  // the CRITICAL note on showTopUpStep above.
+  // Provider-agnostic: polls the server rather than trusting either
+  // provider's client-side success event — see the CRITICAL note on
+  // showTopUpStep above.
   async function showConfirmingPayment(ctx, orderId, shortfallPaise) {
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, 'Confirming payment');
