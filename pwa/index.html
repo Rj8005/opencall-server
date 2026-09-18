@@ -2815,7 +2815,16 @@ async function _runInternationalFlow(direct) {
         paypalStatus.textContent = '';
         currentButtons = window.paypal.Buttons({
           createOrder: () => order.order_id,
-          onApprove: () => {
+          onApprove: async () => {
+            paypalStatus.textContent = '⏳ Completing payment…';
+            try {
+              await billing.capturePaypalOrder(ctx.identity, ctx.identity.ocp_address, order.order_id);
+            } catch (e) {
+              // Capture failing here doesn't mean the payment failed — the
+              // webhook may still land, and showConfirmingPayment's own
+              // poll/timeout is the right fallback. Never show a failure or
+              // credit anything from this response.
+            }
             unmount(ovl);
             showConfirmingPayment(ctx, order.order_id, shortfallPaise);
           },

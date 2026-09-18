@@ -81,6 +81,20 @@ export async function createPaypalOrder(identity, pubkey, amountCents) {
   });
 }
 
+/**
+ * Captures an approved PayPal order. PayPal does not auto-capture on
+ * approval, so this must run before the balance can ever credit — but the
+ * capture response itself is still not proof of payment; only
+ * orderStatus() returning 'captured' is.
+ */
+export async function capturePaypalOrder(identity, pubkey, orderId) {
+  const auth = await authFields(identity, pubkey);
+  return req('/billing/paypal/capture', {
+    method: 'POST',
+    body: JSON.stringify({ ...auth, order_id: orderId })
+  });
+}
+
 let _paypalLoading = null;
 
 /** Injects the PayPal SDK script once for the given client id; resolves once window.paypal exists. */
