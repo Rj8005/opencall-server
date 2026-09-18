@@ -969,6 +969,16 @@ if (APP_EMBED) {
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
+        <!-- Balance chip — standalone entry to top-up, independent of the
+             buy-a-number flow. Hidden until an OCP billing line exists (see
+             _refreshIntlCard) and entirely under APP_EMBED via .app-header's
+             existing display:none rule. -->
+        <span id="header-balance-chip" onclick="openTopUpFromHeader()" title="Add funds"
+              style="display:none;align-items:center;gap:4px;cursor:pointer;padding:3px 9px;
+                     border-radius:20px;background:rgba(61,220,132,.1);border:1px solid rgba(61,220,132,.28);
+                     font-family:'DM Mono',monospace;font-size:11px;color:#3ddc84;line-height:1;white-space:nowrap;">
+          <span aria-hidden="true">🪙</span><span id="header-balance-amt" style="font-family:'Syne',sans-serif;font-weight:700;">₹0</span>
+        </span>
         <span id="header-user-info" style="font-size:12px;color:var(--text-secondary);font-family:'DM Mono',monospace;letter-spacing:0.3px"></span>
         <a id="link-change" href="#" style="font-size:10px;color:var(--blue);opacity:0.7;text-decoration:none">change</a>
         <div id="status-pill" class="status-pill pill-online">Online</div>
@@ -1983,6 +1993,27 @@ function _updateLowBalanceBanner(did, balancePaise) {
   }
 }
 
+// Compact rupee display for the header chip — "₹800", not "₹800.00".
+function _formatPaiseCompact(paise) {
+  const rupees = Math.round((Number(paise) || 0) / 100);
+  return '₹' + rupees.toLocaleString('en-IN');
+}
+
+// Balance chip in the dialer header — the only top-up entry point that
+// doesn't require going through the buy-a-number flow first. Shown once an
+// OCP billing line exists (created the first time showAccountStep runs, even
+// if the user never finishes buying a number). Hidden under APP_EMBED
+// automatically via .app-header's display:none rule, same as the rest of
+// this header.
+function _setHeaderBalanceChip(balancePaise) {
+  const chip = document.getElementById('header-balance-chip');
+  const amt  = document.getElementById('header-balance-amt');
+  if (!chip || !amt) return;
+  if (APP_EMBED || balancePaise == null) { chip.style.display = 'none'; return; }
+  amt.textContent = _formatPaiseCompact(balancePaise);
+  chip.style.display = 'inline-flex';
+}
+
 let _intlCardChecked = false;
 async function _refreshIntlCard(force) {
   if (APP_EMBED) return;
@@ -2003,8 +2034,10 @@ async function _refreshIntlCard(force) {
       _resetIntlCard();
     }
     _updateLowBalanceBanner(did, line ? line.balance_paise : null);
+    _setHeaderBalanceChip(line ? line.balance_paise : null);
   } catch (e) {
     // Not registered yet (404) or offline — leave the "Get a number" default.
+    _setHeaderBalanceChip(null);
   }
 }
 
@@ -2018,6 +2051,13 @@ function openInternationalFlow() {
   } else {
     _runInternationalFlow();
   }
+}
+
+// Header balance chip's tap target — opens top-up standalone, skipping the
+// mode chooser / account / country / number / confirm steps entirely.
+function openTopUpFromHeader() {
+  if (APP_EMBED) return;
+  _runInternationalFlow({ topupOnly: true });
 }
 
 async function _runInternationalFlow(direct) {
@@ -2072,7 +2112,7 @@ async function _runInternationalFlow(direct) {
   function mount(ovl) { document.body.appendChild(ovl); }
   function unmount(ovl) { if (ovl.parentNode) document.body.removeChild(ovl); }
 
-  function addHeader(wrap, ovl, title) {
+  function addHeader(wrap, ovl, title, onClose) {
     const bar = document.createElement('div');
     bar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;';
     const h = document.createElement('h2');
@@ -2082,7 +2122,7 @@ async function _runInternationalFlow(direct) {
     x.textContent = '✕';
     x.setAttribute('aria-label', 'Close');
     x.style.cssText = 'cursor:pointer;color:#667;font-size:18px;padding:4px 6px;line-height:1;';
-    x.onclick = () => unmount(ovl);
+    x.onclick = () => { unmount(ovl); if (onClose) onClose(); };
     bar.appendChild(h);
     bar.appendChild(x);
     wrap.appendChild(bar);
@@ -2624,7 +2664,9 @@ async function _runInternationalFlow(direct) {
   // payment — only orderStatus() returning 'captured' means the server
   // verified and credited it, so approval routes into the same polling
   // step used for the pending/cancelled cases (showConfirmingPayment).
-  async function showTopUpStep(ctx, shortfallPaise) {
+  async function showTopUpStep(ctx, shortfallPaise, returnTo) {
+    returnTo = returnTo || ((c) => showConfirmStep(c));
+    const standalone = !shortfallPaise;
     const { ovl, wrap } = makeOvl();
     addHeader(wrap, ovl, 'Add balance');
 
@@ -2636,8 +2678,10 @@ async function _runInternationalFlow(direct) {
     const billing = await import('./ocp-billing.js');
     const TIERS = billing.TOPUP_TIERS_USD;
     const need = Math.max(0, shortfallPaise || 0);
-    let selected = TIERS.find(t => t.paise >= need) || TIERS[TIERS.length - 1];
-    const coversShortfall = selected.paise >= need;
+    let selected = standalone
+      ? (TIERS.find(t => t.cents === 1000) || TIERS[Math.min(1, TIERS.length - 1)])
+      : (TIERS.find(t => t.paise >= need) || TIERS[TIERS.length - 1]);
+    const coversShortfall = standalone || selected.paise >= need;
 
     const TIER_BTN_OFF = 'padding:14px 6px;border-radius:12px;font-weight:700;' +
       'font-family:"Syne",sans-serif;cursor:pointer;border:1px solid rgba(255,255,255,.1);' +
@@ -2776,8 +2820,8 @@ async function _runInternationalFlow(direct) {
             name: 'OpenCall',
             description: 'Balance top-up',
             theme: { color: '#3ddc84' },
-            handler: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise); },
-            modal: { ondismiss: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise); } }
+            handler: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise, returnTo); },
+            modal: { ondismiss: () => { unmount(ovl); showConfirmingPayment(ctx, order.order_id, shortfallPaise, returnTo); } }
           });
           rzp.open();
         } catch (e) {
@@ -2788,7 +2832,7 @@ async function _runInternationalFlow(direct) {
       };
     }
 
-    addBack(wrap, ovl, () => showConfirmStep(ctx));
+    addBack(wrap, ovl, () => returnTo(ctx));
     mount(ovl);
 
     let currentButtons = null;
@@ -2826,7 +2870,7 @@ async function _runInternationalFlow(direct) {
               // credit anything from this response.
             }
             unmount(ovl);
-            showConfirmingPayment(ctx, order.order_id, shortfallPaise);
+            showConfirmingPayment(ctx, order.order_id, shortfallPaise, returnTo);
           },
           onCancel: () => {
             paypalStatus.textContent = '';
@@ -2858,9 +2902,14 @@ async function _runInternationalFlow(direct) {
   // Provider-agnostic: polls the server rather than trusting either
   // provider's client-side success event — see the CRITICAL note on
   // showTopUpStep above.
-  async function showConfirmingPayment(ctx, orderId, shortfallPaise) {
+  async function showConfirmingPayment(ctx, orderId, shortfallPaise, returnTo) {
+    returnTo = returnTo || ((c) => showConfirmStep(c));
     const { ovl, wrap } = makeOvl();
-    addHeader(wrap, ovl, 'Confirming payment');
+    // Closing manually stops the poll — otherwise a background loop that
+    // resolves after the user has already navigated elsewhere would mount
+    // a fresh overlay on top of whatever they're looking at now.
+    let stopped = false;
+    addHeader(wrap, ovl, 'Confirming payment', () => { stopped = true; });
 
     const status = document.createElement('p');
     status.style.cssText = SUB;
@@ -2870,31 +2919,39 @@ async function _runInternationalFlow(direct) {
 
     const billing = await import('./ocp-billing.js');
 
-    for (let i = 0; i < 30; i++) {
-      let res;
+    for (let i = 0; i < 30 && !stopped; i++) {
       try {
-        res = await billing.orderStatus(ctx.identity, ctx.identity.ocp_address, orderId);
-      } catch (e) {
-        // Transient network error while polling — keep trying rather than
-        // failing the user out; the order itself is unaffected.
-        await new Promise(r => setTimeout(r, 2000));
-        continue;
-      }
+        // res can be null on an empty/malformed 200 (see req() in
+        // ocp-billing.js) — accessing .state on it used to throw here,
+        // outside any catch, which killed this loop silently and left the
+        // overlay stuck on "Confirming your payment" forever even though
+        // the payment had already been captured and credited server-side.
+        const res = await billing.orderStatus(ctx.identity, ctx.identity.ocp_address, orderId);
+        if (stopped) return;
 
-      if (res.state === 'captured') {
-        unmount(ovl);
-        toast('Payment received — balance updated: ' + did.formatPaise(res.balance_paise));
-        showConfirmStep({ ...ctx, balancePaise: res.balance_paise });
-        return;
+        if (res && res.state === 'captured') {
+          unmount(ovl);
+          toast('Payment received — balance updated: ' + did.formatPaise(res.balance_paise));
+          returnTo({ ...ctx, balancePaise: res.balance_paise });
+          return;
+        }
+        if (res && res.state === 'failed') {
+          status.remove();
+          addRetryClose(wrap, ovl, 'Payment failed — you have not been charged.',
+            () => showTopUpStep(ctx, shortfallPaise, returnTo));
+          return;
+        }
+      } catch (e) {
+        // Transient network error, or any throw while handling a poll
+        // result — keep trying rather than failing the user out; the
+        // bounded loop below guarantees a way out even if every attempt
+        // fails this way.
       }
-      if (res.state === 'failed') {
-        status.remove();
-        addRetryClose(wrap, ovl, 'Payment failed — you have not been charged.',
-          () => showTopUpStep(ctx, shortfallPaise));
-        return;
-      }
+      if (stopped) return;
       await new Promise(r => setTimeout(r, 2000));
     }
+
+    if (stopped) return;
 
     // Still pending after ~60s — not a failure. The webhook may still land
     // and the balance will update on its own once it does.
@@ -2907,7 +2964,7 @@ async function _runInternationalFlow(direct) {
     const okBtn = document.createElement('button');
     okBtn.textContent = 'OK';
     okBtn.style.cssText = BTN_PRI;
-    okBtn.onclick = () => { unmount(ovl); showConfirmStep(ctx); };
+    okBtn.onclick = () => { unmount(ovl); returnTo(ctx); };
     wrap.appendChild(okBtn);
   }
 
@@ -3171,7 +3228,22 @@ async function _runInternationalFlow(direct) {
   }
 
   // ── Entry ────────────────────────────────────────────────
-  if (direct && direct.line && direct.line.did) {
+  if (direct && direct.topupOnly) {
+    (async () => {
+      const identity = myIdentity || await getOrCreateIdentity();
+      if (!identity) { toast('Could not load your identity'); return; }
+      let balancePaise = 0;
+      try {
+        const line = await did.getLine(identity, identity.ocp_address);
+        balancePaise = line ? line.balance_paise : 0;
+      } catch (e) {
+        // No line yet (404) or offline — top up still works, starts at ₹0.
+      }
+      showTopUpStep({ identity, balancePaise }, 0, () => {
+        _refreshIntlCard(true);
+      });
+    })();
+  } else if (direct && direct.line && direct.line.did) {
     showYourNumberStep({
       number: direct.line.did,
       renewsOn: direct.line.did_renews_on,
@@ -7140,6 +7212,10 @@ async function doAnswer() {
     _sipSession = session;
     _incomingSipSession = null;
 
+    // IDT-DIALOUT: E.164 form of the caller, for recent-calls — see _recordPstnCall.
+    const _callerE164 = (session._ocpCallerNumber && session._ocpCallerNumber !== 'Unknown')
+      ? ('+' + session._ocpCallerNumber) : null;
+
     // Same remote-audio wiring as outbound (placeSipCall / attachPersistentSessionHandlers).
     session.on('peerconnection', ({ peerconnection }) => {
       peerconnection.addEventListener('track', ev => {
@@ -7197,6 +7273,7 @@ async function doAnswer() {
       _incomingCallType = null;
       const _ra = document.getElementById('remote-audio');
       if (_ra) _ra.srcObject = null;
+      _recordPstnCall(_callerE164, 'incoming');
       endCall();
       setConnectionStatus('online');
     });
@@ -7206,6 +7283,7 @@ async function doAnswer() {
       _incomingCallType = null;
       const _ra = document.getElementById('remote-audio');
       if (_ra) _ra.srcObject = null;
+      _recordPstnCall(_callerE164, 'incoming');
       toast('Call failed (' + (ev.cause || 'unknown') + ')');
       endCall();
       setConnectionStatus('online');
@@ -7364,6 +7442,7 @@ function placeSipCall(e164) {
   // registration and kill inbound routing for the rest of the session.
   function attachPersistentSessionHandlers(session) {
     _sipSession = session;
+    let _wasConnected = false; // gates recent-calls recording — see _recordPstnCall
 
     session.on('peerconnection', ({ peerconnection }) => {
       peerconnection.addEventListener('track', ev => {
@@ -7428,6 +7507,7 @@ function placeSipCall(e164) {
       document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
       console.log('[DIAG] startTimer called via IDT-sip-confirmed');
       startTimer();
+      _wasConnected = true;
     });
 
     session.on('ended', ev => {
@@ -7435,6 +7515,7 @@ function placeSipCall(e164) {
       _sipSession = null;
       const _ra = document.getElementById('remote-audio');
       if (_ra) _ra.srcObject = null;
+      if (_wasConnected) _recordPstnCall(e164, 'outgoing');
       endCall();
       setConnectionStatus('online');
     });
@@ -7444,6 +7525,7 @@ function placeSipCall(e164) {
       _sipSession = null;
       const _ra = document.getElementById('remote-audio');
       if (_ra) _ra.srcObject = null;
+      if (_wasConnected) _recordPstnCall(e164, 'outgoing');
       toast('Call failed (' + (ev.cause || 'unknown') + ')');
       endCall();
       setConnectionStatus('online');
@@ -7516,6 +7598,7 @@ function placeSipCall(e164) {
       pcConfig: RTC_CFG
     });
     _sipSession = session;
+    let _wasConnected = false; // gates recent-calls recording — see _recordPstnCall
 
     // Wire remote audio as soon as the RTCPeerConnection is created.
     // Use addEventListener (not ontrack=) so JsSIP's internal handler doesn't overwrite ours.
@@ -7582,6 +7665,7 @@ function placeSipCall(e164) {
       document.getElementById('call-route-info').textContent    = 'via IDT PSTN';
       console.log('[DIAG] startTimer called via IDT-sip-confirmed');
       startTimer();
+      _wasConnected = true;
     });
 
     session.on('ended', ev => {
@@ -7590,6 +7674,7 @@ function placeSipCall(e164) {
       ua.stop();
       const _ra = document.getElementById('remote-audio');
       if (_ra) _ra.srcObject = null;
+      if (_wasConnected) _recordPstnCall(e164, 'outgoing');
       endCall();
       setConnectionStatus('online');
     });
@@ -7600,6 +7685,7 @@ function placeSipCall(e164) {
       ua.stop();
       const _ra = document.getElementById('remote-audio');
       if (_ra) _ra.srcObject = null;
+      if (_wasConnected) _recordPstnCall(e164, 'outgoing');
       toast('Call failed (' + (ev.cause || 'unknown') + ')');
       endCall();
       setConnectionStatus('online');
@@ -8468,17 +8554,29 @@ function loadContacts() {
 function saveContacts() {
   localStorage.setItem('ocp_contacts', JSON.stringify(contacts));
 }
-function saveContact({ ocp, name, number }) {
+function saveContact({ ocp, name, number, direction, durationSec }) {
   if (!ocp && !number) return;
   const idx = ocp
     ? contacts.findIndex(c => c.ocp === ocp)
     : contacts.findIndex(c => !c.ocp && c.number === number);
   const entry = { ocp: ocp || null, name: name || number || ocp, number: number || null, lastCall: Date.now() };
+  if (direction) entry.direction = direction;
+  if (durationSec != null) entry.durationSec = durationSec;
   if (idx >= 0) contacts[idx] = Object.assign({}, contacts[idx], entry);
   else contacts.push(entry);
   saveContacts();
   console.log('[CONTACTS] saved peer', entry.name || entry.ocp);
   renderContacts();
+}
+
+// IDT-DIALOUT: records a PSTN call into the same store OCP-to-OCP calls use
+// (saveContact/ocp_contacts), so it appears in the same recent-calls list
+// with the same row styling. Only called once a call actually connected —
+// matching the existing OCP-to-OCP behavior of recording on connect, not on
+// every dial attempt. number is E.164 (leading +) as dialled/received.
+function _recordPstnCall(number, direction) {
+  if (!number) return;
+  saveContact({ ocp: null, name: number, number, direction, durationSec: timerSecs });
 }
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
