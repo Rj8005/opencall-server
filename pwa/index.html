@@ -977,7 +977,7 @@ if (APP_EMBED) {
               style="display:none;align-items:center;gap:4px;cursor:pointer;padding:3px 9px;
                      border-radius:20px;background:rgba(61,220,132,.1);border:1px solid rgba(61,220,132,.28);
                      font-family:'DM Mono',monospace;font-size:11px;color:#3ddc84;line-height:1;white-space:nowrap;">
-          <span aria-hidden="true">🪙</span><span id="header-balance-amt" style="font-family:'Syne',sans-serif;font-weight:700;">₹0</span>
+          <span aria-hidden="true">🪙</span><span id="header-balance-amt" style="font-family:'Syne',sans-serif;font-weight:700;">$0.00</span>
         </span>
         <span id="header-user-info" style="font-size:12px;color:var(--text-secondary);font-family:'DM Mono',monospace;letter-spacing:0.3px"></span>
         <a id="link-change" href="#" style="font-size:10px;color:var(--blue);opacity:0.7;text-decoration:none">change</a>
@@ -1046,7 +1046,7 @@ if (APP_EMBED) {
           <div id="intl-number-title" style="font-family:'Syne',sans-serif;font-size:14px;
                font-weight:700;color:var(--text-primary);">Get a number</div>
           <div id="intl-number-subtitle" style="font-family:'DM Mono',monospace;font-size:11px;
-               color:var(--text-secondary);margin-top:3px;">Your own international number — from ₹199/mo</div>
+               color:var(--text-secondary);margin-top:3px;">Your own international number</div>
           <div id="intl-number-meta" style="display:none;font-family:'DM Mono',monospace;font-size:11px;
                color:var(--text-secondary);margin-top:2px;"></div>
         </div>
@@ -1933,6 +1933,18 @@ const SHOW_MODE_CHOOSER = false;
 // stay live, so flipping this back to true restores a working button.
 const ENABLE_RAZORPAY = false;
 
+// TODO(rahul): DID tier A/B/C monthly prices, in USD. These are business-set
+// USD tier prices, NOT a balance_paise/8000 FX conversion of the old
+// ₹199/₹299/₹499 figures — do not derive them from that rate. Every display
+// of a per-tier monthly price (country list, group/number steps) reads from
+// this constant via _didTierUsd(). All three are 0 placeholders right now —
+// every tier price on screen reads "$0.00" until the real USD prices are
+// filled in here.
+const DID_TIER_MONTHLY_USD = { A: 0, B: 0, C: 0 };
+function _didTierUsd(tier) {
+  return '$' + (DID_TIER_MONTHLY_USD[tier] || 0).toFixed(2);
+}
+
 function _isoToFlagEmoji(iso2) {
   const cc = String(iso2 || '').toUpperCase();
   if (cc.length !== 2 || !/^[A-Z]{2}$/.test(cc)) return '';
@@ -1978,25 +1990,28 @@ function _resetIntlCard() {
   const sub   = document.getElementById('intl-number-subtitle');
   const meta  = document.getElementById('intl-number-meta');
   if (title) { title.textContent = 'Get a number'; title.style.fontFamily = "'Syne',sans-serif"; }
-  if (sub)   sub.textContent = 'Your own international number — from ₹199/mo';
+  if (sub)   sub.textContent = 'Your own international number — from ' + _didTierUsd('A') + '/mo';
   if (meta)  { meta.style.display = 'none'; meta.textContent = ''; }
 }
 
-function _updateLowBalanceBanner(did, balancePaise) {
+function _updateLowBalanceBanner(balancePaise) {
   const el = document.getElementById('intl-low-balance-banner');
   if (!el) return;
   if (balancePaise != null && balancePaise < 10000) {
     el.style.display = '';
-    el.textContent = 'Low balance — ' + did.formatPaise(balancePaise) + ' left.';
+    el.textContent = 'Low balance — ' + fmtUsd(balancePaise) + ' left.';
   } else {
     el.style.display = 'none';
   }
 }
 
-// Compact rupee display for the header chip — "₹800", not "₹800.00".
-function _formatPaiseCompact(paise) {
-  const rupees = Math.round((Number(paise) || 0) / 100);
-  return '₹' + rupees.toLocaleString('en-IN');
+// The ONE place balance_paise becomes user-facing currency text. The UI is
+// USD-only — no rupee symbol, no INR, anywhere the user can see.
+// balance_paise itself stays the internal/server unit; this is strictly a
+// display conversion, never done inline anywhere else.
+function fmtUsd(paise) {
+  const usd = (Number(paise) || 0) / 8000;
+  return '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Balance chip in the dialer header — the only top-up entry point that
@@ -2010,7 +2025,7 @@ function _setHeaderBalanceChip(balancePaise) {
   const amt  = document.getElementById('header-balance-amt');
   if (!chip || !amt) return;
   if (APP_EMBED || balancePaise == null) { chip.style.display = 'none'; return; }
-  amt.textContent = _formatPaiseCompact(balancePaise);
+  amt.textContent = fmtUsd(balancePaise);
   chip.style.display = 'inline-flex';
 }
 
@@ -2028,12 +2043,12 @@ async function _refreshIntlCard(force) {
       _setIntlCardOwned({
         numberFormatted: did.formatNumber(line.did),
         city: null,
-        balanceFormatted: did.formatPaise(line.balance_paise)
+        balanceFormatted: fmtUsd(line.balance_paise)
       });
     } else {
       _resetIntlCard();
     }
-    _updateLowBalanceBanner(did, line ? line.balance_paise : null);
+    _updateLowBalanceBanner(line ? line.balance_paise : null);
     _setHeaderBalanceChip(line ? line.balance_paise : null);
   } catch (e) {
     // Not registered yet (404) or offline — leave the "Get a number" default.
@@ -2225,7 +2240,7 @@ async function _runInternationalFlow(direct) {
       if (line && line.did) {
         _setIntlCardOwned({
           numberFormatted: did.formatNumber(line.did), city: null,
-          balanceFormatted: did.formatPaise(line.balance_paise)
+          balanceFormatted: fmtUsd(line.balance_paise)
         });
         showYourNumberStep({
           number: line.did, renewsOn: line.did_renews_on, balancePaise: line.balance_paise
@@ -2247,7 +2262,7 @@ async function _runInternationalFlow(direct) {
 
     const bal = document.createElement('p');
     bal.style.cssText = SUB;
-    bal.textContent = 'Balance: ' + did.formatPaise(ctx.balancePaise || 0);
+    bal.textContent = 'Balance: ' + fmtUsd(ctx.balancePaise || 0);
     wrap.appendChild(bal);
 
     const status = document.createElement('p');
@@ -2303,7 +2318,7 @@ async function _runInternationalFlow(direct) {
           lastTier = c.tier;
           const sep = document.createElement('div');
           sep.style.cssText = TIER_SEP;
-          sep.textContent = '₹' + c.monthly + '/mo';
+          sep.textContent = _didTierUsd(c.tier) + '/mo';
           list.appendChild(sep);
         }
         const row = document.createElement('div');
@@ -2313,7 +2328,7 @@ async function _runInternationalFlow(direct) {
         name.textContent = (_isoToFlagEmoji(c.iso) + '  ' + c.name + (cc ? '  +' + cc : '')).trim();
         name.style.cssText = 'font-family:"Syne",sans-serif;font-size:14px;color:var(--text-primary,#e8f4ff);';
         const price = document.createElement('span');
-        price.textContent = '₹' + c.monthly + '/mo';
+        price.textContent = _didTierUsd(c.tier) + '/mo';
         price.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);' +
           'white-space:nowrap;';
         row.appendChild(name);
@@ -2601,9 +2616,9 @@ async function _runInternationalFlow(direct) {
     const renewDate = _formatDateShort(new Date(new Date().setMonth(new Date().getMonth() + 1)));
     const balanceAfter = (quote.balance_paise || 0) - (quote.total_paise || 0);
     const rows = [
-      ['Today', did.formatPaise(quote.total_paise)],
-      ['Then monthly from' + (renewDate ? ' ' + renewDate : ''), did.formatPaise(quote.monthly_paise)],
-      ['Your balance after', did.formatPaise(balanceAfter)],
+      ['Today', fmtUsd(quote.total_paise)],
+      ['Then monthly from' + (renewDate ? ' ' + renewDate : ''), fmtUsd(quote.monthly_paise)],
+      ['Your balance after', fmtUsd(balanceAfter)],
     ];
     const card = document.createElement('div');
     card.style.cssText = 'background:var(--bg-card,rgba(13,31,53,.75));border:1px solid var(--border,rgba(99,180,255,.1));' +
@@ -2632,7 +2647,7 @@ async function _runInternationalFlow(direct) {
       const shortfall = Math.max(0, (quote.total_paise || 0) - (quote.balance_paise || 0));
       const warn = document.createElement('p');
       warn.style.cssText = WARN;
-      warn.textContent = 'You need ' + did.formatPaise(shortfall) + ' more to buy this number.';
+      warn.textContent = 'You need ' + fmtUsd(shortfall) + ' more to buy this number.';
       wrap.appendChild(warn);
       const addBalance = document.createElement('button');
       addBalance.textContent = 'Add balance';
@@ -2672,7 +2687,7 @@ async function _runInternationalFlow(direct) {
 
     const bal = document.createElement('p');
     bal.style.cssText = SUB;
-    bal.textContent = 'Current balance: ' + did.formatPaise(ctx.balancePaise || 0);
+    bal.textContent = 'Current balance: ' + fmtUsd(ctx.balancePaise || 0);
     wrap.appendChild(bal);
 
     const billing = await import('./ocp-billing.js');
@@ -2700,7 +2715,7 @@ async function _runInternationalFlow(direct) {
       const bottom = document.createElement('div');
       bottom.style.cssText = 'font-size:11px;font-weight:400;font-family:"DM Mono",monospace;' +
         'margin-top:3px;opacity:.85;';
-      bottom.textContent = did.formatPaise(tier.paise);
+      bottom.textContent = fmtUsd(tier.paise);
       b.appendChild(top);
       b.appendChild(bottom);
       grid.appendChild(b);
@@ -2761,7 +2776,7 @@ async function _runInternationalFlow(direct) {
 
     const fine = document.createElement('p');
     fine.style.cssText = MUTED;
-    fine.textContent = 'Paid in USD. Your balance is credited in rupees at a fixed rate.';
+    fine.textContent = 'Paid in USD. Your balance updates as soon as payment is confirmed.';
     wrap.appendChild(fine);
 
     // ── Legacy Razorpay path — disabled by default (ENABLE_RAZORPAY) ──
@@ -2931,7 +2946,7 @@ async function _runInternationalFlow(direct) {
 
         if (res && res.state === 'captured') {
           unmount(ovl);
-          toast('Payment received — balance updated: ' + did.formatPaise(res.balance_paise));
+          toast('Payment received — balance updated: ' + fmtUsd(res.balance_paise));
           returnTo({ ...ctx, balancePaise: res.balance_paise });
           return;
         }
@@ -3006,8 +3021,8 @@ async function _runInternationalFlow(direct) {
     setState(0, 'active');
 
     const monthlyFormatted = ctx.group.monthly
-      ? '₹' + ctx.group.monthly
-      : did.formatPaise(ctx.group.monthly_paise);
+      ? _didTierUsd(ctx.country && ctx.country.tier)
+      : fmtUsd(ctx.group.monthly_paise);
 
     let order;
     try {
@@ -3034,7 +3049,7 @@ async function _runInternationalFlow(direct) {
         setState(2, 'done');
         _setIntlCardOwned({
           numberFormatted: did.formatNumber(line.did), city: ctx.group.name,
-          balanceFormatted: did.formatPaise(line.balance_paise)
+          balanceFormatted: fmtUsd(line.balance_paise)
         });
         unmount(ovl);
         showYourNumberStep({
@@ -3051,7 +3066,7 @@ async function _runInternationalFlow(direct) {
       const number = order.number || ctx.numberPreview;
       _setIntlCardOwned({
         numberFormatted: did.formatNumber(number), city: ctx.group.name,
-        balanceFormatted: did.formatPaise(order.balance_paise)
+        balanceFormatted: fmtUsd(order.balance_paise)
       });
       unmount(ovl);
       showYourNumberStep({
@@ -3128,7 +3143,7 @@ async function _runInternationalFlow(direct) {
     balL.textContent = 'Balance';
     balL.style.cssText = 'color:var(--text-secondary,#6b8fad);';
     const balV = document.createElement('span');
-    balV.textContent = did.formatPaise(info.balancePaise);
+    balV.textContent = fmtUsd(info.balancePaise);
     balV.style.cssText = 'color:var(--text-primary,#e8f4ff);';
     balRow.appendChild(balL); balRow.appendChild(balV);
     card.appendChild(balRow);
@@ -3237,7 +3252,7 @@ async function _runInternationalFlow(direct) {
         const line = await did.getLine(identity, identity.ocp_address);
         balancePaise = line ? line.balance_paise : 0;
       } catch (e) {
-        // No line yet (404) or offline — top up still works, starts at ₹0.
+        // No line yet (404) or offline — top up still works, starts at $0.
       }
       showTopUpStep({ identity, balancePaise }, 0, () => {
         _refreshIntlCard(true);
@@ -4392,11 +4407,15 @@ getOrCreateIdentity().then(async id => {
 // In incognito the service worker may be absent; everything degrades silently.
 
 // Derive the HTTP base URL from the live WebSocket or localStorage.
+// A bare-origin WebSocket URL (e.g. 'wss://signal.opencall.space', no path)
+// gets normalized by the browser's WebSocket implementation to include a
+// trailing slash once read back via ws.url — stripped here so callers can
+// safely do base + '/some-route' without producing a double slash.
 function _pushServerBase() {
   const wsUrl = (ws?.url)
     || localStorage.getItem('server_url')
     || 'wss://signal.opencall.space';
-  return wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+  return wsUrl.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://').replace(/\/+$/, '');
 }
 
 // Core subscribe-and-register flow.
@@ -4548,6 +4567,15 @@ let _sipUA = null;               // persistent registered UA (inbound + outbound
 let _sipRegistered = false;      // true while _sipUA has a live REGISTER binding
 let _incomingSipSession = null;  // inbound RTCSession awaiting answer/decline
 let _incomingCallType = null;    // 'ocp' | 'sip' | null — tells doAnswer/doDecline which path to run
+
+// endCall() re-entry guard. Several session 'ended'/'failed' handlers (and
+// doHangup's own direct call) can all fire for the same hangup — see the
+// endCall() call-site audit. A duplicate run would corrupt billed call
+// duration once server-side rating reads timerSecs/state from here, so this
+// makes the cleanup itself idempotent. It does NOT touch the [DIAG]
+// stopTimer console trace — that logging stays so duplicate calls remain
+// visible for debugging.
+let _callEnding = false;
 
 // ── AI Notes (browser SpeechRecognition live transcript) ──
 // TODO: replace SpeechRecognition with Whisper/Deepgram for better accuracy
@@ -5177,6 +5205,7 @@ async function onMessage(msg) {
       break;
 
     case 'incoming_call':
+      _callEnding = false;
       pendingCall = msg;
       callWith    = msg.from;
       callMode    = 'direct';
@@ -7110,6 +7139,7 @@ function doDelete() {
   }
 }
 async function doCall() {
+  _callEnding = false;
   const to = document.getElementById('inp-dial').value.trim();
   if (!to || to === '+') {
     showDialHint('Enter a number to call', true);
@@ -7186,6 +7216,7 @@ async function doCall() {
 // ── OCP-to-OCP call ────────────────────────────────────────
 async function callWithOcp(ocp, name, withVideo = false) {
   if (!ws || ws.readyState !== 1) { toast('Not connected'); return; }
+  _callEnding = false;
   callWith = ocp;
   isVideoCall = withVideo;
   showCallingScreen(name || ocp.slice(4, 20));
@@ -7209,6 +7240,11 @@ async function doAnswer() {
       mediaConstraints: { audio: true, video: false },
       pcConfig: RTC_CFG
     });
+    // Marks this session answered so the pre-answer 'ended'/'failed' handlers
+    // registered in initSipUA()'s 'newRTCSession' (never removed — JsSIP
+    // listeners are additive) defer to this function's own handlers below,
+    // which do the correct cleanup and call _recordPstnCall.
+    session._ocpAnswered = true;
     _sipSession = session;
     _incomingSipSession = null;
 
@@ -7389,15 +7425,23 @@ function initSipUA() {
       if (u) callerNumber = String(u).replace(/^\+/, '');
     } catch (e) {}
     session._ocpCallerNumber = callerNumber; // stashed for doAnswer() to reuse
+    session._ocpAnswered = false; // set true once doAnswer() answers — see 'ended'/'failed' below
 
     _incomingSipSession = session;
     _incomingCallType = 'sip';
+    _callEnding = false;
 
     console.log('[IDT] inbound call from', callerNumber);
     showIncomingOverlay(callerNumber, callerNumber);
     startRingtone();
 
     session.on('failed', ev => {
+      // Answered calls are handled entirely by doAnswer()'s own 'failed'
+      // handler (adds _recordPstnCall + the correct cleanup) — this handler
+      // is registered before answer and is never removed, so without this
+      // guard it also fires (and mislabels) an already-answered call's
+      // teardown, and double-runs endCall().
+      if (session._ocpAnswered) return;
       console.error('[IDT] inbound call failed before answer — cause:', ev.cause);
       stopRingtone();
       hideIncomingOverlay();
@@ -7406,6 +7450,7 @@ function initSipUA() {
       endCall();
     });
     session.on('ended', ev => {
+      if (session._ocpAnswered) return;
       console.log('[IDT] inbound call ended before answer — cause:', ev.cause);
       stopRingtone();
       hideIncomingOverlay();
@@ -7797,6 +7842,9 @@ function _showBackupBanner() {
 }
 
 function endCall() {
+  if (_callEnding) return;
+  _callEnding = true;
+
   // AI Notes cleanup — stop recognition and offer transcript download
   _stopTranscription();
   _offerTranscriptDownload();
@@ -8428,6 +8476,7 @@ function showScreen(name) {
     const inp = document.getElementById('inp-dial');
     if (inp && !inp.value) { inp.value = '+'; syncDialDisplay(); }
     _refreshIntlCard();
+    _callEnding = false;
   }
 }
 
