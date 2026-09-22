@@ -3030,9 +3030,15 @@ async function _runInternationalFlow(direct) {
         country: ctx.country.iso, groupId: ctx.group.id, sku: ctx.sku
       });
     } catch (e) {
-      unmount(ovl);
-      toast(errMsg(e, 'Purchase failed — you have not been charged. Try again.'));
-      showConfirmStep(ctx);
+      const failMsg = errMsg(e, 'Purchase failed — you have not been charged. Try again.');
+      console.error('[DID] purchase failed:', e);
+      toast(failMsg);
+      // Never bounce back into showConfirmStep — that re-quotes and
+      // re-renders the exact screen the user just acted on, which reads as
+      // "the button did nothing" once the toast fades. Retry re-attempts
+      // this same purchase directly instead.
+      rowsBox.remove();
+      addRetryClose(wrap, ovl, failMsg, () => { unmount(ovl); showPurchasingStep(ctx); });
       return;
     }
 
