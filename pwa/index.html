@@ -1938,11 +1938,13 @@ const ENABLE_RAZORPAY = false;
 // ₹199/₹299/₹499 figures — do not derive them from that rate. Every display
 // of a per-tier monthly price (country list, group/number steps) reads from
 // this constant via _didTierUsd(). All three are 0 placeholders right now —
-// every tier price on screen reads "$0.00" until the real USD prices are
-// filled in here.
+// _didTierUsd() returns null for an unset tier and every caller hides the
+// price entirely rather than show a wrong "$0.00" — fill in the real USD
+// prices here to make them appear.
 const DID_TIER_MONTHLY_USD = { A: 0, B: 0, C: 0 };
 function _didTierUsd(tier) {
-  return '$' + (DID_TIER_MONTHLY_USD[tier] || 0).toFixed(2);
+  const v = DID_TIER_MONTHLY_USD[tier];
+  return v ? '$' + v.toFixed(2) : null;
 }
 
 function _isoToFlagEmoji(iso2) {
@@ -1973,6 +1975,32 @@ function _setAutorenewPref(on) {
 // clicking the card jump straight past the purchase flow when one exists.
 let _intlKnownLine = null;
 
+// ── Pending DID order ────────────────────────────────────────
+// /did/purchase can return 202 (carrier is async) — the balance is already
+// debited at that point. Without this, a page reload or a poll timeout lost
+// all trace of the in-flight order: the UI looked exactly like the purchase
+// never happened, and reopening "Get a number" would let the user pay again
+// for the same thing. Persisted so it survives reloads; cleared only once
+// the server actually shows a DID on the line.
+function _savePendingOrder(order, ctx) {
+  try {
+    localStorage.setItem('ocp_pending_order', JSON.stringify({
+      orderId: (order && (order.order_id || order.id)) || null,
+      ts: Date.now(),
+      cityName: (ctx && ctx.group && ctx.group.name) || null
+    }));
+  } catch (e) {}
+}
+function _loadPendingOrder() {
+  try {
+    const raw = localStorage.getItem('ocp_pending_order');
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function _clearPendingOrder() {
+  try { localStorage.removeItem('ocp_pending_order'); } catch (e) {}
+}
+
 function _setIntlCardOwned(info) {
   const title = document.getElementById('intl-number-title');
   const sub   = document.getElementById('intl-number-subtitle');
@@ -1990,8 +2018,33 @@ function _resetIntlCard() {
   const sub   = document.getElementById('intl-number-subtitle');
   const meta  = document.getElementById('intl-number-meta');
   if (title) { title.textContent = 'Get a number'; title.style.fontFamily = "'Syne',sans-serif"; }
-  if (sub)   sub.textContent = 'Your own international number — from ' + _didTierUsd('A') + '/mo';
+  const tierAPrice = _didTierUsd('A');
+  if (sub)   sub.textContent = 'Your own international number' + (tierAPrice ? ' — from ' + tierAPrice + '/mo' : '');
   if (meta)  { meta.style.display = 'none'; meta.textContent = ''; }
+}
+
+function _setIntlCardActivating(cityName) {
+  const title = document.getElementById('intl-number-title');
+  const sub   = document.getElementById('intl-number-subtitle');
+  const meta  = document.getElementById('intl-number-meta');
+  if (title) { title.textContent = 'Number activating…'; title.style.fontFamily = "'Syne',sans-serif"; }
+  if (sub)   sub.textContent = (cityName ? cityName + ' — ' : '') + "you've been charged — this can take a few minutes";
+  if (meta)  { meta.style.display = 'none'; meta.textContent = ''; }
+}
+
+// Polls every 30s (not the 3s the in-flow purchase wait uses) while a
+// pending order sits in localStorage — this only needs to notice eventual
+// success, not race a UI transition, so there's no reason to hammer
+// /account/session. _refreshIntlCard(true) re-does the exact same
+// did.getLine() check the card normally uses, so success/clear/render all
+// stay in one place instead of being duplicated here.
+let _pendingOrderTimer = null;
+function _startPendingOrderPoll() {
+  if (_pendingOrderTimer || APP_EMBED) return;
+  _pendingOrderTimer = setInterval(() => _refreshIntlCard(true), 30000);
+}
+function _stopPendingOrderPoll() {
+  if (_pendingOrderTimer) { clearInterval(_pendingOrderTimer); _pendingOrderTimer = null; }
 }
 
 function _updateLowBalanceBanner(balancePaise) {
@@ -2040,13 +2093,21 @@ async function _refreshIntlCard(force) {
     const line = await did.getLine(myIdentity, myIdentity.ocp_address);
     _intlKnownLine = line;
     if (line && line.did) {
+      _stopPendingOrderPoll();
+      _clearPendingOrder();
       _setIntlCardOwned({
         numberFormatted: did.formatNumber(line.did),
         city: null,
         balanceFormatted: fmtUsd(line.balance_paise)
       });
     } else {
-      _resetIntlCard();
+      const pending = _loadPendingOrder();
+      if (pending) {
+        _setIntlCardActivating(pending.cityName);
+        _startPendingOrderPoll();
+      } else {
+        _resetIntlCard();
+      }
     }
     _updateLowBalanceBanner(line ? line.balance_paise : null);
     _setHeaderBalanceChip(line ? line.balance_paise : null);
@@ -2059,6 +2120,12 @@ async function _refreshIntlCard(force) {
 function openInternationalFlow() {
   if (APP_EMBED) {
     toast('International numbers aren\'t available inside the app yet');
+    return;
+  }
+  // Block starting a second purchase while one is still being activated —
+  // the balance was already debited for it; buying again would double-charge.
+  if (_loadPendingOrder()) {
+    toast('Your number is still being set up — check back shortly.');
     return;
   }
   if (_intlKnownLine && _intlKnownLine.did) {
@@ -2314,11 +2381,15 @@ async function _runInternationalFlow(direct) {
       }
       let lastTier = undefined;
       matches.forEach(c => {
+        // _didTierUsd() returns null until the real USD tier prices are
+        // filled in (see DID_TIER_MONTHLY_USD) — hide the price rather than
+        // show a wrong "$0.00"; the real price still shows at the quote step.
+        const tierPrice = _didTierUsd(c.tier);
         if (c.tier !== lastTier) {
           lastTier = c.tier;
           const sep = document.createElement('div');
           sep.style.cssText = TIER_SEP;
-          sep.textContent = _didTierUsd(c.tier) + '/mo';
+          sep.textContent = tierPrice ? tierPrice + '/mo' : 'Tier ' + (c.tier || '?');
           list.appendChild(sep);
         }
         const row = document.createElement('div');
@@ -2327,12 +2398,14 @@ async function _runInternationalFlow(direct) {
         const name = document.createElement('span');
         name.textContent = (_isoToFlagEmoji(c.iso) + '  ' + c.name + (cc ? '  +' + cc : '')).trim();
         name.style.cssText = 'font-family:"Syne",sans-serif;font-size:14px;color:var(--text-primary,#e8f4ff);';
-        const price = document.createElement('span');
-        price.textContent = _didTierUsd(c.tier) + '/mo';
-        price.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);' +
-          'white-space:nowrap;';
         row.appendChild(name);
-        row.appendChild(price);
+        if (tierPrice) {
+          const price = document.createElement('span');
+          price.textContent = tierPrice + '/mo';
+          price.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);' +
+            'white-space:nowrap;';
+          row.appendChild(price);
+        }
         row.onclick = () => {
           unmount(ovl);
           if (c.has_regions) showRegionStep({ ...ctx, country: c });
@@ -3046,11 +3119,17 @@ async function _runInternationalFlow(direct) {
     setState(1, 'active');
 
     if (order.state === 'processing') {
+      // Balance is already debited at this point — the carrier just hasn't
+      // confirmed yet. Persisted before polling so a reload, or the poll
+      // below timing out, never loses track of a paid-for order.
+      _savePendingOrder(order, ctx);
+
       let line;
       try { line = await did.waitForNumber(ctx.identity, ctx.identity.ocp_address); }
       catch (e) { line = null; }
 
       if (line && line.did) {
+        _clearPendingOrder();
         setState(1, 'done');
         setState(2, 'done');
         _setIntlCardOwned({
@@ -3063,7 +3142,12 @@ async function _runInternationalFlow(direct) {
           city: ctx.group.name, monthlyFormatted
         });
       } else {
+        // Do NOT restart the flow (no showCountryStep / showConfirmStep) —
+        // the order is still pending, not gone. _startPendingOrderPoll()
+        // (wired through _refreshIntlCard) keeps checking every 30s from
+        // here on, including across a reload.
         unmount(ovl);
+        _startPendingOrderPoll();
         showStillProcessingStep();
       }
     } else {
@@ -3085,11 +3169,11 @@ async function _runInternationalFlow(direct) {
   // ── Step 4 (cont.): carrier still provisioning past our poll window ─
   function showStillProcessingStep() {
     const { ovl, wrap } = makeOvl();
-    addHeader(wrap, ovl, 'Setting up');
+    addHeader(wrap, ovl, 'Number being set up');
     const msg = document.createElement('p');
     msg.style.cssText = SUB;
-    msg.textContent = 'Your number is still being set up. You’ve been charged once and the number ' +
-      'will appear here shortly — reopen this screen in a few minutes.';
+    msg.textContent = 'Your payment went through. Your number is being activated — this can take ' +
+      'a few minutes. We’ll show it here when ready.';
     wrap.appendChild(msg);
     const close = document.createElement('button');
     close.textContent = 'Close';
@@ -4406,6 +4490,12 @@ getOrCreateIdentity().then(async id => {
   });
   checkMissedCallRoute();
   _initInstallHint();
+  // _refreshIntlCard()'s only other call site runs at showScreen('dialer')
+  // during initFlow(), synchronously before this promise resolves — without
+  // this, the intl card / low-balance banner / header balance chip (and now
+  // the pending-order banner) never populated on a fresh load until
+  // something else happened to call showScreen('dialer') again.
+  _refreshIntlCard();
 }).catch(e => console.error('[OCP] Identity init failed:', e));
 
 // ── Web Push subscription helpers ────────────────────────
