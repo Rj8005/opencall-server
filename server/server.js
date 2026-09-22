@@ -11,6 +11,7 @@
 const http    = require('http');
 const fs      = require('fs');
 const path    = require('path');
+const crypto  = require('crypto');
 const { WebSocketServer } = require('ws');
 const webPush = require('web-push');
 
@@ -98,6 +99,27 @@ function loadHandles() {
     }
     console.log('[HANDLES] loaded', handles.size, 'entries from disk');
   } catch(e) { console.error('[HANDLES] load failed:', e.message); }
+}
+
+// ── Push subscription persistence ──────────────────────────────
+// pushSubscriptions was in-memory only — every restart (pm2 or otherwise)
+// silently dropped every device's subscription. Persisted the same way
+// handles.json is: whole-Map snapshot, saved after every mutation.
+const PUSH_FILE = path.join(__dirname, 'push_subs.json');
+
+function savePushSubs() {
+  try {
+    fs.writeFileSync(PUSH_FILE, JSON.stringify([...pushSubscriptions.entries()]));
+  } catch(e) { console.error('[PUSH] save failed:', e.message); }
+}
+
+function loadPushSubs() {
+  try {
+    if (!fs.existsSync(PUSH_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(PUSH_FILE, 'utf8'));
+    for (const [ocp, subs] of (data || [])) pushSubscriptions.set(ocp, subs);
+    console.log('[PUSH] loaded', pushSubscriptions.size, 'ocp addresses from disk');
+  } catch(e) { console.error('[PUSH] load failed:', e.message); }
 }
 
 // WhatsApp Web.js stubs — set waReady=true and assign waClient after
@@ -203,24 +225,27 @@ function send(ws, obj) {
 
 // Send a Web Push (VAPID) notification to every device registered for the
 // given OCP address (or phone number, resolved via numberToOcp).
-// Stale 410/404 subscriptions are pruned automatically.
-async function sendPushNotification(ocpOrNumber, data) {
+// Stale 410/404 subscriptions are pruned automatically. Returns the number
+// of subscriptions that accepted the push (0 if none / not found).
+async function sendPushNotification(ocpOrNumber, data, opts = { TTL: 86400, urgency: 'high' }) {
   // Resolve phone number → ocp address if needed
   let ocp = ocpOrNumber;
   if (ocp && !ocp.startsWith('ocp:') && (ocp.startsWith('+') || /^\d/.test(ocp))) {
     ocp = numberToOcp.get(ocp) || null;
   }
-  if (!ocp) return;
+  if (!ocp) return 0;
 
   const subs = pushSubscriptions.get(ocp);
-  if (!subs || subs.length === 0) return;
+  if (!subs || subs.length === 0) return 0;
 
   const payload  = JSON.stringify(data);
   const toRemove = [];
+  let delivered  = 0;
 
   for (const sub of subs) {
     try {
-      await webPush.sendNotification(sub, payload, { TTL: 86400, urgency: 'high' });
+      await webPush.sendNotification(sub, payload, opts);
+      delivered++;
       log('✓', 'push delivered to', ocp.slice(0, 24) + '…');
     } catch(err) {
       if (err.statusCode === 410 || err.statusCode === 404) {
@@ -237,7 +262,10 @@ async function sendPushNotification(ocpOrNumber, data) {
     const remaining = subs.filter(s => !toRemove.includes(s));
     if (remaining.length) pushSubscriptions.set(ocp, remaining);
     else                  pushSubscriptions.delete(ocp);
+    savePushSubs();
   }
+
+  return delivered;
 }
 
 function log(icon, ...args) {
@@ -694,6 +722,48 @@ const server = http.createServer((req, res) => {
   if (req.url === '/vapid-public-key') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ publicKey: vapidPublic }));
+    return;
+  }
+
+  // ── WAKE ───────────────────────────────────────────────────
+  // GET /wake?ocp=ocp:<64 hex>&token=<WAKE_TOKEN> — external trigger (e.g.
+  // a carrier webhook) to push-wake a device's persistent SIP UA ahead of
+  // an inbound PSTN call, so it's registered by the time the INVITE lands.
+  if (req.url.startsWith('/wake')) {
+    const u     = new URL(req.url, 'http://x');
+    const token = u.searchParams.get('token') || '';
+    const ocp   = u.searchParams.get('ocp')   || '';
+
+    const expected   = process.env.WAKE_TOKEN || '';
+    const tokenBuf    = Buffer.from(token);
+    const expectedBuf = Buffer.from(expected);
+    const tokenOk = !!expected &&
+      tokenBuf.length === expectedBuf.length &&
+      crypto.timingSafeEqual(tokenBuf, expectedBuf);
+
+    if (!tokenOk) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: 'forbidden' }));
+      return;
+    }
+
+    if (!/^ocp:[0-9a-f]{64}$/.test(ocp)) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: 'bad_ocp' }));
+      return;
+    }
+
+    sendPushNotification(ocp, { type: 'incoming_call', ts: Date.now() }, { TTL: 30, urgency: 'high' })
+      .then(delivered => {
+        log(delivered > 0 ? '✓' : '!', 'wake', ocp.slice(0, 24) + '…', '| delivered:', delivered);
+        res.writeHead(delivered > 0 ? 200 : 404);
+        res.end(JSON.stringify({ delivered }));
+      })
+      .catch(e => {
+        console.error('[WAKE] error:', e.message);
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: 'internal' }));
+      });
     return;
   }
 
@@ -1241,6 +1311,7 @@ async function handle(ws, msg) {
       if (!existing.some(s => s.endpoint === sub.endpoint)) {
         existing.push(sub);
         pushSubscriptions.set(ocp, existing);
+        savePushSubs();
       }
 
       // Keep the number→ocp lookup fresh (survives reconnects)
@@ -1265,9 +1336,11 @@ async function handle(ws, msg) {
         const filtered = subs.filter(s => s.endpoint !== msg.endpoint);
         if (filtered.length) pushSubscriptions.set(ocp, filtered);
         else                 pushSubscriptions.delete(ocp);
+        savePushSubs();
         log('✓', 'push sub removed (by endpoint) for', ocp.slice(0, 24) + '…');
       } else {
         pushSubscriptions.delete(ocp);
+        savePushSubs();
         log('✓', 'all push subs removed for', ocp.slice(0, 24) + '…');
       }
       break;
@@ -2138,6 +2211,7 @@ setInterval(() => {
 //  Start
 // ─────────────────────────────────────────────────────────────
 loadHandles();
+loadPushSubs();
 server.listen(PORT, () => {
   console.log(`
   ╔══════════════════════════════════════════════╗

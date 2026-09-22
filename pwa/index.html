@@ -8410,6 +8410,19 @@ if ('serviceWorker' in navigator) {
 
   navigator.serviceWorker.addEventListener('message', async (event) => {
     const { type, action, callData } = event.data;
+    if (type === 'wake_sip') {
+      // Pushed here by sw.js ahead of an inbound PSTN call — re-register
+      // now rather than waiting for whatever triggers this normally, so the
+      // persistent UA has a binding by the time the INVITE lands. Mirrors
+      // the visibilitychange handler's re-register-vs-create split: an
+      // existing UA that dropped its binding just needs .register() again;
+      // initSipUA() itself no-ops if _sipUA already exists.
+      if (!_sipRegistered) {
+        if (_sipUA) _sipUA.register();
+        else initSipUA();
+      }
+      return;
+    }
     if (type !== 'notification_action') return;
     if (action === 'answer' && callData?.callId) {
       pendingCall = { callId: callData.callId, from: callData.from };
@@ -8683,6 +8696,17 @@ function _contactAct(i, action) {
 }
 
 function initFlow() {
+  // Push-wake: opened by a notification tap (or the tab was merely
+  // backgrounded and the SW postMessage'd us — see the 'wake_sip' listener
+  // above). Register the persistent SIP UA before anything non-essential
+  // (DHT, contacts below) so an inbound call isn't missed while those load.
+  if (new URLSearchParams(window.location.search).get('wake') === '1') {
+    initSipUA();
+    const url = new URL(location.href);
+    url.searchParams.delete('wake');
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }
+
   // Missed-call landing page — don't interfere with that flow
   if (new URLSearchParams(window.location.search).get('missed') === 'true') return;
 

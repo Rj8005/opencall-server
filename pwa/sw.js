@@ -1,4 +1,4 @@
-const CACHE = 'ocp-v18';
+const CACHE = 'ocp-v19';
 const ASSETS = ['/lib/jssip.min.js', '/manifest.json', '/ocp-identity.js', '/ocp-did.js', '/ocp-vault.js', '/ocp-billing.js'];
 
 self.addEventListener('install', e => {
@@ -13,6 +13,47 @@ self.addEventListener('activate', e => {
     )
   );
   self.clients.claim();
+});
+
+// IDT-DIALOUT: wake the page's persistent SIP UA ahead of an inbound PSTN
+// call. Every open window/tab gets 'wake_sip' regardless of visibility (a
+// backgrounded tab can still run JS and re-register); a notification is
+// only shown when nothing is visible, since a visible tab already reacts
+// to 'wake_sip' itself.
+self.addEventListener('push', event => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) {}
+
+  // Stale push arriving after the call already resolved — do nothing.
+  if (data.ts && (Date.now() - data.ts) > 30000) return;
+
+  event.waitUntil((async () => {
+    const wins = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    wins.forEach(c => c.postMessage({ type: 'wake_sip' }));
+
+    const visible = wins.some(c => c.visibilityState === 'visible');
+    if (!visible) {
+      await self.registration.showNotification('Incoming call', {
+        body: 'Tap to answer', tag: 'ocp-call', renotify: true,
+        requireInteraction: true, vibrate: [300, 200, 300, 200, 300],
+        data: { url: '/?wake=1' }
+      });
+    }
+  })());
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const wins = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const existing = wins[0];
+    if (existing) {
+      existing.postMessage({ type: 'wake_sip' });
+      if ('focus' in existing) await existing.focus();
+    } else {
+      await clients.openWindow(event.notification.data?.url || '/');
+    }
+  })());
 });
 
 self.addEventListener('fetch', event => {
