@@ -1060,6 +1060,12 @@ if (APP_EMBED) {
          border-radius:var(--radius-md);font-family:'DM Mono',monospace;font-size:11px;
          color:var(--amber);line-height:1.5;"></div>
 
+    <!-- Service at capacity (HTTP 503) — not dismissible; cleared by the next successful API call -->
+    <div id="service-capacity-banner" style="display:none;margin-top:8px;padding:10px 14px;
+         background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.25);
+         border-radius:var(--radius-md);font-family:'DM Mono',monospace;font-size:11px;
+         color:var(--amber);line-height:1.5;"></div>
+
     <div class="dial-display">
       <div class="dial-number" id="dial-number-display">+</div>
       <div class="dial-hint" id="dial-hint">Enter number to call</div>
@@ -2057,6 +2063,21 @@ function _updateLowBalanceBanner(balancePaise) {
     el.style.display = 'none';
   }
 }
+
+// HTTP 503 from the did/billing API wrappers (req() in ocp-did.js and
+// ocp-billing.js call this). Independent of the low-balance banner: separate
+// element, separate state, neither function touches the other's element.
+function _setServiceCapacityBanner(atCapacity) {
+  const el = document.getElementById('service-capacity-banner');
+  if (!el) return;
+  if (atCapacity) {
+    el.style.display = '';
+    el.textContent = 'Service temporarily at capacity — please try again shortly.';
+  } else {
+    el.style.display = 'none';
+  }
+}
+window._setServiceCapacityBanner = _setServiceCapacityBanner;
 
 // The ONE place balance_paise becomes user-facing currency text. The UI is
 // USD-only — no rupee symbol, no INR, anywhere the user can see.

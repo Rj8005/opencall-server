@@ -16,6 +16,10 @@ async function req(path, opts = {}) {
   });
   let body = null;
   try { body = await res.json(); } catch { /* empty or non-JSON */ }
+  if (typeof window !== 'undefined' && window._setServiceCapacityBanner) {
+    if (res.status === 503) window._setServiceCapacityBanner(true);
+    else if (res.ok) window._setServiceCapacityBanner(false);
+  }
   if (!res.ok) {
     const err = new Error((body && body.error) || `HTTP ${res.status}`);
     err.status = res.status;
