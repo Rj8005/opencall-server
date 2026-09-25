@@ -25,7 +25,9 @@ function bareKey(pub) {
 async function req(path, opts = {}) {
   const res = await fetch(API + path, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+    headers: (typeof FormData !== 'undefined' && opts.body instanceof FormData)
+      ? { ...(opts.headers || {}) } // browser sets the multipart boundary
+      : { 'Content-Type': 'application/json', ...(opts.headers || {}) }
   });
   let body = null;
   try { body = await res.json(); } catch { /* empty or non-JSON */ }
@@ -163,7 +165,7 @@ export async function quote(identity, pubkey, { country, groupId, sku }) {
  * Resolves with state 'complete' and the number, or state 'processing' when
  * the carrier is slow — in that case poll getLine() until did is set.
  */
-export async function purchase(identity, pubkey, { country, groupId, sku }) {
+export async function purchase(identity, pubkey, { country, groupId, sku, kyc }) {
   if (localStorage.getItem('ocp_backed_up') !== 'true') {
     if (typeof window !== 'undefined' && typeof window.backupIdentity === 'function') {
       window.backupIdentity();
@@ -189,8 +191,21 @@ export async function purchase(identity, pubkey, { country, groupId, sku }) {
   const auth = await authFields(identity, pubkey);
   return req('/did/purchase', {
     method: 'POST',
-    body: JSON.stringify({ ...auth, country, group_id: groupId, sku: sku || '' })
+    // kyc is only sent for countries that require it (see ocp-kyc.js);
+    // kyc_profile_id is the approved /did/kyc/upload submission_id. The
+    // server answers 428 if it is missing/unapproved.
+    body: JSON.stringify({ ...auth, country, group_id: groupId, sku: sku || '', ...(kyc ? { kyc_profile_id: kyc.kyc_profile_id, kyc } : {}) })
   });
+}
+
+/**
+ * Uploads KYC documents + fields (multipart). Resolves {submission_id, status};
+ * rejects with err.status 400/401/413/500 on failure.
+ */
+export async function uploadKyc(identity, pubkey, form) {
+  const a = await authFields(identity, pubkey);
+  const qs = new URLSearchParams({ pubkey: a.pubkey, nonce: a.nonce, signature: a.signature });
+  return req('/did/kyc/upload?' + qs.toString(), { method: 'POST', body: form });
 }
 
 /** Gives the number back and stops the monthly charge. */

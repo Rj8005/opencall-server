@@ -1953,6 +1953,12 @@ function _didTierUsd(tier) {
   return v ? '$' + v.toFixed(2) : null;
 }
 
+// Countries where selling a resident DID without a local licence is
+// prohibited: UAE, Qatar, Kuwait, Pakistan, Egypt, Morocco, Jordan, Israel,
+// Oman. Applies ONLY to buying a number (showCountryStep) — calling and
+// dialing to these countries is unaffected.
+const DID_PURCHASE_BLOCKED_ISO = new Set(['AE', 'QA', 'KW', 'PK', 'EG', 'MA', 'JO', 'IL', 'OM']);
+
 function _isoToFlagEmoji(iso2) {
   const cc = String(iso2 || '').toUpperCase();
   if (cc.length !== 2 || !/^[A-Z]{2}$/.test(cc)) return '';
@@ -2243,13 +2249,13 @@ async function _runInternationalFlow(direct) {
     back.onclick = () => { unmount(ovl); onBack(); };
     wrap.appendChild(back);
   }
-  function addRetryClose(wrap, ovl, message, onRetry) {
+  function addRetryClose(wrap, ovl, message, onRetry, retryLabel) {
     const err = document.createElement('p');
     err.style.cssText = ERR;
     err.textContent = message;
     wrap.appendChild(err);
     const retry = document.createElement('button');
-    retry.textContent = 'Try again';
+    retry.textContent = retryLabel || 'Try again';
     retry.style.cssText = BTN_PRI;
     retry.onclick = () => { unmount(ovl); onRetry(); };
     wrap.appendChild(retry);
@@ -2427,6 +2433,18 @@ async function _runInternationalFlow(direct) {
             'white-space:nowrap;';
           row.appendChild(price);
         }
+        if (DID_PURCHASE_BLOCKED_ISO.has(String(c.iso || '').toUpperCase())) {
+          // Stays listed (coverage/search unchanged) but can't be bought.
+          row.style.opacity = '.5';
+          row.style.cursor = 'default';
+          const note = document.createElement('span');
+          note.textContent = 'Not available in this country';
+          note.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-muted,#667);' +
+            'white-space:nowrap;';
+          row.appendChild(note);
+          list.appendChild(row);
+          return;
+        }
         row.onclick = () => {
           unmount(ovl);
           if (c.has_regions) showRegionStep({ ...ctx, country: c });
@@ -2589,7 +2607,7 @@ async function _runInternationalFlow(direct) {
       const cont = document.createElement('button');
       cont.textContent = 'Continue →';
       cont.style.cssText = BTN_PRI;
-      cont.onclick = () => { unmount(ovl); showConfirmStep({ ...ctx, sku: '', numberPreview: null }); };
+      cont.onclick = () => { unmount(ovl); kycGate({ ...ctx, sku: '', numberPreview: null }); };
       wrap.appendChild(cont);
       addBack(wrap, ovl, () => showCityStep(ctx));
       mount(ovl);
@@ -2627,13 +2645,366 @@ async function _runInternationalFlow(direct) {
         label.textContent = did.formatNumber(n.number);
         label.style.cssText = 'font-family:"DM Mono",monospace;font-size:15px;color:var(--text-primary,#e8f4ff);';
         row.appendChild(label);
-        row.onclick = () => { unmount(ovl); showConfirmStep({ ...ctx, sku: n.sku, numberPreview: n.number }); };
+        row.onclick = () => { unmount(ovl); kycGate({ ...ctx, sku: n.sku, numberPreview: n.number }); };
         list.appendChild(row);
       });
     }
     wrap.appendChild(list);
 
     addBack(wrap, ovl, () => showCityStep(ctx));
+  }
+
+  // ── Step 3 (cont.): identity / address verification (KYC) ─
+  // Sits between picking a number and the Confirm step. Frontend-only: it
+  // collects and validates, then hands a submission object to did.purchase
+  // via ctx.kyc. Storage/review/approval and the real activation gate are
+  // backend work (see ocp-kyc.js). Blocked countries never get here — the
+  // picker stops them — but refuse defensively rather than proceed.
+  async function kycGate(ctx) {
+    const iso = String((ctx.country && ctx.country.iso) || '').toUpperCase();
+    if (DID_PURCHASE_BLOCKED_ISO.has(iso)) { toast('Not available in this country'); return; }
+    let kyc;
+    try {
+      kyc = await import('./ocp-kyc.js');
+    } catch (e) {
+      // Fails open: the real gate is server-side, and a broken module must
+      // not stop every purchase, including countries with no KYC at all.
+      console.error('[KYC] could not load ocp-kyc.js:', e);
+      showConfirmStep({ ...ctx, kyc: undefined });
+      return;
+    }
+    const req = kyc.getKycRequirement(iso, kyc.numberTypeOf(ctx.group));
+    if (!req) { showConfirmStep({ ...ctx, kyc: undefined }); return; }
+    if (req.special === 'na_911') { showE911Step(ctx, kyc, req); return; }
+    showKycStep(ctx, kyc, req);
+  }
+
+  const KYC_HINT = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-muted,#667);' +
+    'line-height:1.5;margin:-6px 0 12px;';
+  const KYC_LABEL = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-secondary,#6b8fad);' +
+    'margin:0 0 5px;';
+
+  function setContinue(btn, enabled) {
+    btn.disabled = !enabled;
+    btn.style.cssText = enabled ? BTN_PRI : BTN_PRI_DISABLED;
+  }
+
+  // Canada / US: no ID documents — a 9-1-1 service address plus consent.
+  function showE911Step(ctx, kyc, req) {
+    const ocp = ctx.identity.ocp_address;
+    const profile = kyc.loadProfile(ocp);
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, '9-1-1 service address');
+
+    const intro = document.createElement('p');
+    intro.style.cssText = SUB;
+    intro.textContent = 'Numbers in ' + ctx.country.name + ' need a physical address for emergency (9-1-1) services.';
+    wrap.appendChild(intro);
+
+    const lbl = document.createElement('div');
+    lbl.style.cssText = KYC_LABEL;
+    lbl.textContent = 'Service address';
+    wrap.appendChild(lbl);
+    const addr = document.createElement('input');
+    addr.type = 'text';
+    addr.placeholder = 'Street, city, province/state, postal code';
+    addr.style.cssText = INP;
+    addr.value = (profile.e911 && profile.e911.address) || '';
+    wrap.appendChild(addr);
+
+    const CONSENT = 'I understand 9-1-1 services will use this address, and consent to this limitation.';
+    const checkRow = document.createElement('label');
+    checkRow.style.cssText = 'display:flex;gap:10px;align-items:flex-start;margin:4px 0 14px;cursor:pointer;' +
+      'font-family:"DM Mono",monospace;font-size:12px;color:var(--text-secondary,#6b8fad);line-height:1.5;';
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.style.cssText = 'margin-top:3px;flex-shrink:0;';
+    const checkTxt = document.createElement('span');
+    checkTxt.textContent = CONSENT;
+    checkRow.appendChild(check);
+    checkRow.appendChild(checkTxt);
+    wrap.appendChild(checkRow);
+
+    const errBox = document.createElement('p');
+    errBox.style.cssText = ERR;
+    wrap.appendChild(errBox);
+
+    const cont = document.createElement('button');
+    cont.textContent = 'Continue to payment';
+    wrap.appendChild(cont);
+
+    function update() {
+      const a = addr.value.trim();
+      const poBox = a && kyc.isPoBox(a);
+      errBox.textContent = poBox ? 'A physical street address is required — P.O. boxes are not accepted.' : '';
+      setContinue(cont, a.length >= 8 && !poBox && check.checked);
+    }
+    addr.oninput = update;
+    check.onchange = update;
+    update();
+
+    cont.onclick = () => {
+      const a = addr.value.trim();
+      profile.e911 = { address: a, consentAt: Date.now() };
+      kyc.saveProfile(ocp, profile);
+      unmount(ovl);
+      showConfirmStep({
+        ...ctx,
+        kyc: {
+          kyc_profile_id: profile.id, holder_type: 'none', country: req.iso,
+          number_type: kyc.numberTypeOf(ctx.group), tier: 'none',
+          e911: { address: a, consent: true, consent_text: CONSENT, ts: Date.now() },
+          documents_uploaded: false
+        }
+      });
+    };
+    addBack(wrap, ovl, () => showNumberStep(ctx));
+    mount(ovl);
+  }
+
+  function showKycStep(ctx, kyc, req) {
+    const ocp = ctx.identity.ocp_address;
+    const profile = kyc.loadProfile(ocp);
+    const allowed = kyc.allowedHolderTypes(req);
+
+    const proceed = (holder, submissionId, viaProfile) => {
+      profile.lastType = holder;
+      kyc.saveProfile(ocp, profile);
+      if (viaProfile) toast('Using your previously submitted verification');
+      showConfirmStep({ ...ctx, kyc: kyc.buildSubmission(profile, req, holder, submissionId) });
+    };
+
+    // Documents already uploaded and approved for this country + number type
+    // (persisted, so a closed browser doesn't force a re-upload).
+    const approved = allowed.filter(h => kyc.loadApproval(ocp, req.iso, h, req.numberType));
+    if (approved.length) {
+      const h = approved.includes(profile.lastType) ? profile.lastType : approved[0];
+      proceed(h, kyc.loadApproval(ocp, req.iso, h, req.numberType).submission_id, true);
+      return;
+    }
+    // Saved doc metadata without the File behind it (e.g. after a reload)
+    // can't be uploaded — make the user choose those files again.
+    allowed.forEach(h => kyc.pruneUnbackedDocs(profile, h));
+
+    // Names already on file, captured before editing so a name being typed
+    // is never compared against itself.
+    const onFileNames = [
+      localStorage.getItem('user_name'),
+      profile.individual && profile.individual.legalName,
+      profile.business && profile.business.repName,
+      profile.business && profile.business.businessName
+    ].filter(Boolean);
+
+    let holder = allowed.includes(profile.lastType) ? profile.lastType : allowed[0];
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Verify your identity');
+
+    const intro = document.createElement('p');
+    intro.style.cssText = SUB;
+    intro.textContent = ctx.country.name + ' requires identity and address verification before this number ' +
+      'can be activated. Details you enter are saved on this device; documents are uploaded when you submit.';
+    wrap.appendChild(intro);
+
+    const typeBar = document.createElement('div');
+    typeBar.style.cssText = 'display:flex;gap:8px;margin-bottom:14px;';
+    wrap.appendChild(typeBar);
+    if (allowed.length === 1) {
+      const only = document.createElement('p');
+      only.style.cssText = WARN;
+      only.textContent = 'Numbers of this type in ' + ctx.country.name + ' can only be registered to a business.';
+      wrap.appendChild(only);
+    }
+
+    const formBox = document.createElement('div');
+    wrap.appendChild(formBox);
+    const warnBox = document.createElement('p');
+    warnBox.style.cssText = WARN;
+    wrap.appendChild(warnBox);
+    const errBox = document.createElement('p');
+    errBox.style.cssText = ERR;
+    wrap.appendChild(errBox);
+    const cont = document.createElement('button');
+    cont.textContent = 'Submit documents';
+    wrap.appendChild(cont);
+    const upErr = document.createElement('p');
+    upErr.style.cssText = ERR;
+    wrap.appendChild(upErr);
+
+    let fields = [];
+    let uploading = false;
+    const nameWarn = {};
+
+    function isDone(f) {
+      const p = profile[holder];
+      if (f.kind === 'file') return !!(p.docs && p.docs[f.doc]);
+      return !!p[f.key];
+    }
+    function update() {
+      const errs = kyc.validateProfile(profile, req, holder);
+      errBox.textContent = errs.join(' ');
+      warnBox.textContent = Object.values(nameWarn).some(Boolean)
+        ? 'This name doesn’t match the name on your account — double-check it matches your ID.' : '';
+      setContinue(cont, fields.every(isDone) && !errs.length && !uploading);
+    }
+
+    function renderForm() {
+      formBox.textContent = '';
+      Object.keys(nameWarn).forEach(k => delete nameWarn[k]);
+      // Snapshot once: fields disappearing as they're filled would make the
+      // form jump while typing.
+      fields = kyc.missingFields(profile, req, holder);
+      const p = profile[holder];
+      p.docs = p.docs || {};
+
+      fields.forEach(f => {
+        const lbl = document.createElement('div');
+        lbl.style.cssText = KYC_LABEL;
+        lbl.textContent = f.label + (f.stale ? ' (on file is too old)' : '');
+        formBox.appendChild(lbl);
+
+        let ctl;
+        if (f.kind === 'select') {
+          ctl = document.createElement('select');
+          ctl.style.cssText = INP;
+          const blank = document.createElement('option');
+          blank.value = ''; blank.textContent = 'Select…';
+          ctl.appendChild(blank);
+          f.options.forEach(o => {
+            const op = document.createElement('option');
+            op.value = o; op.textContent = o;
+            ctl.appendChild(op);
+          });
+          ctl.value = p[f.key] || '';
+          ctl.onchange = () => { p[f.key] = ctl.value; update(); };
+        } else if (f.kind === 'file') {
+          ctl = document.createElement('div');
+          ctl.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:12px;';
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = 'Choose file';
+          btn.style.cssText = BTN_SEC + 'width:auto;margin-top:0;padding:9px 14px;font-size:13px;';
+          const stat = document.createElement('span');
+          stat.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-muted,#667);' +
+            'word-break:break-all;';
+          const showStat = () => {
+            const d = p.docs[f.doc];
+            stat.textContent = d ? '✓ ' + d.name : 'No file chosen';
+            stat.style.color = d ? 'var(--green,#1d9e75)' : 'var(--text-muted,#667)';
+          };
+          showStat();
+          btn.onclick = () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*,application/pdf';
+            input.onchange = () => {
+              const file = input.files && input.files[0];
+              if (!file) return;
+              if (file.size > 10 * 1024 * 1024) { toast('File too large — 10 MB maximum'); return; }
+              // Metadata goes to the profile; the File itself is held in
+              // memory and uploaded on Submit.
+              kyc.setKycFile(holder, f.doc, file);
+              upErr.textContent = '';
+              p.docs[f.doc] = { name: file.name, size: file.size, type: file.type, addedAt: Date.now() };
+              showStat();
+              update();
+            };
+            input.click();
+          };
+          ctl.appendChild(btn);
+          ctl.appendChild(stat);
+        } else {
+          ctl = document.createElement('input');
+          ctl.type = f.kind === 'date' ? 'date' : 'text';
+          ctl.style.cssText = INP;
+          if (f.kind === 'date') ctl.max = new Date().toISOString().slice(0, 10);
+          ctl.value = p[f.key] || '';
+          ctl.oninput = ctl.onchange = () => {
+            p[f.key] = ctl.value.trim();
+            if (f.key === 'legalName' || f.key === 'repName') {
+              nameWarn[f.key] = kyc.nameMismatch(p[f.key], onFileNames);
+            }
+            update();
+          };
+        }
+        formBox.appendChild(ctl);
+        if (f.hint) {
+          const h = document.createElement('div');
+          h.style.cssText = KYC_HINT;
+          h.textContent = f.hint;
+          formBox.appendChild(h);
+        }
+      });
+      if (!fields.length) {
+        const ok = document.createElement('p');
+        ok.style.cssText = SUB;
+        ok.textContent = 'Nothing more needed for this type.';
+        formBox.appendChild(ok);
+      }
+      update();
+    }
+
+    function renderTypeBar() {
+      typeBar.textContent = '';
+      if (allowed.length < 2) return;
+      allowed.forEach(h => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = h === 'individual' ? 'Individual' : 'Business';
+        b.style.cssText = (h === holder ? BTN_PRI : BTN_SEC) + 'margin-top:0;';
+        b.onclick = () => { holder = h; renderTypeBar(); renderForm(); };
+        typeBar.appendChild(b);
+      });
+    }
+
+    renderTypeBar();
+    renderForm();
+    const KYC_UPLOAD_ERR = {
+      400: 'The server rejected these details. Check your fields and documents and try again.',
+      401: 'Could not authenticate this upload. Try again.',
+      413: 'A file is too large — 10 MB maximum per file.',
+      500: 'Verification service error. Nothing was submitted — try again shortly.'
+    };
+    cont.onclick = async () => {
+      if (uploading) return;
+      const h = holder;
+      upErr.textContent = '';
+      let form;
+      try { form = kyc.buildUploadForm(profile, req, h); }   // size/missing check, no network
+      catch (e) { upErr.textContent = e.message; return; }
+      uploading = true;
+      cont.textContent = 'Uploading…';
+      update();
+      try {
+        const r = await did.uploadKyc(ctx.identity, ocp, form);
+        if (!r || !r.submission_id || r.status !== 'approved') {
+          throw new Error('Verification was not approved' + (r && r.status ? ' (status: ' + r.status + ')' : '') + '. Please check your documents.');
+        }
+        kyc.saveApproval(ocp, req.iso, h, req.numberType, r.submission_id);
+        kyc.saveProfile(ocp, profile);
+        // Confirmation state: form is replaced; the only way forward is Continue.
+        formBox.textContent = ''; typeBar.textContent = '';
+        warnBox.textContent = ''; errBox.textContent = ''; upErr.textContent = '';
+        const done = document.createElement('p');
+        done.style.cssText = SUB + 'color:var(--green,#1d9e75);';
+        done.textContent = '✓ Documents submitted — verification approved.';
+        formBox.appendChild(done);
+        uploading = false;
+        cont.textContent = 'Continue to payment';
+        setContinue(cont, true);
+        cont.onclick = () => { unmount(ovl); proceed(h, r.submission_id, false); };
+      } catch (e) {
+        console.error('[KYC] upload failed:', e);
+        uploading = false;
+        cont.textContent = 'Retry upload';
+        upErr.textContent = (e && e.status && KYC_UPLOAD_ERR[e.status]) ||
+          (e && e.status ? (e.message || 'Upload failed.') :
+            (e && /^Verification was not approved/.test(e.message) ? e.message :
+              'Network error — documents were not submitted. Check your connection and try again.'));
+        update();
+      }
+    };
+    addBack(wrap, ovl, () => showNumberStep(ctx));
+    mount(ovl);
   }
 
   // ── Step 4: confirm price and buy ───────────────────────
@@ -3121,9 +3492,27 @@ async function _runInternationalFlow(direct) {
     let order;
     try {
       order = await did.purchase(ctx.identity, ctx.identity.ocp_address, {
-        country: ctx.country.iso, groupId: ctx.group.id, sku: ctx.sku
+        country: ctx.country.iso, groupId: ctx.group.id, sku: ctx.sku,
+        kyc: ctx.kyc
       });
     } catch (e) {
+      if (e && e.status === 428) {
+        // KYC step skipped or submission not recorded — not a payment issue.
+        console.error('[DID] purchase blocked, KYC required:', e);
+        const k = ctx.kyc || {};
+        try {
+          const kycMod = await import('./ocp-kyc.js');
+          if (k.holder_type && k.country) {
+            kycMod.clearApproval(ctx.identity.ocp_address, k.country, k.holder_type, k.number_type);
+          }
+        } catch (_) {}
+        const kycMsg = 'Identity verification is required before this number can be bought. ' +
+          'Your balance was not touched. Go back to the verification step and submit your documents.';
+        toast('Verification required');
+        rowsBox.remove();
+        addRetryClose(wrap, ovl, kycMsg, () => kycGate(ctx), 'Back to verification');
+        return;
+      }
       const failMsg = errMsg(e, 'Purchase failed — you have not been charged. Try again.');
       console.error('[DID] purchase failed:', e);
       toast(failMsg);
