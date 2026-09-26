@@ -313,7 +313,9 @@ const APPROVAL_KEY = (ocp, iso, holder, numberType) =>
 export function loadApproval(ocp, iso, holder, numberType) {
   try {
     const a = JSON.parse(localStorage.getItem(APPROVAL_KEY(ocp, iso, holder, numberType)) || 'null');
-    return a && a.submission_id ? a : null;
+    // A rejected submission is kept only for the header badge; it never
+    // counts as "already submitted", so the form is shown again.
+    return a && a.submission_id && a.status !== 'rejected' ? a : null;
   } catch (e) { return null; }
 }
 // Any submission returned by the server is remembered, whether its status is
@@ -323,6 +325,21 @@ export function saveApproval(ocp, iso, holder, numberType, submissionId, status)
     localStorage.setItem(APPROVAL_KEY(ocp, iso, holder, numberType),
       JSON.stringify({ submission_id: submissionId, status: status || 'approved', at: Date.now() }));
   } catch (e) {}
+}
+/** Status of the most recent locally saved submission for this account, or null. */
+export function latestKycStatus(ocp) {
+  const prefix = 'ocp_kyc_approval:' + (ocp || 'device') + ':';
+  let best = null;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(prefix)) continue;
+      let a = null;
+      try { a = JSON.parse(localStorage.getItem(k)); } catch (e) {}
+      if (a && (!best || (a.at || 0) > (best.at || 0))) best = a;
+    }
+  } catch (e) {}
+  return best ? (best.status || 'approved') : null;
 }
 export function clearApproval(ocp, iso, holder, numberType) {
   try { localStorage.removeItem(APPROVAL_KEY(ocp, iso, holder, numberType)); } catch (e) {}
