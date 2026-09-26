@@ -316,10 +316,12 @@ export function loadApproval(ocp, iso, holder, numberType) {
     return a && a.submission_id ? a : null;
   } catch (e) { return null; }
 }
-export function saveApproval(ocp, iso, holder, numberType, submissionId) {
+// Any submission returned by the server is remembered, whether its status is
+// 'approved' or 'pending' — /did/purchase (428) is the source of truth.
+export function saveApproval(ocp, iso, holder, numberType, submissionId, status) {
   try {
     localStorage.setItem(APPROVAL_KEY(ocp, iso, holder, numberType),
-      JSON.stringify({ submission_id: submissionId, at: Date.now() }));
+      JSON.stringify({ submission_id: submissionId, status: status || 'approved', at: Date.now() }));
   } catch (e) {}
 }
 export function clearApproval(ocp, iso, holder, numberType) {

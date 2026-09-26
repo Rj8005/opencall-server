@@ -2774,8 +2774,9 @@ async function _runInternationalFlow(direct) {
       showConfirmStep({ ...ctx, kyc: kyc.buildSubmission(profile, req, holder, submissionId) });
     };
 
-    // Documents already uploaded and approved for this country + number type
-    // (persisted, so a closed browser doesn't force a re-upload).
+    // Documents already uploaded (pending OR approved) for this country +
+    // number type (persisted, so a closed browser doesn't force a re-upload).
+    // The purchase call decides: 428 if still unapproved.
     const approved = allowed.filter(h => kyc.loadApproval(ocp, req.iso, h, req.numberType));
     if (approved.length) {
       const h = approved.includes(profile.lastType) ? profile.lastType : approved[0];
@@ -2976,17 +2977,25 @@ async function _runInternationalFlow(direct) {
       update();
       try {
         const r = await did.uploadKyc(ctx.identity, ocp, form);
-        if (!r || !r.submission_id || r.status !== 'approved') {
-          throw new Error('Verification was not approved' + (r && r.status ? ' (status: ' + r.status + ')' : '') + '. Please check your documents.');
+        if (!r || !r.submission_id) {
+          throw new Error('The server did not return a submission id. Nothing was recorded — try again.');
         }
-        kyc.saveApproval(ocp, req.iso, h, req.numberType, r.submission_id);
+        const status = String(r.status || '').toLowerCase();
+        if (['rejected', 'denied', 'declined', 'failed'].includes(status)) {
+          throw new Error('Verification was rejected. Please check your documents and submit again.');
+        }
+        // 'approved' or 'pending' (or anything else non-failing): remember it.
+        kyc.saveApproval(ocp, req.iso, h, req.numberType, r.submission_id, status);
         kyc.saveProfile(ocp, profile);
         // Confirmation state: form is replaced; the only way forward is Continue.
         formBox.textContent = ''; typeBar.textContent = '';
         warnBox.textContent = ''; errBox.textContent = ''; upErr.textContent = '';
         const done = document.createElement('p');
-        done.style.cssText = SUB + 'color:var(--green,#1d9e75);';
-        done.textContent = '✓ Documents submitted — verification approved.';
+        const isApproved = status === 'approved';
+        done.style.cssText = SUB + (isApproved ? 'color:var(--green,#1d9e75);' : 'color:var(--blue,#63b4ff);');
+        done.textContent = isApproved
+          ? '✓ Documents submitted — verification approved.'
+          : '✓ Documents submitted — under review. This usually takes a short while; we’ll let you know when it’s approved.';
         formBox.appendChild(done);
         uploading = false;
         cont.textContent = 'Continue to payment';
@@ -2998,7 +3007,7 @@ async function _runInternationalFlow(direct) {
         cont.textContent = 'Retry upload';
         upErr.textContent = (e && e.status && KYC_UPLOAD_ERR[e.status]) ||
           (e && e.status ? (e.message || 'Upload failed.') :
-            (e && /^Verification was not approved/.test(e.message) ? e.message :
+            (e && e.message && !(e instanceof TypeError) ? e.message :
               'Network error — documents were not submitted. Check your connection and try again.'));
         update();
       }
