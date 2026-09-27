@@ -973,20 +973,14 @@ if (APP_EMBED) {
              buy-a-number flow. Hidden until an OCP billing line exists (see
              _refreshIntlCard) and entirely under APP_EMBED via .app-header's
              existing display:none rule. -->
-        <span id="header-balance-chip" onclick="openTopUpFromHeader()" title="Add funds"
+        <span id="header-balance-chip" onclick="openWalletFromHeader()" title="Wallet"
               style="display:none;align-items:center;gap:4px;cursor:pointer;padding:3px 9px;
                      border-radius:20px;background:rgba(61,220,132,.1);border:1px solid rgba(61,220,132,.28);
                      font-family:'DM Mono',monospace;font-size:11px;color:#3ddc84;line-height:1;white-space:nowrap;">
           <span aria-hidden="true">🪙</span><span id="header-balance-amt" style="font-family:'Syne',sans-serif;font-weight:700;">$0.00</span>
         </span>
-        <span id="header-kyc-badge" style="display:none;align-items:center;justify-content:center;
-              width:18px;height:18px;border-radius:50%;font-size:11px;font-weight:700;line-height:1;"></span>
-        <!-- Wallet — balance + transaction history. Same visibility gate as
-             header-balance-chip (toggled alongside it in _setHeaderBalanceChip),
-             since both need an OCP billing line to mean anything. -->
-        <span id="header-wallet-icon" onclick="openWalletFromHeader()" title="Wallet"
-              style="display:none;align-items:center;justify-content:center;cursor:pointer;
-                     width:18px;height:18px;font-size:14px;line-height:1;color:#8aabb8;">👛</span>
+        <span id="header-kyc-badge" onclick="openKycStatusFromHeader()" style="display:none;align-items:center;justify-content:center;
+              width:18px;height:18px;border-radius:50%;font-size:11px;font-weight:700;line-height:1;cursor:pointer;"></span>
         <span id="header-user-info" style="font-size:12px;color:var(--text-secondary);font-family:'DM Mono',monospace;letter-spacing:0.3px"></span>
         <a id="link-change" href="#" style="font-size:10px;color:var(--blue);opacity:0.7;text-decoration:none">change</a>
         <div id="status-pill" class="status-pill pill-online">Online</div>
@@ -2129,24 +2123,37 @@ async function _refreshKycBadge() {
   el.title = label;
   el.setAttribute('aria-label', label);
   el.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;' +
-    'border-radius:50%;font-size:11px;font-weight:700;line-height:1;' + css;
+    'border-radius:50%;font-size:11px;font-weight:700;line-height:1;cursor:pointer;' + css;
 }
 window._refreshKycBadge = _refreshKycBadge;
+
+// Tap target for header-kyc-badge — a one-line status check, not a gate.
+function openKycStatusFromHeader() {
+  if (APP_EMBED) return;
+  (async () => {
+    let status = null;
+    try {
+      const identity = myIdentity || await getOrCreateIdentity();
+      const k = await import('./ocp-kyc.js');
+      status = k.latestKycStatus(identity.ocp_address);
+    } catch (e) {}
+    const s = status ? String(status).toLowerCase() : null;
+    const msg = s === 'approved' ? 'Verification: Approved — you can buy numbers in KYC-required countries.'
+      : s === 'pending' ? 'Verification: Pending — your documents are under review.'
+      : s === 'rejected' ? 'Verification: Rejected — please re-upload your documents.'
+      : 'Not verified yet';
+    toast(msg);
+  })();
+}
 
 function _setHeaderBalanceChip(balancePaise) {
   _refreshKycBadge();
   const chip = document.getElementById('header-balance-chip');
   const amt  = document.getElementById('header-balance-amt');
-  const wallet = document.getElementById('header-wallet-icon');
   if (!chip || !amt) return;
-  if (APP_EMBED || balancePaise == null) {
-    chip.style.display = 'none';
-    if (wallet) wallet.style.display = 'none';
-    return;
-  }
+  if (APP_EMBED || balancePaise == null) { chip.style.display = 'none'; return; }
   amt.textContent = fmtUsd(balancePaise);
   chip.style.display = 'inline-flex';
-  if (wallet) wallet.style.display = 'inline-flex';
 }
 
 let _intlCardChecked = false;
@@ -2202,15 +2209,16 @@ function openInternationalFlow() {
   }
 }
 
-// Header balance chip's tap target — opens top-up standalone, skipping the
-// mode chooser / account / country / number / confirm steps entirely.
+// Opens top-up standalone, skipping the mode chooser / account / country /
+// number / confirm steps entirely. Still used from inside showWalletStep's
+// "Add funds" row.
 function openTopUpFromHeader() {
   if (APP_EMBED) return;
   _runInternationalFlow({ topupOnly: true });
 }
 
-// Wallet icon's tap target — opens balance + transaction history standalone,
-// same shape as openTopUpFromHeader().
+// Header balance chip's tap target — the one entry point for "your money":
+// balance + transaction history, with top-up reachable from inside it.
 function openWalletFromHeader() {
   if (APP_EMBED) return;
   _runInternationalFlow({ walletOnly: true });
@@ -3836,6 +3844,17 @@ async function _runInternationalFlow(direct) {
       'text-transform:uppercase;letter-spacing:.6px;text-align:center;margin-bottom:18px;';
     balLabel.textContent = 'Current balance';
     wrap.appendChild(balLabel);
+
+    const addFunds = document.createElement('button');
+    addFunds.textContent = '+ Add funds';
+    addFunds.style.cssText = BTN_SEC + 'margin-top:0;margin-bottom:18px;';
+    addFunds.onclick = () => {
+      unmount(ovl);
+      showTopUpStep({ identity: ctx.identity, balancePaise: data.balance_paise }, 0, () => {
+        _refreshIntlCard(true);
+      });
+    };
+    wrap.appendChild(addFunds);
 
     const historyLabel = document.createElement('div');
     historyLabel.style.cssText = 'font-family:"DM Mono",monospace;font-size:10px;color:var(--text-muted,#667);' +
