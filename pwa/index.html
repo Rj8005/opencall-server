@@ -981,6 +981,12 @@ if (APP_EMBED) {
         </span>
         <span id="header-kyc-badge" style="display:none;align-items:center;justify-content:center;
               width:18px;height:18px;border-radius:50%;font-size:11px;font-weight:700;line-height:1;"></span>
+        <!-- Wallet — balance + transaction history. Same visibility gate as
+             header-balance-chip (toggled alongside it in _setHeaderBalanceChip),
+             since both need an OCP billing line to mean anything. -->
+        <span id="header-wallet-icon" onclick="openWalletFromHeader()" title="Wallet"
+              style="display:none;align-items:center;justify-content:center;cursor:pointer;
+                     width:18px;height:18px;font-size:14px;line-height:1;color:#8aabb8;">👛</span>
         <span id="header-user-info" style="font-size:12px;color:var(--text-secondary);font-family:'DM Mono',monospace;letter-spacing:0.3px"></span>
         <a id="link-change" href="#" style="font-size:10px;color:var(--blue);opacity:0.7;text-decoration:none">change</a>
         <div id="status-pill" class="status-pill pill-online">Online</div>
@@ -2131,10 +2137,16 @@ function _setHeaderBalanceChip(balancePaise) {
   _refreshKycBadge();
   const chip = document.getElementById('header-balance-chip');
   const amt  = document.getElementById('header-balance-amt');
+  const wallet = document.getElementById('header-wallet-icon');
   if (!chip || !amt) return;
-  if (APP_EMBED || balancePaise == null) { chip.style.display = 'none'; return; }
+  if (APP_EMBED || balancePaise == null) {
+    chip.style.display = 'none';
+    if (wallet) wallet.style.display = 'none';
+    return;
+  }
   amt.textContent = fmtUsd(balancePaise);
   chip.style.display = 'inline-flex';
+  if (wallet) wallet.style.display = 'inline-flex';
 }
 
 let _intlCardChecked = false;
@@ -2195,6 +2207,13 @@ function openInternationalFlow() {
 function openTopUpFromHeader() {
   if (APP_EMBED) return;
   _runInternationalFlow({ topupOnly: true });
+}
+
+// Wallet icon's tap target — opens balance + transaction history standalone,
+// same shape as openTopUpFromHeader().
+function openWalletFromHeader() {
+  if (APP_EMBED) return;
+  _runInternationalFlow({ walletOnly: true });
 }
 
 async function _runInternationalFlow(direct) {
@@ -3783,8 +3802,99 @@ async function _runInternationalFlow(direct) {
     mount(ovl);
   }
 
+  // ── Wallet: balance + transaction history ──────────────
+  // Fetches fresh every time it's opened (not prefetched on page load), same
+  // as the other on-demand screens in this flow.
+  async function showWalletStep(ctx) {
+    const { ovl, wrap } = makeOvl();
+    addHeader(wrap, ovl, 'Wallet');
+
+    const status = document.createElement('p');
+    status.style.cssText = SUB;
+    status.textContent = '⏳ Loading your wallet…';
+    wrap.appendChild(status);
+    mount(ovl);
+
+    let data;
+    try {
+      data = await did.getBillingHistory(ctx.identity, ctx.identity.ocp_address);
+    } catch (e) {
+      status.remove();
+      addRetryClose(wrap, ovl, errMsg(e, 'Could not load your wallet.'), () => { unmount(ovl); showWalletStep(ctx); });
+      return;
+    }
+    status.remove();
+
+    const balLine = document.createElement('div');
+    balLine.style.cssText = 'font-family:"DM Mono",monospace;font-size:28px;font-weight:700;' +
+      'color:var(--text-primary,#e8f4ff);text-align:center;margin-bottom:4px;';
+    balLine.textContent = fmtUsd(data.balance_paise);
+    wrap.appendChild(balLine);
+
+    const balLabel = document.createElement('div');
+    balLabel.style.cssText = 'font-family:"DM Mono",monospace;font-size:10px;color:var(--text-muted,#667);' +
+      'text-transform:uppercase;letter-spacing:.6px;text-align:center;margin-bottom:18px;';
+    balLabel.textContent = 'Current balance';
+    wrap.appendChild(balLabel);
+
+    const historyLabel = document.createElement('div');
+    historyLabel.style.cssText = 'font-family:"DM Mono",monospace;font-size:10px;color:var(--text-muted,#667);' +
+      'text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;';
+    historyLabel.textContent = 'Transaction history';
+    wrap.appendChild(historyLabel);
+
+    const history = Array.isArray(data.history) ? data.history : [];
+    const list = document.createElement('div');
+    list.style.cssText = LIST;
+    if (!history.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = LIST_EMPTY;
+      empty.textContent = 'No transactions yet';
+      list.appendChild(empty);
+    } else {
+      history.forEach(h => {
+        const row = document.createElement('div');
+        row.style.cssText = LIST_ITEM + 'cursor:default;';
+
+        const left = document.createElement('div');
+        left.style.cssText = 'min-width:0;';
+        const reason = document.createElement('div');
+        reason.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;' +
+          'color:var(--text-primary,#e8f4ff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        reason.textContent = h.reason || h.source || 'Transaction';
+        const date = document.createElement('div');
+        date.style.cssText = 'font-family:"DM Mono",monospace;font-size:11px;color:var(--text-muted,#667);margin-top:2px;';
+        date.textContent = _formatDateShort(h.created_at) || '';
+        left.appendChild(reason);
+        left.appendChild(date);
+
+        const delta = Number(h.delta_paise) || 0;
+        const amt = document.createElement('div');
+        amt.style.cssText = 'font-family:"DM Mono",monospace;font-size:14px;font-weight:700;' +
+          'flex-shrink:0;color:' + (delta < 0 ? 'var(--red,#ff6b6b)' : 'var(--green,#3ddc84)') + ';';
+        amt.textContent = (delta < 0 ? '−' : '+') + fmtUsd(Math.abs(delta));
+        row.appendChild(left);
+        row.appendChild(amt);
+        list.appendChild(row);
+      });
+    }
+    wrap.appendChild(list);
+
+    const close = document.createElement('button');
+    close.textContent = 'Close';
+    close.style.cssText = BTN_SEC;
+    close.onclick = () => unmount(ovl);
+    wrap.appendChild(close);
+  }
+
   // ── Entry ────────────────────────────────────────────────
-  if (direct && direct.topupOnly) {
+  if (direct && direct.walletOnly) {
+    (async () => {
+      const identity = myIdentity || await getOrCreateIdentity();
+      if (!identity) { toast('Could not load your identity'); return; }
+      showWalletStep({ identity });
+    })();
+  } else if (direct && direct.topupOnly) {
     (async () => {
       const identity = myIdentity || await getOrCreateIdentity();
       if (!identity) { toast('Could not load your identity'); return; }

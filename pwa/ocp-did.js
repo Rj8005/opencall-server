@@ -208,6 +208,18 @@ export async function uploadKyc(identity, pubkey, form) {
   return req('/did/kyc/upload?' + qs.toString(), { method: 'POST', body: form });
 }
 
+/**
+ * Current balance + transaction history for the wallet screen. GET with auth
+ * in the query string, same shape as uploadKyc()'s querystring (no JSON body
+ * on a GET). Resolves {balance_paise, history: [{delta_paise,
+ * balance_after_paise, reason, source, created_at}, ...]}.
+ */
+export async function getBillingHistory(identity, pubkey) {
+  const a = await authFields(identity, pubkey);
+  const qs = new URLSearchParams({ pubkey: a.pubkey, nonce: a.nonce, signature: a.signature });
+  return req('/billing/history?' + qs.toString(), { method: 'GET' });
+}
+
 /** Gives the number back and stops the monthly charge. */
 export async function release(identity, pubkey) {
   const auth = await authFields(identity, pubkey);
