@@ -2145,6 +2145,13 @@ async function _refreshKycBadge() {
   try {
     if (!APP_EMBED && myIdentity) {
       const k = await import('./ocp-kyc.js');
+      try {
+        // Best-effort: pull a fresh status from the server before falling
+        // back to the cached value. A failure here (offline, 503, or the
+        // endpoint not deployed yet) must never block the fallback read —
+        // same defensive pattern as everywhere else in this file.
+        await k.refreshKycStatusFromServer(myIdentity, myIdentity.ocp_address);
+      } catch (e) {}
       status = k.latestKycStatus(myIdentity.ocp_address);
     }
   } catch (e) {}

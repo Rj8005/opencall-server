@@ -345,6 +345,73 @@ export function clearApproval(ocp, iso, holder, numberType) {
   try { localStorage.removeItem(APPROVAL_KEY(ocp, iso, holder, numberType)); } catch (e) {}
 }
 
+/* ------------------------------------------------- server status refresh */
+
+// req() is copied rather than imported since ocp-did.js does not export it
+// (same reasoning as ocp-billing.js).
+import { authFields } from './ocp-did.js';
+
+const API = 'https://node.opencall.space';
+
+async function req(path, opts = {}) {
+  const res = await fetch(API + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+  });
+  let body = null;
+  try { body = await res.json(); } catch { /* empty or non-JSON */ }
+  if (typeof window !== 'undefined' && window._setServiceCapacityBanner) {
+    if (res.status === 503) window._setServiceCapacityBanner(true);
+    else if (res.ok) window._setServiceCapacityBanner(false);
+  }
+  if (!res.ok) {
+    const err = new Error((body && body.error) || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+// Finds whichever locally saved approval entry (any country/holder/number
+// type) carries this submission_id and overwrites its status in place.
+// Never creates a new entry — if nothing local matches, this is a no-op.
+function _updateApprovalStatusBySubmissionId(ocp, submissionId, status) {
+  const prefix = 'ocp_kyc_approval:' + (ocp || 'device') + ':';
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(prefix)) continue;
+      let a = null;
+      try { a = JSON.parse(localStorage.getItem(key)); } catch (e) {}
+      if (a && a.submission_id === submissionId) {
+        a.status = status;
+        a.at = Date.now();
+        localStorage.setItem(key, JSON.stringify(a));
+      }
+    }
+  } catch (e) {}
+}
+
+/**
+ * Pulls a fresh status from the server (POST /did/kyc/status — JSON auth
+ * body, not the querystring pattern uploadKyc() uses, since this isn't
+ * multipart) and updates whichever locally saved entry has this
+ * submission_id, so latestKycStatus() picks up the fresh value on its next
+ * read. The server is authoritative: no "don't downgrade from approved"
+ * logic — any real (submission_id, status) pair overwrites unconditionally.
+ * A "none" status, a missing submission_id, or any error is a no-op that
+ * never creates a bogus entry — callers should fall back to the cached
+ * value regardless of whether this throws.
+ */
+export async function refreshKycStatusFromServer(identity, pubkey) {
+  const auth = await authFields(identity, pubkey);
+  const r = await req('/did/kyc/status', { method: 'POST', body: JSON.stringify(auth) });
+  if (!r || !r.submission_id || !r.status || r.status === 'none') return null;
+  _updateApprovalStatusBySubmissionId(pubkey, r.submission_id, r.status);
+  return r;
+}
+
 /**
  * Multipart body for /did/kyc/upload. Throws (before any network call) if a
  * required document is missing or over the 10 MB limit.
