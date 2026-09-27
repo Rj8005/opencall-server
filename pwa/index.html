@@ -519,6 +519,40 @@ input::placeholder { color: var(--text-muted); }
 }
 .screen-fade { animation: fadein 0.25s ease; }
 
+/* ── Toast ── */
+/* #toast (bare div, populated by toast() in the app's main script) had no
+   CSS at all until now — every toast() call was setting textContent and
+   toggling the .show class against nothing, so no toast was ever visible.
+   z-index 22000 clears every overlay in this file, including the highest
+   one (.BASE-styled full-screen overlays top out at 21000). */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 90px;
+  transform: translateX(-50%) translateY(8px);
+  z-index: 22000;
+  max-width: min(86vw, 360px);
+  padding: 12px 20px;
+  border-radius: var(--radius-lg);
+  background: rgba(6, 10, 16, 0.94);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: var(--text-primary);
+  font-family: 'DM Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  word-break: break-word;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 #screen-register { display: block; }
 #screen-dialer   { display: none; }
 
@@ -3826,6 +3860,7 @@ async function _runInternationalFlow(direct) {
     let data;
     try {
       data = await did.getBillingHistory(ctx.identity, ctx.identity.ocp_address);
+      console.log('[WALLET DEBUG] raw /billing/history response:', JSON.stringify(data)); // TEMP — remove before commit
     } catch (e) {
       status.remove();
       addRetryClose(wrap, ovl, errMsg(e, 'Could not load your wallet.'), () => { unmount(ovl); showWalletStep(ctx); });
