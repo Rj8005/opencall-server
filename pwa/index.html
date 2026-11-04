@@ -1603,25 +1603,41 @@ function _loadSipCreds() {
   try { return JSON.parse(stored); } catch { return null; }
 }
 
+// Never mints. Returns the stored identity, or null when there is none (app
+// mode always returns null: the native Android app owns the only identity,
+// in its Keystore — never generate, read, or write a second web wallet).
+// Callers treat null as "do nothing yet"; the onboarding gate creates or
+// restores an identity and reloads into the normal startup.
 async function getOrCreateIdentity() {
-  // App mode: the native Android app owns the only identity (Ed25519, in its
-  // Keystore). Never generate, read, or write a second web wallet here.
   if (APP_EMBED) return null;
   const cached = await loadIdentity();
   if (cached) {
     console.log('[OCP] Identity loaded:', cached.ocp_address);
     return cached;
   }
-  // No stored identity — create silently; phrase is saved locally for optional
-  // backup later but the user is never blocked at launch.
+  return null;
+}
+
+// Mints a fresh identity in memory ONLY — nothing is stored. The create flow
+// persists it (saveIdentity) once the vault has accepted the encrypted copy.
+async function createIdentity() {
   const { generateMnemonic, mnemonicToKeypair, publicKeyToOcp } =
     await import('./ocp-identity.js');
-  const phrase   = generateMnemonic();
-  const identity = _buildIdentityFromPhrase(phrase, mnemonicToKeypair, publicKeyToOcp);
-  localStorage.setItem('ocp_backed_up', 'false');
-  await saveIdentity(identity);
-  console.log('[OCP] New identity created:', identity.ocp_address);
-  return identity;
+  const phrase = generateMnemonic();
+  return _buildIdentityFromPhrase(phrase, mnemonicToKeypair, publicKeyToOcp);
+}
+
+// Restores must not carry over state that belonged to the previous identity.
+function _clearAccountState() {
+  try {
+    localStorage.removeItem('ocp_sip_creds_v1');
+    localStorage.removeItem('ocp_pending_order');
+  } catch (e) {}
+}
+
+function _needsOnboarding() {
+  if (APP_EMBED) return false;
+  try { return !localStorage.getItem(OCP_KEY_STORAGE); } catch (e) { return true; }
 }
 
 // Build the full identity object from a BIP-39 phrase.
@@ -4435,6 +4451,7 @@ async function backupIdentity() {
         const proceed = await _confirmIdentityOverwrite(restored.ocp_address);
         if (!proceed) { toast('Restore cancelled'); return; }
         await saveIdentity(restored);
+    _clearAccountState();
         localStorage.setItem('ocp_backed_up', 'true');
         toast('Identity restored — reloading…');
         setTimeout(() => location.reload(), 600);
@@ -4499,6 +4516,7 @@ async function importIdentity() {
       const proceed = await _confirmIdentityOverwrite(identity.ocp_address);
       if (!proceed) { toast('Restore cancelled'); return; }
       await saveIdentity(identity);
+    _clearAccountState();
       localStorage.setItem('ocp_backed_up', 'true');
       myIdentity = identity;
       toast('Identity restored — reloading…');
@@ -4584,6 +4602,7 @@ async function _restoreIdentityWithGoogle() {
     const proceed = await _confirmIdentityOverwrite(identity.ocp_address);
     if (!proceed) { toast('Restore cancelled'); return; }
     await saveIdentity(identity);
+    _clearAccountState();
     localStorage.setItem('ocp_backed_up', 'true');
     toast('Identity restored — reloading…');
     setTimeout(() => location.reload(), 600);
@@ -4981,6 +5000,12 @@ async function answerMissedCall() {
       if (statusEl) statusEl.textContent = '';
       return;
     }
+    if (!myIdentity) {
+      if (btn) { btn.disabled = false; btn.textContent = '📞 Answer Call'; }
+      if (statusEl) statusEl.textContent = '';
+      _showOnboardingGate();
+      return;
+    }
   }
 
   // Guest credentials — use the number they were called on if available
@@ -5090,6 +5115,9 @@ let myIdentity = null;
 let _iceWasConnected  = false;
 let _backupNudgeShown = false;   // show the banner at most once per session
 getOrCreateIdentity().then(async id => {
+  // No stored identity (and not app mode): do nothing — the onboarding gate
+  // (see initFlow) creates/restores one and reloads into this startup.
+  if (!id && !APP_EMBED) return;
   myIdentity = id;
   // App mode: id is always null here (getOrCreateIdentity() short-circuits),
   // so there is no wallet to derive ECDH keys for or display an address for.
@@ -5143,6 +5171,7 @@ async function subscribePush() {
     console.log('[Push] Not supported — skipping');
     return;
   }
+  if (!myIdentity && !APP_EMBED) return; // no identity yet
   try {
     const reg      = await navigator.serviceWorker.ready;
     let   sub      = await reg.pushManager.getSubscription();
@@ -5733,6 +5762,7 @@ async function initSignalServer(server, name, number) {
   if (!myIdentity) {
     myIdentity = await getOrCreateIdentity();
   }
+  if (!myIdentity) { _showOnboardingGate(); return; }
 
   myName   = name;
   myNumber = number;
@@ -5779,6 +5809,7 @@ async function doRegister() {
     myIdentity = await getOrCreateIdentity();
     console.log('[OCP] Using identity:', myIdentity?.ocp_address);
   }
+  if (!myIdentity) { _showOnboardingGate(); return; }
 
   const name   = document.getElementById('input-name')?.value.trim()  || '';
   const number = document.getElementById('input-number')?.value.trim() || '';
@@ -8090,6 +8121,7 @@ async function doDecline() {
 function initSipUA() {
   if (!window.JsSIP) return;
   if (_sipUA) return;
+  if (_needsOnboarding()) return; // no identity yet — onboarding reloads into startup
   const sipCreds = _loadSipCreds();
   if (!sipCreds) {
     console.info('[IDT] No stored SIP credentials — skipping persistent registration');
@@ -9413,7 +9445,107 @@ function _contactAct(i, action) {
   }
 }
 
+// ── Onboarding gate ────────────────────────────────────────
+// Shown on first launch (no stored identity). Nothing is minted until the
+// user picks "Create a profile".
+const _ONB = {
+  BASE: 'position:fixed;inset:0;z-index:15000;background:var(--bg-deep,#060a10);' +
+    'overflow-y:auto;display:flex;flex-direction:column;align-items:center;padding:40px 20px 56px;',
+  H2:   'font-family:"Syne",sans-serif;font-size:24px;color:#c8f55a;text-align:center;margin:0 0 14px;font-weight:700;',
+  P:    'font-family:"DM Mono",monospace;font-size:13px;color:#8aabb8;line-height:1.6;margin:0 0 16px;',
+  BTN:  'width:100%;padding:14px;background:#c8f55a;color:#0a1a05;border:0;border-radius:12px;' +
+        'font-weight:700;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;margin-top:10px;',
+  BTN2: 'width:100%;padding:13px;background:transparent;color:#c8dff5;border:1px solid rgba(255,255,255,.18);' +
+        'border-radius:12px;font-size:14px;font-family:"DM Mono",monospace;cursor:pointer;margin-top:10px;',
+  LINK: 'background:none;border:0;color:var(--blue,#63b4ff);font-size:13px;font-family:"DM Mono",monospace;' +
+        'cursor:pointer;text-decoration:underline;text-underline-offset:2px;margin-top:14px;',
+  INP:  'width:100%;box-sizing:border-box;padding:12px 14px;background:rgba(255,255,255,.05);' +
+        'border:1px solid rgba(255,255,255,.14);border-radius:10px;color:#e8f4f7;font-size:15px;' +
+        'font-family:"DM Mono",monospace;margin-top:8px;',
+  ERR:  'font-family:"DM Mono",monospace;font-size:12px;color:#f87171;min-height:16px;margin:8px 0 0;line-height:1.5;',
+  WARN: 'font-family:"DM Mono",monospace;font-size:13px;color:#fbbf24;background:rgba(251,191,36,.08);' +
+        'border:1px solid rgba(251,191,36,.3);border-radius:12px;padding:12px 14px;margin:14px 0;line-height:1.6;'
+};
+
+// Builds a full-screen overlay and returns {ovl, wrap, close}. One onboarding
+// overlay exists at a time; opening another replaces it.
+function _onbShell(title, subtitle) {
+  const old = document.getElementById('onb-gate');
+  if (old) old.remove();
+  const ovl = document.createElement('div');
+  ovl.id = 'onb-gate';
+  ovl.style.cssText = _ONB.BASE;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'max-width:440px;width:100%;';
+  ovl.appendChild(wrap);
+  if (title) {
+    const h = document.createElement('h2');
+    h.textContent = title; h.style.cssText = _ONB.H2;
+    wrap.appendChild(h);
+  }
+  if (subtitle) {
+    const p = document.createElement('p');
+    p.textContent = subtitle; p.style.cssText = _ONB.P;
+    wrap.appendChild(p);
+  }
+  document.body.appendChild(ovl);
+  return { ovl, wrap, close: () => ovl.remove() };
+}
+
+function _onbButton(parent, label, style, onclick) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = label; b.style.cssText = style; b.onclick = onclick;
+  parent.appendChild(b);
+  return b;
+}
+
+function _showOnboardingGate() {
+  if (APP_EMBED) return;
+  const { wrap } = _onbShell('Welcome to OpenCall', 'Your profile is your identity: calls, messages and your number belong to it.');
+  _onbButton(wrap, 'Create a profile', _ONB.BTN, () => _onboardingCreate());
+  _onbButton(wrap, 'I already have one', _ONB.BTN2, () => _onboardingSignIn());
+}
+
+// Interim create/sign-in entry points — replaced by the username + password
+// flows in later commits. Create mints in memory, persists, reloads.
+async function _onboardingCreate() {
+  try {
+    const identity = await createIdentity();
+    await saveIdentity(identity);
+    localStorage.setItem('ocp_backed_up', 'false');
+    location.reload();
+  } catch (e) {
+    toast('Could not create a profile — try again');
+  }
+}
+
+function _onboardingSignIn() {
+  const { wrap } = _onbShell('Restore your profile');
+  _onbButton(wrap, 'Restore from 12 words', _ONB.BTN, () => _restoreFromPhraseAndReload());
+  _onbButton(wrap, 'Restore from backup file', _ONB.BTN2, () => importIdentity());
+  _onbButton(wrap, 'Restore with Google', _ONB.BTN2, () => _restoreIdentityWithGoogle());
+  _onbButton(wrap, 'Back', _ONB.LINK, () => _showOnboardingGate());
+}
+
+async function _restoreFromPhraseAndReload() {
+  try {
+    const restored = await _runWalletOnboarding('restore');
+    await saveIdentity(restored);
+    _clearAccountState();
+    localStorage.setItem('ocp_backed_up', 'true');
+    toast('Identity restored — reloading…');
+    setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    toast('Could not restore — try again');
+  }
+}
+
 function initFlow() {
+  // No identity yet: full-screen gate, nothing else starts (SIP UA, ws
+  // register, push, account calls all stay idle). Finishing the gate
+  // persists an identity and reloads into this same startup.
+  if (_needsOnboarding()) { _showOnboardingGate(); return; }
+
   // Push-wake: opened by a notification tap (or the tab was merely
   // backgrounded and the SW postMessage'd us — see the 'wake_sip' listener
   // above). Register the persistent SIP UA before anything non-essential
