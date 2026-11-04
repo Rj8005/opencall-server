@@ -140,3 +140,74 @@ export async function vaultReset(identity, username, newPassword) {
     username: k.username, nonce, sig, newAuthKey: k.authKey, newBlob
   });
 }
+
+/* ------------------------------------------------- SIP credential sync */
+// SIP credentials are issued once per account, so a browser that signs in
+// through the vault has none. They are stored on the vault server encrypted
+// with a key derived from the identity private key (never sent), and fetched
+// by proving ownership of the identity with a signed single-use nonce.
+
+const SIP_STORAGE = 'ocp_sip_creds_v1';
+
+const fromHex = h => Uint8Array.from(h.match(/../g) || [], b => parseInt(b, 16));
+const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function sipKey(identity) {
+  const material = await crypto.subtle.importKey(
+    'raw', fromHex(identity.privateKeyHex), 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode('ocp-sip-v1') },
+    material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+async function sipSign(identity, text) {
+  const { signRaw } = await import('./ocp-identity.js');
+  return signRaw(identity, text);
+}
+
+async function sha256Hex(text) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return toHex(d);
+}
+
+/** Uploads the locally stored credentials. Resolves true on success, false otherwise; never throws. */
+export async function sipSyncPush(identity) {
+  try {
+    const raw = localStorage.getItem(SIP_STORAGE);
+    if (!raw || !identity || !identity.privateKeyHex) return false;
+    const creds = JSON.parse(raw);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: nonce }, await sipKey(identity),
+      new TextEncoder().encode(JSON.stringify({ ...creds, updatedAt: Date.now() }))));
+    const blob = JSON.stringify({ v: 1, n: toB64(nonce), d: toB64(ct) });
+
+    const ocp = identity.ocp_address;
+    const { nonce: challenge } = await post('/vault/sip-challenge', { ocp });
+    const sig = await sipSign(identity, 'vault-sip-put:' + ocp + ':' + challenge + ':' + await sha256Hex(blob));
+    await post('/vault/sip-put', { ocp, nonce: challenge, sig, blob });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Downloads and decrypts the credentials: {user, password, realm}, or null. Never throws. */
+export async function sipSyncPull(identity) {
+  try {
+    if (!identity || !identity.privateKeyHex) return null;
+    const ocp = identity.ocp_address;
+    const { nonce: challenge } = await post('/vault/sip-challenge', { ocp });
+    const sig = await sipSign(identity, 'vault-sip-get:' + ocp + ':' + challenge);
+    const out = await post('/vault/sip-get', { ocp, nonce: challenge, sig });
+    const pkg = JSON.parse(out.blob);
+    if (pkg.v !== 1) return null;
+    const pt = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: fromB64(pkg.n) }, await sipKey(identity), fromB64(pkg.d));
+    const c = JSON.parse(new TextDecoder().decode(pt));
+    if (!c || !c.user || !c.password || !c.realm) return null;
+    return { user: c.user, password: c.password, realm: c.realm };
+  } catch (e) {
+    return null;
+  }
+}
