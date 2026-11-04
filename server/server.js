@@ -631,9 +631,9 @@ function generateAnswerLink(callId, fromName, fromNumber) {
 const vault = require('./vault').init({ handles, ocpToHandle, saveHandles });
 
 const server = http.createServer((req, res) => {
-  if (vault.handle(req, res)) return;
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
+  if (vault.handle(req, res)) return;
 
   // ── CORS preflight for /relay-log ────────────────────────────
   if (req.method === 'OPTIONS' && req.url === '/relay-log') {

@@ -100,13 +100,15 @@ function save() {
 }
 
 // ── http helpers ────────────────────────────────────────────
+// server.js sets Access-Control-Allow-Origin: * before this module runs, so
+// for /vault/* it is always overwritten (allowed origin) or removed.
 function cors(req, res) {
   const origin = req.headers.origin;
+  res.setHeader('Vary', 'Origin');
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  } else {
+    res.removeHeader('Access-Control-Allow-Origin');
   }
 }
 
@@ -359,6 +361,9 @@ function init({ handles, ocpToHandle, saveHandles }) {
 
     if (req.method === 'OPTIONS') {
       cors(req, res);
+      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Max-Age', '600');
       res.writeHead(204);
       res.end();
       return true;
