@@ -9506,17 +9506,228 @@ function _showOnboardingGate() {
   _onbButton(wrap, 'I already have one', _ONB.BTN2, () => _onboardingSignIn());
 }
 
-// Interim create/sign-in entry points — replaced by the username + password
-// flows in later commits. Create mints in memory, persists, reloads.
-async function _onboardingCreate() {
-  try {
-    const identity = await createIdentity();
-    await saveIdentity(identity);
-    localStorage.setItem('ocp_backed_up', 'false');
-    location.reload();
-  } catch (e) {
-    toast('Could not create a profile — try again');
+// ── Profile (username + password) helpers ──────────────────
+const _acct = () => import('./ocp-account.js');
+
+// Short embedded list of the most common passwords (min length is 10, so the
+// short ones are already rejected on length — kept for completeness).
+const _COMMON_PASSWORDS = new Set((
+  '123456 password 12345678 qwerty 123456789 12345 1234 111111 1234567 dragon ' +
+  '123123 baseball abc123 football monkey letmein shadow master 666666 qwertyuiop ' +
+  '123321 mustang 1234567890 michael 654321 superman 1qaz2wsx 7777777 121212 ' +
+  '000000 qazwsx 123qwe killer trustno1 jordan jennifer zxcvbnm asdfgh hunter ' +
+  'buster soccer harley batman andrew tigger sunshine iloveyou 2000 charlie robert ' +
+  'thomas hockey ranger daniel starwars klaster 112233 george computer michelle ' +
+  'jessica pepper 1111 zxcvbn 555555 11111111 131313 freedom 777777 pass maggie ' +
+  '159753 aaaaaa ginger princess joshua cheese amanda summer love ashley nicole ' +
+  'chelsea biteme matthew access yankees 987654321 dallas austin thunder taylor ' +
+  'matrix password1 password123 passw0rd welcome123 iloveyou123 qwerty123 ' +
+  'qwertyuiop1 1q2w3e4r5t 0123456789 changeme123 administrator letmein123 ' +
+  'opencall123 opencall1234 openchannel'
+).split(/\s+/));
+
+function _passwordProblem(pw, username) {
+  if (pw.length < 10) return 'Use at least 10 characters.';
+  const low = pw.toLowerCase();
+  if (_COMMON_PASSWORDS.has(low)) return 'That password is too common. Pick something less guessable.';
+  if (username && low === String(username).toLowerCase()) return 'Your password cannot be your username.';
+  return '';
+}
+
+function _strengthHint(pw) {
+  if (!pw) return '';
+  if (pw.length < 10) return 'Too short — ' + (10 - pw.length) + ' more character' + (10 - pw.length === 1 ? '' : 's') + ' to go';
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(r => r.test(pw)).length;
+  const score = (pw.length >= 16 ? 2 : pw.length >= 13 ? 1 : 0) + (classes >= 3 ? 1 : 0) + (new Set(pw).size >= 8 ? 1 : 0);
+  return score >= 3 ? 'Strength: strong' : score === 2 ? 'Strength: good' : 'Strength: fair — longer is better';
+}
+
+const _PROFILE_WARNING = 'If you forget your password and lose your 12 words, nobody can restore this profile.';
+
+function _onbText(parent, text, style) {
+  const p = document.createElement('p');
+  p.textContent = text; p.style.cssText = style || _ONB.P;
+  parent.appendChild(p);
+  return p;
+}
+
+function _onbInput(parent, placeholder, type, extra) {
+  const i = document.createElement('input');
+  i.type = type || 'text'; i.placeholder = placeholder; i.style.cssText = _ONB.INP;
+  i.autocomplete = 'off'; i.autocapitalize = 'none'; i.spellcheck = false;
+  if (extra) Object.assign(i, extra);
+  parent.appendChild(i);
+  return i;
+}
+
+function _profileErrorMessage(e) {
+  if (!e) return 'Something went wrong. Try again.';
+  if (e.code === 'network') return 'Could not reach the server. Check your connection and try again.';
+  if (e.status === 429) {
+    const s = Number(e.retryAfter) || 0;
+    const when = s >= 3600 ? Math.ceil(s / 3600) + ' hour(s)' : s >= 60 ? Math.ceil(s / 60) + ' minute(s)' : (s || 60) + ' seconds';
+    return 'Too many attempts. Try again in ' + when + '.';
   }
+  if (e.code === 'username_taken') return 'That username was just taken. Pick another.';
+  if (e.code === 'profile_exists') return 'This identity already has a username and password.';
+  if (e.code === 'bad_signature') return 'Could not verify your identity key.';
+  return 'Something went wrong. Try again.';
+}
+
+// Step 1 — username with live availability (GET /resolve/<name>: 404 = free).
+// onNext(username) runs once a free, well-formed name is chosen.
+function _usernameStep(shell, title, subtitle, onNext, onBack) {
+  const { wrap } = shell;
+  const h = document.createElement('h2'); h.textContent = title; h.style.cssText = _ONB.H2; wrap.appendChild(h);
+  _onbText(wrap, subtitle);
+  const input = _onbInput(wrap, 'username', 'text', { maxLength: 21 });
+  const status = _onbText(wrap, '', _ONB.ERR);
+  const next = _onbButton(wrap, 'Continue', _ONB.BTN, () => { if (state.ok) onNext(state.name); });
+  next.disabled = true; next.style.opacity = '.5';
+  if (onBack) _onbButton(wrap, 'Back', _ONB.LINK, onBack);
+
+  const state = { ok: false, name: '' };
+  let timer = null, seq = 0;
+  const set = (ok, msg, good) => {
+    state.ok = ok; next.disabled = !ok; next.style.opacity = ok ? '1' : '.5';
+    status.textContent = msg; status.style.color = good ? '#c8f55a' : '#f87171';
+  };
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const name = normalizeUsernameLocal(input.value);
+    state.name = name;
+    if (!name) return set(false, '');
+    if (!/^[a-z0-9_]{3,20}$/.test(name)) return set(false, '3–20 characters: letters, numbers, underscore.');
+    set(false, 'Checking…', true);
+    const mine = ++seq;
+    timer = setTimeout(async () => {
+      try {
+        const res = await fetch(_pushServerBase() + '/resolve/' + encodeURIComponent(name));
+        if (mine !== seq) return;
+        if (res.status === 404) set(true, '@' + name + ' is available', true);
+        else if (res.ok)        set(false, '@' + name + ' is taken');
+        else                    set(false, 'Could not check availability. Try again.');
+      } catch (e) {
+        if (mine === seq) set(false, 'Could not check availability. Check your connection.');
+      }
+    }, 400);
+  });
+  setTimeout(() => input.focus(), 50);
+}
+function normalizeUsernameLocal(v) { return String(v || '').trim().replace(/^@+/, '').toLowerCase(); }
+
+// Step 2 — password + confirm. onNext(password) once valid.
+function _passwordStep(shell, username, title, onNext, onBack) {
+  const { wrap } = shell;
+  const h = document.createElement('h2'); h.textContent = title; h.style.cssText = _ONB.H2; wrap.appendChild(h);
+  _onbText(wrap, 'Choose a password for @' + username + '. You will use it to open this profile from any browser.');
+  const p1 = _onbInput(wrap, 'Password (10+ characters)', 'password', { autocomplete: 'new-password' });
+  const hint = _onbText(wrap, '', 'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin:6px 0 0;min-height:16px;');
+  const p2 = _onbInput(wrap, 'Confirm password', 'password', { autocomplete: 'new-password' });
+  _onbText(wrap, _PROFILE_WARNING, _ONB.WARN);
+  const err = _onbText(wrap, '', _ONB.ERR);
+  p1.addEventListener('input', () => { hint.textContent = _strengthHint(p1.value); });
+  _onbButton(wrap, 'Continue', _ONB.BTN, () => {
+    const problem = _passwordProblem(p1.value, username);
+    if (problem) { err.textContent = problem; return; }
+    if (p1.value !== p2.value) { err.textContent = 'Passwords do not match.'; return; }
+    const pw = p1.value; p1.value = ''; p2.value = '';
+    onNext(pw);
+  });
+  if (onBack) _onbButton(wrap, 'Back', _ONB.LINK, onBack);
+  setTimeout(() => p1.focus(), 50);
+}
+
+// Marks the device as holding a finished profile, then reloads into startup.
+async function _finishProfileOnDevice(identity, username, opts) {
+  await saveIdentity(identity);
+  _clearAccountState();
+  localStorage.setItem('ocp_backed_up', 'true');
+  if (opts && opts.enrolled) {
+    localStorage.setItem('ocp_vault_enrolled', '1');
+    if (username) localStorage.setItem('ocp_vault_username', username);
+  }
+  location.reload();
+}
+
+// ── Create a profile (Task 4) ──────────────────────────────
+function _onboardingCreate() {
+  const stepUsername = () => _usernameStep(
+    _onbShell(), 'Pick a username', 'This is your @handle. Others find and call you by it.',
+    username => stepPassword(username), () => _showOnboardingGate());
+
+  const stepPassword = username => _passwordStep(
+    _onbShell(), username, 'Choose a password',
+    password => stepWords(username, password), () => stepUsername());
+
+  // The identity exists only in this closure until the vault accepts it.
+  async function stepWords(username, password) {
+    let identity;
+    try { identity = await createIdentity(); }
+    catch (e) { toast('Could not create a profile — try again'); return stepUsername(); }
+
+    const shell = _onbShell('Your 12 words');
+    const { wrap } = shell;
+    _onbText(wrap, 'Write these 12 words down, in order, and keep them somewhere safe. They are the only way to restore this profile if you forget your password. They are shown once.');
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 16px;';
+    identity.mnemonic.split(' ').forEach((w, i) => {
+      const cell = document.createElement('div');
+      cell.style.cssText = 'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);' +
+        'border-radius:8px;padding:9px 10px;font-family:"DM Mono",monospace;font-size:14px;color:#e8f4f7;';
+      const n = document.createElement('span');
+      n.textContent = (i + 1) + '. '; n.style.color = '#667';
+      cell.appendChild(n); cell.appendChild(document.createTextNode(w));
+      grid.appendChild(cell);
+    });
+    wrap.appendChild(grid);
+    _onbButton(wrap, 'I have written them down', _ONB.BTN, () => stepVerify(identity, username, password));
+  }
+
+  function stepVerify(identity, username, password) {
+    const words = identity.mnemonic.split(' ');
+    const picks = new Set();
+    const rnd = new Uint32Array(32); crypto.getRandomValues(rnd);
+    for (let i = 0; picks.size < 3 && i < rnd.length; i++) picks.add(rnd[i] % 12);
+    const idx = [...picks].sort((a, b) => a - b);
+
+    const shell = _onbShell('Check your words', 'Type these words from your list to confirm you saved them.');
+    const { wrap } = shell;
+    const inputs = idx.map(i => _onbInput(wrap, 'Word #' + (i + 1), 'text'));
+    const err = _onbText(wrap, '', _ONB.ERR);
+    const btn = _onbButton(wrap, 'Create profile', _ONB.BTN, async () => {
+      const ok = idx.every((wi, k) => inputs[k].value.trim().toLowerCase() === words[wi]);
+      if (!ok) { err.textContent = 'Those words do not match. Check your list and try again.'; return; }
+      btn.disabled = true; btn.textContent = 'Creating profile…'; err.textContent = '';
+      try {
+        const acct = await _acct();
+        await acct.vaultCreate(identity, username, password);
+      } catch (e) {
+        // Nothing was stored locally. Discard the identity (its words are now void).
+        identity = null;
+        console.error('[PROFILE] create failed:', e && e.code);
+        return stepFailed(e, username);
+      }
+      await _finishProfileOnDevice(identity, username, { enrolled: true });
+    });
+    _onbButton(wrap, 'Back to my words', _ONB.LINK, () => {
+      const shell2 = _onbShell('Your 12 words');
+      _onbText(shell2.wrap, 'Write these 12 words down, in order.');
+      _onbText(shell2.wrap, identity.mnemonic, 'font-family:"DM Mono",monospace;font-size:15px;color:#e8f4f7;line-height:1.8;');
+      _onbButton(shell2.wrap, 'Continue', _ONB.BTN, () => stepVerify(identity, username, password));
+    });
+  }
+
+  function stepFailed(e, username) {
+    const shell = _onbShell('Profile not created');
+    _onbText(shell.wrap, _profileErrorMessage(e), _ONB.ERR);
+    _onbText(shell.wrap, 'Nothing was saved. Those 12 words are discarded — a retry generates new ones.');
+    if (e && e.code === 'username_taken') _onbButton(shell.wrap, 'Pick another username', _ONB.BTN, () => stepUsername());
+    else _onbButton(shell.wrap, 'Start over', _ONB.BTN, () => stepUsername());
+    _onbButton(shell.wrap, 'Back', _ONB.LINK, () => _showOnboardingGate());
+  }
+
+  stepUsername();
 }
 
 function _onboardingSignIn() {
