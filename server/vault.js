@@ -22,6 +22,7 @@ const path   = require('path');
 const crypto = require('crypto');
 
 const VAULT_FILE = path.join(__dirname, 'vault.json');
+const SIP_FILE   = path.join(__dirname, 'sip.json');   // ocp → {blob, updatedAt}: client-encrypted SIP credentials
 
 const ALLOWED_ORIGINS = [
   'https://opencall.space',
@@ -35,6 +36,7 @@ const OCP_RE      = /^ocp:[0-9a-f]{64}$/;
 
 const BODY_MAX   = 64 * 1024;
 const BLOB_MAX   = 32 * 1024;
+const SIP_BLOB_MAX = 4 * 1024;
 const NONCE_TTL  = 5 * 60 * 1000;
 const NONCE_CAP  = 10000;
 const LOCK_AFTER = 5;                       // consecutive fails before a lock
@@ -45,6 +47,8 @@ const HOUR       = 60 * 60 * 1000;
 
 const records = new Map();      // username → {salt, hash, blob, ocp, createdAt, updatedAt, fails, lockUntil, lockLevel}
 const nonces  = new Map();      // nonce    → {username, exp}
+const sipRecords = new Map();   // ocp      → {blob, updatedAt}
+const sipNonces  = new Map();   // nonce    → {ocp, exp}
 const ipFails = new Map();      // ip       → [timestamps of failed auth attempts]
 
 let handlesRef, ocpToHandleRef, saveHandlesRef;
@@ -90,6 +94,22 @@ function load() {
     for (const [u, r] of Object.entries(data || {})) records.set(u, r);
     console.log('[VAULT] loaded', records.size, 'profiles');
   } catch (e) { console.error('[VAULT] load failed:', e.message); }
+}
+
+function loadSip() {
+  try {
+    if (!fs.existsSync(SIP_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(SIP_FILE, 'utf8'));
+    for (const [o, r] of Object.entries(data || {})) sipRecords.set(o, r);
+    console.log('[VAULT] loaded', sipRecords.size, 'sip blobs');
+  } catch (e) { console.error('[VAULT] sip load failed:', e.message); }
+}
+
+function saveSip() {
+  const tmp = SIP_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(sipRecords)), { mode: 0o600 });
+  fs.renameSync(tmp, SIP_FILE);
+  try { fs.chmodSync(SIP_FILE, 0o600); } catch (e) {}
 }
 
 function save() {
@@ -340,7 +360,74 @@ async function reset(req, res, b) {
   return reply(req, res, 200, { ok: true });
 }
 
+// ── SIP credential sync ─────────────────────────────────────
+// The blob is encrypted client-side (key derived from the identity key); the
+// server only stores it, keyed by OCP address, and checks Ed25519 ownership.
+function sipChallenge(req, res, b) {
+  const { ocp } = b;
+  if (!isStr(ocp, 68) || !OCP_RE.test(ocp)) return reply(req, res, 400, { error: 'invalid_ocp' });
+  const now = Date.now();
+  for (const [n, v] of sipNonces) if (v.exp < now) sipNonces.delete(n);
+  if (sipNonces.size >= NONCE_CAP) sipNonces.delete(sipNonces.keys().next().value);
+  const nonce = crypto.randomBytes(24).toString('hex');
+  sipNonces.set(nonce, { ocp, exp: now + NONCE_TTL });
+  return reply(req, res, 200, { nonce });
+}
+
+// Consumes the nonce (valid or not), then checks it belongs to this ocp.
+function takeSipNonce(nonce, ocp) {
+  const n = sipNonces.get(nonce);
+  sipNonces.delete(nonce);
+  return !!n && n.ocp === ocp && n.exp >= Date.now();
+}
+
+const hasVaultFor = ocp => { for (const r of records.values()) if (r.ocp === ocp) return true; return false; };
+
+async function sipPut(req, res, b) {
+  const { ocp, nonce, sig, blob } = b;
+  const ip = clientIp(req);
+  const blocked = ipBlockedFor(ip);
+  if (blocked) return reply(req, res, 429, { error: 'rate_limited', retryAfter: blocked });
+  const fail = () => { ipFail(ip); return reply(req, res, 401, { error: 'invalid_credentials' }); };
+  if (!isStr(ocp, 68) || !OCP_RE.test(ocp) || !isStr(nonce, 64) || !isStr(sig, 200)) return fail();
+  if (typeof blob !== 'string' || !blob.length || blob.length > SIP_BLOB_MAX) return reply(req, res, 400, { error: 'invalid_blob' });
+
+  const nonceOk = takeSipNonce(nonce, ocp);
+  if (!nonceOk || !hasVaultFor(ocp)) return fail();
+  const digest = crypto.createHash('sha256').update(blob).digest('hex');
+  if (!(await verifyOcpSig(ocp, 'vault-sip-put:' + ocp + ':' + nonce + ':' + digest, sig))) return fail();
+
+  const prev = sipRecords.get(ocp);
+  sipRecords.set(ocp, { blob, updatedAt: Date.now() });
+  try { saveSip(); } catch (e) {
+    if (prev) sipRecords.set(ocp, prev); else sipRecords.delete(ocp);
+    console.error('[VAULT] save failed on sip-put:', e.message);
+    return reply(req, res, 500, { error: 'server_error' });
+  }
+  console.log('[VAULT] sip blob stored', ocp.slice(0, 12));
+  return reply(req, res, 200, { ok: true });
+}
+
+async function sipGet(req, res, b) {
+  const { ocp, nonce, sig } = b;
+  const ip = clientIp(req);
+  const blocked = ipBlockedFor(ip);
+  if (blocked) return reply(req, res, 429, { error: 'rate_limited', retryAfter: blocked });
+  const fail = () => { ipFail(ip); return reply(req, res, 401, { error: 'invalid_credentials' }); };
+  if (!isStr(ocp, 68) || !OCP_RE.test(ocp) || !isStr(nonce, 64) || !isStr(sig, 200)) return fail();
+
+  if (!takeSipNonce(nonce, ocp)) return fail();
+  if (!(await verifyOcpSig(ocp, 'vault-sip-get:' + ocp + ':' + nonce, sig))) return fail();
+
+  const rec = sipRecords.get(ocp);
+  if (!rec) return reply(req, res, 404, { error: 'none' });
+  return reply(req, res, 200, { blob: rec.blob, updatedAt: rec.updatedAt });
+}
+
 const ROUTES = {
+  '/vault/sip-challenge':   sipChallenge,
+  '/vault/sip-put':         sipPut,
+  '/vault/sip-get':         sipGet,
   '/vault/create':          create,
   '/vault/login':           login,
   '/vault/change':          change,
@@ -353,6 +440,7 @@ function init({ handles, ocpToHandle, saveHandles }) {
   ocpToHandleRef = ocpToHandle;
   saveHandlesRef = saveHandles;
   load();
+  loadSip();
 
   // Returns true when the request belonged to the vault (and was answered).
   function handle(req, res) {

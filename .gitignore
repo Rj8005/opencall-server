@@ -7,3 +7,5 @@ _vendor_build/
 
 server/vault.json
 server/vault.json.tmp
+server/sip.json
+server/sip.json.tmp
