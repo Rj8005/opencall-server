@@ -1598,7 +1598,35 @@ const OCP_SIP_STORAGE = 'ocp_sip_creds_v1';
 
 function _saveSipCreds(creds) {
   localStorage.setItem(OCP_SIP_STORAGE, JSON.stringify(creds));
+  _sipSyncPushLocal();
 }
+
+// ── SIP credential sync (enrolled profiles only) ──
+// Credentials are issued once, at account creation, so a second browser
+// signing in through the vault would have none. Enrolled profiles keep an
+// encrypted copy on the vault server (see ocp-account.js).
+function _sipSyncOn() {
+  try { return !APP_EMBED && !!localStorage.getItem('ocp_vault_enrolled'); } catch (e) { return false; }
+}
+async function _sipSyncIdentity() {
+  return myIdentity || await loadIdentity();
+}
+async function _sipSyncPushLocal() {
+  if (!_sipSyncOn()) return;
+  try {
+    const identity = await _sipSyncIdentity();
+    if (identity) await (await import('./ocp-account.js')).sipSyncPush(identity);
+  } catch (e) {}
+}
+async function _sipSyncPullCreds() {
+  if (!_sipSyncOn()) return null;
+  try {
+    const identity = await _sipSyncIdentity();
+    return identity ? await (await import('./ocp-account.js')).sipSyncPull(identity) : null;
+  } catch (e) { return null; }
+}
+let _sipPullTried = false;      // pull when creds are missing: once per page load
+let _sipAuthRetried = false;    // pull after a 401/403 registration failure: once per page load
 
 function _loadSipCreds() {
   const stored = localStorage.getItem(OCP_SIP_STORAGE);
@@ -8128,6 +8156,16 @@ function initSipUA() {
   if (_needsOnboarding()) return; // no identity yet — onboarding reloads into startup
   const sipCreds = _loadSipCreds();
   if (!sipCreds) {
+    // Enrolled profile on a browser that never received credentials: fetch
+    // the synced copy once, then start normally. No copy → skip, as before.
+    if (_sipSyncOn() && !_sipPullTried) {
+      _sipPullTried = true;
+      _sipSyncPullCreds().then(c => {
+        if (!c) return;
+        localStorage.setItem(OCP_SIP_STORAGE, JSON.stringify(c));
+        initSipUA();
+      });
+    }
     console.info('[IDT] No stored SIP credentials — skipping persistent registration');
     return;
   }
@@ -8152,7 +8190,21 @@ function initSipUA() {
   });
   ua.on('registrationFailed', (e) => {
     _sipRegistered = false;
-    console.error('[IDT] persistent UA registration failed:', e.cause, e.response && e.response.status_code);
+    const status = e.response && e.response.status_code;
+    console.error('[IDT] persistent UA registration failed:', e.cause, status);
+    // Credentials may have been rotated on another browser: pull once, and
+    // restart the UA only if the synced copy differs from the local one.
+    if ((status === 401 || status === 403) && _sipSyncOn() && !_sipAuthRetried) {
+      _sipAuthRetried = true;
+      _sipSyncPullCreds().then(c => {
+        const cur = _loadSipCreds();
+        if (!c || (cur && c.user === cur.user && c.password === cur.password && c.realm === cur.realm)) return;
+        localStorage.setItem(OCP_SIP_STORAGE, JSON.stringify(c));
+        try { ua.stop(); } catch (err) {}
+        if (_sipUA === ua) { _sipUA = null; _sipRegistered = false; }
+        initSipUA();
+      });
+    }
   });
   ua.on('disconnected', () => {
     _sipRegistered = false;
@@ -9874,6 +9926,7 @@ function _enrollExistingIdentity() {
       localStorage.setItem('ocp_vault_enrolled', '1');
       localStorage.setItem('ocp_vault_username', username);
       localStorage.setItem('ocp_backed_up', 'true');
+      _sipSyncPushLocal();
       close();
       _hideEnrollCard();
       toast('Profile saved — sign in from any browser as @' + username);
