@@ -1028,6 +1028,9 @@ if (APP_EMBED) {
     <div class="card" id="dialer-identity-card">
       <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
         <span>Your identity</span>
+        <span onclick="openProfileSettings()" style="font-size:10px;color:rgba(99,180,255,.55);
+          cursor:pointer;font-family:'DM Mono',monospace;margin-left:auto;margin-right:10px;
+          text-decoration:underline;text-underline-offset:2px">👤 profile</span>
         <span onclick="backupIdentity()" style="font-size:10px;color:rgba(99,180,255,.55);
           cursor:pointer;font-family:'DM Mono',monospace;
           text-decoration:underline;text-underline-offset:2px">🔐 back up</span>
@@ -5129,6 +5132,7 @@ getOrCreateIdentity().then(async id => {
     if (reg)    reg.textContent    = id.ocp_address;
     if (dialer) dialer.textContent = id.ocp_address;
     console.log('[OCP] Ready ✓ Identity:', id.ocp_address);
+    _maybeShowEnrollCard();
   }
   initDHT().then(() => {
     if (dhtReady && myIdentity) {
@@ -9841,6 +9845,116 @@ async function _restoreFromPhraseAndReload() {
   } catch (e) {
     toast('Could not restore — try again');
   }
+}
+
+// ── Existing identities (Task 6) ───────────────────────────
+// Shown over the app (dismissible), not as the gate. Same steps 1–2 as create,
+// but it uses the identity already on this device — no new words.
+function _enrollExistingIdentity() {
+  loadIdentity().then(identity => {
+    if (!identity) return;
+    const close = () => { const o = document.getElementById('onb-gate'); if (o) o.remove(); };
+    const stepUsername = () => {
+      const shell = _onbShell();
+      _usernameStep(shell, 'Pick a username', 'Open this profile from any browser with a username and password.',
+        username => stepPassword(username), close);
+    };
+    const stepPassword = username => _passwordStep(_onbShell(), username, 'Choose a password', async password => {
+      _onbShell('Saving…');
+      try {
+        const acct = await _acct();
+        await acct.vaultCreate(identity, username, password);
+      } catch (e) {
+        const s = _onbShell('Could not save');
+        _onbText(s.wrap, _profileErrorMessage(e), _ONB.ERR);
+        _onbButton(s.wrap, e && e.code === 'username_taken' ? 'Pick another username' : 'Try again', _ONB.BTN, stepUsername);
+        _onbButton(s.wrap, 'Close', _ONB.LINK, close);
+        return;
+      }
+      localStorage.setItem('ocp_vault_enrolled', '1');
+      localStorage.setItem('ocp_vault_username', username);
+      localStorage.setItem('ocp_backed_up', 'true');
+      close();
+      _hideEnrollCard();
+      toast('Profile saved — sign in from any browser as @' + username);
+    }, stepUsername);
+    stepUsername();
+  });
+}
+
+function _hideEnrollCard() {
+  const c = document.getElementById('enroll-card');
+  if (c) c.remove();
+}
+
+function _maybeShowEnrollCard() {
+  if (APP_EMBED || _needsOnboarding()) return;
+  try {
+    if (localStorage.getItem('ocp_vault_enrolled') || localStorage.getItem('ocp_enroll_dismissed')) return;
+  } catch (e) { return; }
+  if (document.getElementById('enroll-card')) return;
+  const anchor = document.getElementById('dialer-identity-card');
+  if (!anchor || !anchor.parentNode) return;
+  const card = document.createElement('div');
+  card.id = 'enroll-card';
+  card.style.cssText = 'margin:0 0 10px;background:rgba(200,245,90,.07);border:1px solid rgba(200,245,90,.22);' +
+    'border-radius:12px;padding:12px 14px;';
+  const msg = document.createElement('div');
+  msg.textContent = 'Open this profile from any browser: set a username and password';
+  msg.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#c8dff5;line-height:1.5;margin-bottom:10px;';
+  card.appendChild(msg);
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:10px;';
+  const set = document.createElement('button');
+  set.type = 'button'; set.textContent = 'Set up';
+  set.style.cssText = 'flex:1;padding:10px;background:#c8f55a;color:#0a1a05;border:0;border-radius:10px;font-weight:700;cursor:pointer;';
+  set.onclick = () => _enrollExistingIdentity();
+  const later = document.createElement('button');
+  later.type = 'button'; later.textContent = 'Not now';
+  later.style.cssText = 'padding:10px 14px;background:transparent;color:#8aabb8;border:1px solid rgba(255,255,255,.12);border-radius:10px;cursor:pointer;';
+  later.onclick = () => { try { localStorage.setItem('ocp_enroll_dismissed', '1'); } catch (e) {} card.remove(); };
+  row.appendChild(set); row.appendChild(later); card.appendChild(row);
+  anchor.parentNode.insertBefore(card, anchor);
+}
+
+// Settings → Profile: enroll if not enrolled, otherwise change password.
+function openProfileSettings() {
+  if (_needsOnboarding()) return _showOnboardingGate();
+  if (!localStorage.getItem('ocp_vault_enrolled')) return _enrollExistingIdentity();
+  const shell = _onbShell('Change password');
+  const { wrap } = shell;
+  const close = () => shell.close();
+  _onbText(wrap, 'Changing your password re-encrypts your profile. Your 12 words stay the same.');
+  const u = _onbInput(wrap, 'username', 'text', { autocomplete: 'username' });
+  u.value = localStorage.getItem('ocp_vault_username') || '';
+  const oldP = _onbInput(wrap, 'Current password', 'password', { autocomplete: 'current-password' });
+  const n1 = _onbInput(wrap, 'New password (10+ characters)', 'password', { autocomplete: 'new-password' });
+  const hint = _onbText(wrap, '', 'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;margin:6px 0 0;min-height:16px;');
+  const n2 = _onbInput(wrap, 'Confirm new password', 'password', { autocomplete: 'new-password' });
+  const err = _onbText(wrap, '', _ONB.ERR);
+  n1.addEventListener('input', () => { hint.textContent = _strengthHint(n1.value); });
+  const go = _onbButton(wrap, 'Change password', _ONB.BTN, async () => {
+    const name = normalizeUsernameLocal(u.value);
+    if (!name || !oldP.value) { err.textContent = 'Enter your username and current password.'; return; }
+    const problem = _passwordProblem(n1.value, name);
+    if (problem) { err.textContent = problem; return; }
+    if (n1.value !== n2.value) { err.textContent = 'New passwords do not match.'; return; }
+    go.disabled = true; go.textContent = 'Changing…'; err.textContent = '';
+    try {
+      const identity = await loadIdentity();
+      const acct = await _acct();
+      await acct.vaultChange(identity, name, oldP.value, n1.value);
+      localStorage.setItem('ocp_vault_username', name);
+      close();
+      toast('Password changed');
+    } catch (e) {
+      go.disabled = false; go.textContent = 'Change password';
+      err.textContent = e && (e.status === 429 || e.code === 'network') ? _profileErrorMessage(e)
+        : e && e.status === 401 ? 'Wrong username or current password.'
+        : _profileErrorMessage(e);
+    }
+  });
+  _onbButton(wrap, 'Cancel', _ONB.LINK, close);
 }
 
 function initFlow() {
