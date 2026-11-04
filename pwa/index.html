@@ -9730,12 +9730,104 @@ function _onboardingCreate() {
   stepUsername();
 }
 
+// ── Sign in (Task 5) ───────────────────────────────────────
 function _onboardingSignIn() {
-  const { wrap } = _onbShell('Restore your profile');
+  const shell = _onbShell('Sign in', 'Use your username and password.');
+  const { wrap } = shell;
+  const u = _onbInput(wrap, 'username', 'text', { autocomplete: 'username' });
+  const p = _onbInput(wrap, 'Password', 'password', { autocomplete: 'current-password' });
+  const err = _onbText(wrap, '', _ONB.ERR);
+  const go = _onbButton(wrap, 'Sign in', _ONB.BTN, async () => {
+    const name = normalizeUsernameLocal(u.value);
+    if (!name || !p.value) { err.textContent = 'Enter your username and password.'; return; }
+    go.disabled = true; go.textContent = 'Signing in…'; err.textContent = '';
+    try {
+      const acct = await _acct();
+      const { identity, username } = await acct.vaultLogin(name, p.value);
+      p.value = '';
+      await _finishProfileOnDevice(identity, username, { enrolled: true });
+    } catch (e) {
+      go.disabled = false; go.textContent = 'Sign in';
+      err.textContent = e && e.status === 429 ? _profileErrorMessage(e)
+        : e && e.code === 'network' ? _profileErrorMessage(e)
+        : 'Wrong username or password.';
+    }
+  });
+  _onbButton(wrap, 'Forgot password', _ONB.BTN2, () => _forgotPassword());
+  _onbButton(wrap, 'Other ways', _ONB.BTN2, () => _otherWays());
+  _onbButton(wrap, 'Back', _ONB.LINK, () => _showOnboardingGate());
+  setTimeout(() => u.focus(), 50);
+}
+
+// Existing restore paths, unchanged: 12 words, backup file, Google vault.
+function _otherWays() {
+  const { wrap } = _onbShell('Other ways to restore');
   _onbButton(wrap, 'Restore from 12 words', _ONB.BTN, () => _restoreFromPhraseAndReload());
   _onbButton(wrap, 'Restore from backup file', _ONB.BTN2, () => importIdentity());
   _onbButton(wrap, 'Restore with Google', _ONB.BTN2, () => _restoreIdentityWithGoogle());
-  _onbButton(wrap, 'Back', _ONB.LINK, () => _showOnboardingGate());
+  _onbButton(wrap, 'Back', _ONB.LINK, () => _onboardingSignIn());
+}
+
+// Decrypts an encrypted backup file into an identity without storing it.
+function _identityFromBackupFile() {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.json';
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if (!file) return reject(new Error('cancelled'));
+      try {
+        const backup = JSON.parse(await file.text());
+        const passphrase = prompt('Enter your backup passphrase:');
+        if (!passphrase) return reject(new Error('cancelled'));
+        resolve(await decryptIdentity(backup, passphrase));
+      } catch (e) { reject(e); }
+    };
+    input.click();
+  });
+}
+
+// Forgot password: prove the identity (12 words or backup file), then set a
+// new password through /vault/reset-challenge + /vault/reset.
+function _forgotPassword() {
+  const shell = _onbShell('Reset your password',
+    'Enter your username, then restore your profile with your 12 words or a backup file.');
+  const { wrap } = shell;
+  const u = _onbInput(wrap, 'username', 'text', { autocomplete: 'username' });
+  const err = _onbText(wrap, '', _ONB.ERR);
+  const need = () => {
+    const name = normalizeUsernameLocal(u.value);
+    if (!name) err.textContent = 'Enter your username first.';
+    return name;
+  };
+  const proceed = async (getIdentity) => {
+    const name = need(); if (!name) return;
+    let identity;
+    try { identity = await getIdentity(); }
+    catch (e) { if (!e || e.message !== 'cancelled') err.textContent = 'Could not read that recovery. Try again.'; return; }
+    _forgotNewPassword(identity, name);
+  };
+  _onbButton(wrap, 'Restore with 12 words', _ONB.BTN, () => proceed(() => _runWalletOnboarding('restore')));
+  _onbButton(wrap, 'Restore with backup file', _ONB.BTN2, () => proceed(_identityFromBackupFile));
+  _onbButton(wrap, 'Back', _ONB.LINK, () => _onboardingSignIn());
+}
+
+function _forgotNewPassword(identity, username) {
+  _passwordStep(_onbShell(), username, 'Set a new password', async password => {
+    const shell = _onbShell('Resetting…');
+    try {
+      const acct = await _acct();
+      await acct.vaultReset(identity, username, password);
+    } catch (e) {
+      const s = _onbShell('Could not reset');
+      _onbText(s.wrap, e && e.status === 401
+        ? 'That recovery does not match this username.'
+        : _profileErrorMessage(e), _ONB.ERR);
+      _onbButton(s.wrap, 'Back', _ONB.BTN, () => _forgotPassword());
+      return;
+    }
+    await _finishProfileOnDevice(identity, username, { enrolled: true });
+  }, () => _forgotPassword());
 }
 
 async function _restoreFromPhraseAndReload() {
