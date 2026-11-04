@@ -628,7 +628,10 @@ function generateAnswerLink(callId, fromName, fromNumber) {
 // ─────────────────────────────────────────────────────────────
 //  HTTP server — health check + stats endpoint
 // ─────────────────────────────────────────────────────────────
+const vault = require('./vault').init({ handles, ocpToHandle, saveHandles });
+
 const server = http.createServer((req, res) => {
+  if (vault.handle(req, res)) return;
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
 

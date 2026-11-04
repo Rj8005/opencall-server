@@ -4,3 +4,6 @@ node_modules/
 .env
 .DS_Store
 _vendor_build/
+
+server/vault.json
+server/vault.json.tmp
