@@ -1028,6 +1028,10 @@ if (APP_EMBED) {
     <div class="card" id="dialer-identity-card">
       <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
         <span>Your identity</span>
+        <span onclick="openCallLink()" style="font-size:10px;color:rgba(99,180,255,.55);
+          cursor:pointer;font-family:'DM Mono',monospace;margin-left:auto;margin-right:10px;
+          text-decoration:underline;text-underline-offset:2px">🔗 call link<span id="link-badge" style="display:none;margin-left:5px;
+          padding:0 6px;border-radius:9px;background:#f87171;color:#1a0505;font-size:10px;font-weight:700;text-decoration:none"></span></span>
         <span onclick="openProfileSettings()" style="font-size:10px;color:rgba(99,180,255,.55);
           cursor:pointer;font-family:'DM Mono',monospace;margin-left:auto;margin-right:10px;
           text-decoration:underline;text-underline-offset:2px">👤 profile</span>
@@ -1557,6 +1561,7 @@ document.addEventListener('visibilitychange', async () => {
     if (_sipUA && !_sipRegistered) {
       _sipUA.register();
     }
+    _refreshLinkInbox();
   }
 });
 
@@ -5161,6 +5166,8 @@ getOrCreateIdentity().then(async id => {
     if (dialer) dialer.textContent = id.ocp_address;
     console.log('[OCP] Ready ✓ Identity:', id.ocp_address);
     _maybeShowEnrollCard();
+    _refreshLinkInbox();
+    if (new URLSearchParams(location.search).get('inbox') === '1') openCallLink();
   }
   initDHT().then(() => {
     if (dhtReady && myIdentity) {
@@ -5976,8 +5983,10 @@ async function onMessage(msg) {
       stopRingback();
       setConnectionStatus('calling');
       document.getElementById('call-status-detail').textContent = 'End-to-end encrypted';
-      document.getElementById('caller-name-display').textContent = callWith;
-      document.getElementById('caller-initial').textContent = (callWith || '?')[0].toUpperCase();
+      // Guest callers are registered as 'link:<id>' — show their name instead.
+      const _shownName = (pendingCall && pendingCall.guest) ? (pendingCall.fromName || 'Guest') : callWith;
+      document.getElementById('caller-name-display').textContent = _shownName;
+      document.getElementById('caller-initial').textContent = (_shownName || '?')[0].toUpperCase();
       document.getElementById('call-route-info').textContent = callMode === 'relay' ? 'via relay' : 'via OCP network';
       document.getElementById('caller-avatar').classList.remove('ringing');
       showActiveCallOverlay();
@@ -5991,7 +6000,8 @@ async function onMessage(msg) {
       callWith    = msg.from;
       callMode    = 'direct';
       _incomingCallType = 'ocp';
-      showIncomingOverlay(msg.fromName || 'Unknown', msg.from);
+      if (msg.guest) _showGuestIncoming(msg);
+      else showIncomingOverlay(msg.fromName || 'Unknown', msg.from);
       startRingtone();
       break;
 
@@ -9216,6 +9226,8 @@ if ('serviceWorker' in navigator) {
 
   navigator.serviceWorker.addEventListener('message', async (event) => {
     const { type, action, callData } = event.data;
+    if (type === 'open_inbox') { openCallLink(); return; }
+    if (type === 'callback_request') { _refreshLinkInbox(); return; }
     if (type === 'wake_sip') {
       // Pushed here by sw.js ahead of an inbound PSTN call — re-register
       // now rather than waiting for whatever triggers this normally, so the
@@ -9424,6 +9436,8 @@ function saveContacts() {
 }
 function saveContact({ ocp, name, number, direction, durationSec }) {
   if (!ocp && !number) return;
+  // Call-link guests have no identity of their own: never save them as contacts.
+  if (String(number || '').startsWith('link:') || String(ocp || '').startsWith('link:')) return;
   const idx = ocp
     ? contacts.findIndex(c => c.ocp === ocp)
     : contacts.findIndex(c => !c.ocp && c.number === number);
@@ -10010,6 +10024,315 @@ function openProfileSettings() {
   _onbButton(wrap, 'Cancel', _ONB.LINK, close);
 }
 
+// ── Call link (owner side) ─────────────────────────────────
+// Guests ring this profile from /u/<username>. Everything the guest typed
+// (name, reason, contact, message) is shown with textContent only.
+
+async function _linkPost(path, body) {
+  const res = await fetch(_pushServerBase() + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  if (!res.ok) {
+    const err = new Error((data && data.error) || ('HTTP ' + res.status));
+    err.status = res.status; err.code = data && data.error;
+    throw err;
+  }
+  return data;
+}
+
+async function _sha256Hex(text) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return Array.from(d).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// owner-challenge → sign → POST. textFor(ocp, nonce) builds the signed string.
+async function _linkSigned(identity, path, textFor, extra) {
+  const ocp = identity.ocp_address;
+  const { nonce } = await _linkPost('/link/owner-challenge', { ocp });
+  const { signRaw } = await import('./ocp-identity.js');
+  const sig = await signRaw(identity, await textFor(ocp, nonce));
+  return _linkPost(path, { ocp, nonce, sig, ...(extra || {}) });
+}
+const _linkInbox = id => _linkSigned(id, '/link/inbox', (o, n) => 'link-inbox:' + o + ':' + n);
+const _linkSaveSettings = (id, settings) => _linkSigned(id, '/link/settings',
+  async (o, n) => 'link-settings:' + o + ':' + n + ':' + await _sha256Hex(JSON.stringify(settings)), { settings });
+const _linkAck = (id, ids) => _linkSigned(id, '/link/ack',
+  async (o, n) => 'link-ack:' + o + ':' + n + ':' + await _sha256Hex(ids.join(',')), { ids });
+const _linkBlock = (id, callId) => _linkSigned(id, '/link/block',
+  (o, n) => 'link-block:' + o + ':' + n + ':' + callId, { callId });
+
+function _linkEnrolled() {
+  try { return !APP_EMBED && !!localStorage.getItem('ocp_vault_enrolled'); } catch (e) { return false; }
+}
+
+// Unread badge on the "call link" entry.
+function _setLinkBadge(n) {
+  const b = document.getElementById('link-badge');
+  if (!b) return;
+  b.textContent = n > 99 ? '99+' : String(n);
+  b.style.display = n > 0 ? 'inline-block' : 'none';
+}
+async function _refreshLinkInbox() {
+  if (!_linkEnrolled()) return null;
+  try {
+    const identity = myIdentity || await loadIdentity();
+    if (!identity) return null;
+    const data = await _linkInbox(identity);
+    _setLinkBadge(data.callbacks.filter(c => !c.read).length + data.missed.filter(m => !m.read).length);
+    return data;
+  } catch (e) { return null; }
+}
+
+// ── guest incoming call ────────────────────────────────────
+function _guestExtra() {
+  let box = document.getElementById('inc-guest-extra');
+  if (box) return box;
+  box = document.createElement('div');
+  box.id = 'inc-guest-extra';
+  box.style.cssText = 'display:none;margin:14px auto 0;text-align:center;';
+  const tag = document.createElement('div');
+  tag.id = 'inc-guest-tag';
+  tag.textContent = 'Guest via call link';
+  tag.style.cssText = 'display:inline-block;padding:4px 12px;border-radius:999px;font-size:11px;' +
+    'letter-spacing:.4px;color:#c8f55a;border:1px solid rgba(200,245,90,.4);background:rgba(200,245,90,.08);';
+  const reason = document.createElement('div');
+  reason.id = 'inc-guest-reason';
+  reason.style.cssText = 'font-size:13px;color:#c8dff5;margin-top:10px;word-break:break-word;';
+  const blk = document.createElement('button');
+  blk.id = 'btn-block-inc'; blk.type = 'button'; blk.textContent = 'Block this caller';
+  blk.style.cssText = 'margin-top:18px;background:transparent;border:1px solid rgba(248,113,113,.5);' +
+    'color:#f87171;border-radius:10px;padding:9px 16px;font-size:13px;cursor:pointer;';
+  blk.onclick = () => _blockGuestCaller();
+  box.appendChild(tag); box.appendChild(reason); box.appendChild(blk);
+  const num = document.getElementById('inc-num');
+  num.parentNode.insertBefore(box, num.nextSibling);
+  return box;
+}
+
+function _showGuestIncoming(msg) {
+  showIncomingOverlay(msg.fromName || 'Guest', 'Guest caller');
+  const box = _guestExtra();
+  document.getElementById('inc-guest-reason').textContent = msg.reason ? 'Reason: ' + msg.reason : '';
+  box.style.display = 'block';
+}
+
+async function _blockGuestCaller() {
+  const call = pendingCall;
+  if (!call || !call.guest) return;
+  await doDecline();
+  try {
+    const identity = myIdentity || await loadIdentity();
+    await _linkBlock(identity, call.callId);
+    toast('Caller blocked');
+  } catch (e) { toast('Could not block this caller'); }
+}
+
+// ── Call link screen ───────────────────────────────────────
+function _lkEl(tag, text, css) {
+  const el = document.createElement(tag);
+  if (text != null) el.textContent = text;
+  if (css) el.style.cssText = css;
+  return el;
+}
+const _LK = {
+  SEC:  'background:rgba(13,31,53,.6);border:1px solid rgba(99,180,255,.14);border-radius:14px;padding:16px;margin:0 0 14px;',
+  H:    'font-family:"Syne",sans-serif;font-size:14px;font-weight:700;color:#63b4ff;margin:0 0 10px;',
+  T:    'font-family:"DM Mono",monospace;font-size:13px;color:#c8dff5;line-height:1.5;word-break:break-word;',
+  M:    'font-family:"DM Mono",monospace;font-size:12px;color:#8aabb8;',
+  ROW:  'display:flex;align-items:center;gap:10px;margin:8px 0;font-family:"DM Mono",monospace;font-size:13px;color:#c8dff5;',
+  SM:   'padding:8px 12px;background:transparent;color:#c8dff5;border:1px solid rgba(255,255,255,.18);border-radius:8px;font-size:12px;cursor:pointer;font-family:"DM Mono",monospace;'
+};
+
+function _lkCheck(parent, label, checked) {
+  const row = _lkEl('label', null, _LK.ROW);
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!checked;
+  row.appendChild(cb); row.appendChild(document.createTextNode(label));
+  parent.appendChild(row);
+  return cb;
+}
+
+async function _copyText(text, okMsg) {
+  try { await navigator.clipboard.writeText(text); toast(okMsg || 'Copied'); }
+  catch (e) { toast('Copy failed — select and copy manually'); }
+}
+
+async function _renderQr(box, url) {
+  try {
+    const { encode } = await import('./lib/qr.js');
+    const m = encode(url);
+    const n = m.length, scale = 6, quiet = 4;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = (n + quiet * 2) * scale;
+    cv.style.cssText = 'width:200px;height:200px;image-rendering:pixelated;border-radius:8px;background:#fff;';
+    cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', 'QR code for your call link');
+    const g = cv.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    g.fillStyle = '#000';
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (m[y][x]) g.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+    box.appendChild(cv);
+  } catch (e) { /* QR encoder not available — the link itself is still shown */ }
+}
+
+function _fmtWhen(ts) {
+  try { return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+  catch (e) { return ''; }
+}
+
+async function openCallLink() {
+  if (_needsOnboarding()) return _showOnboardingGate();
+  if (!_linkEnrolled()) {
+    toast('Set up a username and password to get a call link');
+    return _enrollExistingIdentity();
+  }
+  const identity = myIdentity || await loadIdentity();
+  const shell = _onbShell('Call link');
+  const wrap = shell.wrap;
+  const status = _onbText(wrap, 'Loading…');
+
+  let data;
+  try { data = await _linkInbox(identity); }
+  catch (e) {
+    status.textContent = e && e.status === 401 ? 'Could not verify your identity.' : 'Could not load your call link. Check your connection.';
+    _onbButton(wrap, 'Close', _ONB.BTN2, shell.close);
+    return;
+  }
+  status.remove();
+  const username = data.username || localStorage.getItem('ocp_vault_username') || '';
+  const s = data.settings || {};
+  const url = location.origin + '/u/' + username;
+
+  // Link: copy / share / QR
+  const secLink = _lkEl('div', null, _LK.SEC); wrap.appendChild(secLink);
+  secLink.appendChild(_lkEl('div', 'Your link', _LK.H));
+  secLink.appendChild(_lkEl('div', url, _LK.T + 'color:#c8f55a;'));
+  const row = _lkEl('div', null, 'display:flex;gap:8px;margin-top:10px;'); secLink.appendChild(row);
+  _onbButton(row, 'Copy', _LK.SM, () => _copyText(url, 'Link copied'));
+  if (navigator.share) _onbButton(row, 'Share', _LK.SM, () => navigator.share({ title: 'Call me on OpenCall', url }).catch(() => {}));
+  const qrBox = _lkEl('div', null, 'margin-top:12px;'); secLink.appendChild(qrBox);
+  _renderQr(qrBox, url);
+
+  // Inbox
+  const secInbox = _lkEl('div', null, _LK.SEC); wrap.appendChild(secInbox);
+  secInbox.appendChild(_lkEl('div', 'Inbox', _LK.H));
+  const unreadIds = [];
+  const addItem = (title, lines, when, unread, actions) => {
+    const it = _lkEl('div', null, 'border-top:1px solid rgba(255,255,255,.07);padding:10px 0;');
+    it.appendChild(_lkEl('div', (unread ? '● ' : '') + title, _LK.T + 'font-weight:700;'));
+    lines.filter(Boolean).forEach(l => it.appendChild(_lkEl('div', l, _LK.T)));
+    it.appendChild(_lkEl('div', _fmtWhen(when), _LK.M));
+    if (actions) { const a = _lkEl('div', null, 'display:flex;gap:8px;margin-top:6px;'); actions(a); it.appendChild(a); }
+    secInbox.appendChild(it);
+  };
+  data.callbacks.forEach(c => {
+    if (!c.read) unreadIds.push(c.id);
+    addItem(c.name + ' asked for a callback', [c.contact, c.message], c.at, !c.read);
+  });
+  data.missed.forEach(m => {
+    if (!m.read) unreadIds.push(m.id);
+    addItem('Missed call from ' + m.name, [m.reason ? 'Reason: ' + m.reason : ''], m.at, !m.read, a => {
+      _onbButton(a, 'Block', _LK.SM, async function () {
+        this.disabled = true;
+        try { await _linkBlock(identity, m.callId); toast('Caller blocked'); this.textContent = 'Blocked'; }
+        catch (e) { this.disabled = false; toast('Could not block (the call is too old)'); }
+      });
+    });
+  });
+  if (!data.callbacks.length && !data.missed.length) secInbox.appendChild(_lkEl('div', 'Nothing yet.', _LK.M));
+  if (unreadIds.length) {
+    _onbButton(secInbox, 'Mark all read', _LK.SM + 'margin-top:10px;', async function () {
+      this.disabled = true;
+      try { await _linkAck(identity, unreadIds); _setLinkBadge(0); this.remove(); toast('Marked read'); }
+      catch (e) { this.disabled = false; toast('Could not update'); }
+    });
+  }
+
+  // Settings
+  const secSet = _lkEl('div', null, _LK.SEC); wrap.appendChild(secSet);
+  secSet.appendChild(_lkEl('div', 'Settings', _LK.H));
+  const enabled = _lkCheck(secSet, 'Link is on', s.enabled);
+  const dnd = _lkCheck(secSet, 'Do not disturb (guests can only leave a callback request)', s.dnd);
+  const needReason = _lkCheck(secSet, 'Ask guests why they are calling', s.requireReason);
+  secSet.appendChild(_lkEl('div', 'Greeting (shown on your page)', _LK.M + 'margin-top:10px;'));
+  const greeting = _onbInput(secSet, 'e.g. Hi! Ring me for anything about the project.', 'text', { maxLength: 140 });
+  greeting.value = s.greeting || '';
+
+  const hasHours = _lkCheck(secSet, 'Only take calls during set hours', !!s.hours);
+  const hoursBox = _lkEl('div', null, 'margin:6px 0 0 4px;display:' + (s.hours ? 'block' : 'none') + ';');
+  secSet.appendChild(hoursBox);
+  hasHours.onchange = () => { hoursBox.style.display = hasHours.checked ? 'block' : 'none'; };
+  const myTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const tzSel = document.createElement('select');
+  tzSel.style.cssText = _ONB.INP;
+  let zones = [];
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch (e) {}
+  const wantTz = (s.hours && s.hours.tz) || myTz;
+  if (!zones.includes(wantTz)) zones = [wantTz].concat(zones);
+  zones.forEach(z => { const o = document.createElement('option'); o.value = z; o.textContent = z; if (z === wantTz) o.selected = true; tzSel.appendChild(o); });
+  hoursBox.appendChild(tzSel);
+  const dayRow = _lkEl('div', null, 'display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;');
+  const dayBoxes = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => {
+    const lab = _lkEl('label', null, 'display:flex;align-items:center;gap:4px;font-family:"DM Mono",monospace;font-size:12px;color:#c8dff5;');
+    const cb = document.createElement('input'); cb.type = 'checkbox';
+    cb.checked = s.hours ? s.hours.days.includes(i) : (i >= 1 && i <= 5);
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(d)); dayRow.appendChild(lab);
+    return cb;
+  });
+  hoursBox.appendChild(dayRow);
+  const tRow = _lkEl('div', null, 'display:flex;gap:10px;align-items:center;');
+  const startIn = _onbInput(tRow, '', 'time'); startIn.value = (s.hours && s.hours.start) || '09:00';
+  tRow.appendChild(_lkEl('span', 'to', _LK.M));
+  const endIn = _onbInput(tRow, '', 'time'); endIn.value = (s.hours && s.hours.end) || '17:00';
+  hoursBox.appendChild(tRow);
+
+  // Block list (entries can only be removed here)
+  let keep = (s.blocklist || []).map(b => b.h);
+  secSet.appendChild(_lkEl('div', 'Blocked callers', _LK.M + 'margin-top:14px;'));
+  const blBox = _lkEl('div'); secSet.appendChild(blBox);
+  const renderBlocks = () => {
+    blBox.textContent = '';
+    const rows = (s.blocklist || []).filter(b => keep.includes(b.h));
+    if (!rows.length) blBox.appendChild(_lkEl('div', 'No one blocked.', _LK.M + 'margin:6px 0;'));
+    rows.forEach(b => {
+      const r = _lkEl('div', null, _LK.ROW);
+      r.appendChild(_lkEl('span', (b.label || 'Guest') + ' · ' + _fmtWhen(b.at), 'flex:1;'));
+      _onbButton(r, 'Remove', _LK.SM, () => { keep = keep.filter(h => h !== b.h); renderBlocks(); });
+      blBox.appendChild(r);
+    });
+  };
+  renderBlocks();
+
+  const err = _onbText(secSet, '', _ONB.ERR);
+  _onbButton(secSet, 'Save settings', _ONB.BTN, async function () {
+    const days = dayBoxes.map((cb, i) => cb.checked ? i : -1).filter(i => i >= 0);
+    if (hasHours.checked && !days.length) { err.textContent = 'Pick at least one day.'; return; }
+    const settings = {
+      enabled: enabled.checked, dnd: dnd.checked, requireReason: needReason.checked,
+      greeting: greeting.value.trim().slice(0, 140),
+      hours: hasHours.checked ? { tz: tzSel.value, days, start: startIn.value, end: endIn.value } : null,
+      blocklist: keep
+    };
+    this.disabled = true; err.textContent = '';
+    try { await _linkSaveSettings(identity, settings); toast('Saved'); }
+    catch (e) { err.textContent = e && e.code === 'invalid_settings' ? 'Those hours are not valid.' : 'Could not save. Try again.'; }
+    this.disabled = false;
+  });
+
+  // Embed snippet
+  const secEmb = _lkEl('div', null, _LK.SEC); wrap.appendChild(secEmb);
+  secEmb.appendChild(_lkEl('div', 'Add a "Call me" button to your website', _LK.H));
+  const snippet = '<script src="' + location.origin + '/embed.js" data-user="' + username + '" data-label="Call me"></scr' + 'ipt>';
+  const ta = document.createElement('textarea');
+  ta.readOnly = true; ta.value = snippet; ta.rows = 3;
+  ta.style.cssText = _ONB.INP + 'font-size:12px;resize:none;';
+  secEmb.appendChild(ta);
+  _onbButton(secEmb, 'Copy snippet', _LK.SM + 'margin-top:8px;', () => _copyText(snippet, 'Snippet copied'));
+
+  _onbButton(wrap, 'Close', _ONB.BTN2, shell.close);
+  _setLinkBadge(0 + data.callbacks.filter(c => !c.read).length + data.missed.filter(m => !m.read).length);
+}
+
 function initFlow() {
   // No identity yet: full-screen gate, nothing else starts (SIP UA, ws
   // register, push, account calls all stay idle). Finishing the gate
@@ -10095,6 +10418,8 @@ function showIncomingOverlay(name, number) {
 }
 function hideIncomingOverlay() {
   document.getElementById('overlay-incoming-call').style.display = 'none';
+  const gx = document.getElementById('inc-guest-extra');
+  if (gx) gx.style.display = 'none';
 }
 function showActiveCallOverlay() {
   document.getElementById('overlay-active-call').style.display = 'block';

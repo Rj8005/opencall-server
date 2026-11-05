@@ -1,4 +1,4 @@
-const CACHE = 'ocp-v36';
+const CACHE = 'ocp-v37';
 const ASSETS = ['/lib/jssip.min.js', '/lib/ocp-crypto.js', '/manifest.json', '/ocp-identity.js', '/ocp-account.js', '/ocp-did.js', '/ocp-vault.js', '/ocp-billing.js', '/ocp-kyc.js'];
 
 self.addEventListener('install', e => {
@@ -25,10 +25,24 @@ self.addEventListener('push', event => {
   try { data = event.data ? event.data.json() : {}; } catch (e) {}
 
   // Stale push arriving after the call already resolved — do nothing.
-  if (data.ts && (Date.now() - data.ts) > 30000) return;
+  if (data.type !== 'callback_request' && data.ts && (Date.now() - data.ts) > 30000) return;
 
   event.waitUntil((async () => {
     const wins = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+
+    // A call-link guest left a callback request: not a call, so no SIP wake
+    // and no "Incoming call" notification.
+    if (data.type === 'callback_request') {
+      wins.forEach(c => c.postMessage({ type: 'callback_request' }));
+      if (!wins.some(c => c.visibilityState === 'visible')) {
+        await self.registration.showNotification('Callback request', {
+          body: 'Someone asked you to call them back', tag: 'ocp-callback',
+          data: { url: '/?inbox=1', kind: 'callback' }
+        });
+      }
+      return;
+    }
+
     wins.forEach(c => c.postMessage({ type: 'wake_sip' }));
 
     const visible = wins.some(c => c.visibilityState === 'visible');
@@ -48,7 +62,7 @@ self.addEventListener('notificationclick', event => {
     const wins = await clients.matchAll({ type: 'window', includeUncontrolled: true });
     const existing = wins[0];
     if (existing) {
-      existing.postMessage({ type: 'wake_sip' });
+      existing.postMessage({ type: (event.notification.data && event.notification.data.kind === 'callback') ? 'open_inbox' : 'wake_sip' });
       if ('focus' in existing) await existing.focus();
     } else {
       await clients.openWindow(event.notification.data?.url || '/');
