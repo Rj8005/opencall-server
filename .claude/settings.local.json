@@ -13,7 +13,8 @@
       "Bash(ssh root@sbc.opencall.space \"cat /etc/kamailio/kamailio.cfg 2>/dev/null || echo 'NOT FOUND'\")",
       "Bash(node -e ' *)",
       "Bash(node --check sw.js)",
-      "Bash(sed -i \"s/const CACHE = 'ocp-v36'/const CACHE = 'ocp-v37'/\" sw.js)"
+      "Bash(sed -i \"s/const CACHE = 'ocp-v36'/const CACHE = 'ocp-v37'/\" sw.js)",
+      "Bash(grep -v \"^\\\\s*//\")"
     ]
   }
 }

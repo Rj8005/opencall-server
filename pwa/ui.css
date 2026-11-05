@@ -1,0 +1,152 @@
+/* ui.css — design tokens and base accessibility. Linked AFTER the inline <style>
+   in index.html, so equal-specificity rules here win. Visual only. */
+
+/* ── Tokens ─────────────────────────────────────────────────
+   Contrast (WCAG 2.x, checked with a script; see the commit message):
+   text 17.8:1 on bg, 15.5:1 on surface, 13.0:1 on surface-2
+   text-muted >= 7.0:1 on all three; accent >= 11.5:1; accent-ink on accent 14.3:1
+   info/warn/danger/success >= 6.4:1 on all three surfaces
+   border (UI boundary) 5.0 / 4.4 / 3.7 : 1 on bg / surface / surface-2 (>= 3:1)  */
+:root {
+  color-scheme: dark;
+
+  --ui-bg:        #060a10;
+  --ui-surface:   #0d1b2e;
+  --ui-surface-2: #142a45;
+  --ui-border:    #5d83ad;                      /* component boundaries, >= 3:1 */
+  --ui-divider:   rgba(124, 192, 255, .18);     /* decorative separators only */
+  --ui-text:       #e8f4ff;
+  --ui-text-muted: #9bb8d1;
+  --ui-accent:     #c8f55a;
+  --ui-accent-ink: #0a1a05;
+  --ui-info:       #7cc0ff;
+  --ui-warn:       #ffbe55;
+  --ui-danger:     #ff8a8a;
+  --ui-success:    #5fe0a8;
+
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;  --sp-4: 16px;  --sp-5: 24px;  --sp-6: 32px;
+  --r-1: 12px;  --r-2: 16px;  --r-3: 24px;
+  --fs-1: 13px; --fs-2: 14px; --fs-3: 16px;  --fs-4: 20px;  --fs-5: 28px;  --fs-6: 32px;
+
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-brand: 'Syne', system-ui, sans-serif;
+
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* Re-point the legacy variables used all over index.html at accessible values. */
+  --bg-deep:        var(--ui-bg);
+  --bg-card:        rgba(13, 27, 46, .92);
+  --bg-field:       #08121f;
+  --border:         var(--ui-divider);
+  --blue:           var(--ui-info);
+  --green:          var(--ui-success);
+  --amber:          var(--ui-warn);
+  --red:            var(--ui-danger);
+  --purple:         #b3adf5;
+  --text-primary:   var(--ui-text);
+  --text-secondary: var(--ui-text-muted);
+  --text-muted:     var(--ui-text-muted);
+}
+
+/* ── Base ───────────────────────────────────────────────── */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  font-family: var(--font-body);
+  font-size: var(--fs-3);
+  line-height: 1.45;
+  padding-left:  env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+/* DM Mono only for numerals, addresses and codes. */
+.dial-number, .identity-val, .ocp-code-val, .ocp-handle-val, .contact-sub,
+#header-user-info, #ocp-addr-dialer, #my-ocp-code { font-family: var(--font-mono); }
+.card-label, .contacts-header, .contact-empty, .sf-text, .handle-inp {
+  font-family: var(--font-body);
+}
+button, input, select, textarea { font-family: inherit; }
+
+/* numbers line up */
+.dial-number, .contact-sub, .call-timer, #header-balance-amt, .ocp-code-val,
+.key-num, input[type=tel] { font-variant-numeric: tabular-nums; }
+
+/* App container: safe-area aware, so nothing sits under a notch or home bar. */
+.app-container {
+  padding-top: var(--safe-top);
+  padding-bottom: calc(80px + var(--safe-bottom));
+}
+.status-footer { padding-bottom: calc(8px + var(--safe-bottom)); }
+
+/* Labels: sentence case, 13px / 600 (replaces tiny uppercase letter-spaced text). */
+.card-label, .contacts-header {
+  font-size: var(--fs-1);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ui-text-muted);
+}
+
+/* ── Focus ──────────────────────────────────────────────── */
+:focus-visible {
+  outline: 3px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, summary:focus-visible, [role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+/* The inputs below used `outline: none` and relied on a border colour change;
+   the ring above replaces it. */
+input[type=text]:focus-visible, input[type=tel]:focus-visible, .handle-inp:focus-visible {
+  outline: 3px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+:focus:not(:focus-visible) { outline: none; }   /* mouse/touch focus only; keyboard focus always gets the ring */
+
+/* ── Touch targets (dialer, register screen, gate) ──────── */
+#screen-dialer button, #screen-register button, #onb-gate button,
+#screen-dialer [role="button"], #screen-register [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+#screen-dialer input:not([type="checkbox"]):not([type="radio"]),
+#screen-register input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 44px;
+}
+
+/* ── Utilities ──────────────────────────────────────────── */
+.sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.skip-link {
+  position: fixed;
+  top: calc(8px + var(--safe-top)); left: 8px;
+  z-index: 100000;
+  padding: 12px 16px;
+  background: var(--ui-accent);
+  color: var(--ui-accent-ink);
+  border-radius: var(--r-1);
+  font-weight: 700;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.skip-link:focus { transform: none; }
+main:focus { outline: none; }
+
+/* ── Motion ─────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
