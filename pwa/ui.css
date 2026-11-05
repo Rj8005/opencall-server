@@ -284,3 +284,65 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .62); }
 .sheet-toast:empty { display: none; }
 
 #header-user-info { font-family: var(--font-body); }
+
+/* ═══════════════════════════════════════════════════════════
+   Dialer: display, keypad, actions
+   ═══════════════════════════════════════════════════════════ */
+.dial-display {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 96px; padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-field);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--r-2);
+  margin-bottom: var(--sp-3);
+}
+.dial-number {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; min-height: 72px;
+  font-family: var(--font-mono); font-size: var(--fs-6); font-weight: 400; letter-spacing: 1px;
+  color: var(--ui-text); text-align: center; white-space: nowrap; overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+.dial-number.is-empty {
+  font-family: var(--font-body); font-size: var(--fs-4); font-weight: 500; letter-spacing: 0;
+  color: var(--ui-text-muted);
+}
+.dial-hint { font-size: var(--fs-1); color: var(--ui-text-muted); margin-top: 0; min-height: 18px; text-align: center; }
+
+.keypad { gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.key {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-height: 64px; padding: var(--sp-2) 0;
+  background: var(--ui-surface); color: var(--ui-text);
+  border: 1px solid var(--ui-border); border-radius: var(--r-1);
+  font: inherit; cursor: pointer; user-select: none; -webkit-user-select: none;
+  touch-action: manipulation;
+  transition: background .1s, border-color .1s, transform .1s;
+}
+.key-num { font-size: 28px; font-weight: 500; line-height: 1; color: var(--ui-text); font-variant-numeric: tabular-nums; }
+.key-sub { font-size: var(--fs-1); line-height: 1; letter-spacing: 1px; color: var(--ui-text-muted); margin-top: 0; min-height: 13px; }
+.key[data-digit="*"] .key-num, .key[data-digit="#"] .key-num { font-size: 28px; }
+/* Pressed state is visible on touch and keyboard; hover is only an extra. */
+.key:active, .key.is-pressed { background: var(--ui-surface-2); border-color: var(--ui-accent); transform: scale(.97); }
+.key:hover { background: var(--ui-surface-2); }
+
+.action-row { gap: var(--sp-5); margin-bottom: var(--sp-4); align-items: flex-start; }
+.btn-aux {
+  width: 48px; height: 48px; min-width: 48px; min-height: 48px; margin-top: 12px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; position: relative;
+  background: var(--ui-surface); color: var(--ui-text);
+  border: 1px solid var(--ui-border); border-radius: 50%;
+  cursor: pointer; font-size: var(--fs-3);
+}
+.btn-aux:active { background: var(--ui-surface-2); border-color: var(--ui-accent); }
+.call-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); }
+.btn-call {
+  width: 72px; height: 72px; min-width: 72px; min-height: 72px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--ui-accent); color: var(--ui-accent-ink);
+  border: 0; border-radius: 50%; cursor: pointer;
+  box-shadow: 0 0 0 4px rgba(200, 245, 90, .18);
+}
+.btn-call:hover { background: #d6fb74; }
+.btn-call:active { transform: scale(.96); }
+.call-label { font-size: var(--fs-2); font-weight: 600; color: var(--ui-text); cursor: pointer; }

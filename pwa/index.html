@@ -1020,7 +1020,7 @@ if (APP_EMBED) {
     </header>
 
     <main id="dialer-main" tabindex="-1">
-    <input type="tel" id="inp-dial" style="display:none">
+    <input type="tel" id="inp-dial" class="sr-only" inputmode="tel" autocomplete="off" aria-label="Number to call" aria-describedby="dial-hint">
     <span style="display:none" id="lbl-mynum"></span>
     <span style="display:none" id="lbl-ocpaddr"></span>
 
@@ -1130,29 +1130,34 @@ if (APP_EMBED) {
          color:var(--amber);line-height:1.5;"></div>
 
     <div class="dial-display">
-      <div class="dial-number" id="dial-number-display">+</div>
-      <div class="dial-hint" id="dial-hint">Enter number to call</div>
+      <!-- The number shown here is a read-only mirror of #inp-dial (kept in
+           sync by syncDialDisplay); the real, labelled input is visually hidden. -->
+      <div class="dial-number is-empty" id="dial-number-display" aria-hidden="true">Enter a number</div>
+      <div class="dial-hint" id="dial-hint" role="status">Include the country code</div>
     </div>
 
-    <div class="keypad" id="keypad">
-      <div class="key" data-digit="1"><div class="key-num">1</div></div>
-      <div class="key" data-digit="2"><div class="key-num">2</div><div class="key-sub">ABC</div></div>
-      <div class="key" data-digit="3"><div class="key-num">3</div><div class="key-sub">DEF</div></div>
-      <div class="key" data-digit="4"><div class="key-num">4</div><div class="key-sub">GHI</div></div>
-      <div class="key" data-digit="5"><div class="key-num">5</div><div class="key-sub">JKL</div></div>
-      <div class="key" data-digit="6"><div class="key-num">6</div><div class="key-sub">MNO</div></div>
-      <div class="key" data-digit="7"><div class="key-num">7</div><div class="key-sub">PQRS</div></div>
-      <div class="key" data-digit="8"><div class="key-num">8</div><div class="key-sub">TUV</div></div>
-      <div class="key" data-digit="9"><div class="key-num">9</div><div class="key-sub">WXYZ</div></div>
-      <div class="key" data-digit="*"><div class="key-num" style="font-size:14px">*</div></div>
-      <div class="key" data-digit="0"><div class="key-num">0</div><div class="key-sub">+</div></div>
-      <div class="key" data-digit="#"><div class="key-num" style="font-size:14px">#</div></div>
+    <div class="keypad" id="keypad" role="group" aria-label="Keypad">
+      <button type="button" class="key" data-digit="1" aria-label="1"><span class="key-num">1</span></button>
+      <button type="button" class="key" data-digit="2" aria-label="2"><span class="key-num">2</span><span class="key-sub" aria-hidden="true">ABC</span></button>
+      <button type="button" class="key" data-digit="3" aria-label="3"><span class="key-num">3</span><span class="key-sub" aria-hidden="true">DEF</span></button>
+      <button type="button" class="key" data-digit="4" aria-label="4"><span class="key-num">4</span><span class="key-sub" aria-hidden="true">GHI</span></button>
+      <button type="button" class="key" data-digit="5" aria-label="5"><span class="key-num">5</span><span class="key-sub" aria-hidden="true">JKL</span></button>
+      <button type="button" class="key" data-digit="6" aria-label="6"><span class="key-num">6</span><span class="key-sub" aria-hidden="true">MNO</span></button>
+      <button type="button" class="key" data-digit="7" aria-label="7"><span class="key-num">7</span><span class="key-sub" aria-hidden="true">PQRS</span></button>
+      <button type="button" class="key" data-digit="8" aria-label="8"><span class="key-num">8</span><span class="key-sub" aria-hidden="true">TUV</span></button>
+      <button type="button" class="key" data-digit="9" aria-label="9"><span class="key-num">9</span><span class="key-sub" aria-hidden="true">WXYZ</span></button>
+      <button type="button" class="key" data-digit="*" aria-label="star"><span class="key-num">*</span></button>
+      <button type="button" class="key" data-digit="0" aria-label="0"><span class="key-num">0</span><span class="key-sub" aria-hidden="true">+</span></button>
+      <button type="button" class="key" data-digit="#" aria-label="pound"><span class="key-num">#</span></button>
     </div>
 
     <div class="action-row">
-      <div class="btn-aux" id="btn-backspace" title="Backspace">&#9003;</div>
-      <div class="btn-call" id="btn-call" title="Call">&#9742;</div>
-      <div class="btn-aux" id="btn-sms-invite" title="Send SMS invite">&#9993;</div>
+      <button type="button" class="btn-aux" id="btn-backspace" aria-label="Delete last digit"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="M17 9.5l-5 5M12 9.5l5 5"/></svg></button>
+      <div class="call-wrap">
+        <button type="button" class="btn-call" id="btn-call" aria-label="Call"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg></button>
+        <label class="call-label" for="btn-call">Call</label>
+      </div>
+      <button type="button" class="btn-aux" id="btn-sms-invite" aria-label="Send SMS invite"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.5-4.6A8 8 0 1 1 21 12z"/></svg></button>
     </div>
 
     <!-- Push opt-in nudge — shown after first registration if permission not yet granted.
@@ -5714,7 +5719,14 @@ console.log('[WRTC] RTC_CFG iceServers:', JSON.stringify(RTC_CFG.iceServers),
 function syncDialDisplay() {
   const inp = document.getElementById('inp-dial');
   const display = document.getElementById('dial-number-display');
-  if (display) display.textContent = (inp && inp.value) ? inp.value : '+';
+  if (!display) return;
+  const v = (inp && inp.value) ? inp.value : '';
+  const empty = !v || v === '+';
+  display.classList.toggle('is-empty', empty);
+  display.textContent = empty ? 'Enter a number' : v;
+  // Shrink to fit: 32px down to 18px as the number gets long (monospace, ~0.62em per glyph).
+  const room = Math.max(120, (display.clientWidth || 280) - 8);
+  display.style.fontSize = empty ? '' : Math.max(18, Math.min(32, Math.floor(room / (v.length * 0.62)))) + 'px';
 }
 function appendDigit(d) {
   pressKey(d);
@@ -5726,7 +5738,7 @@ function showDialHint(msg, isError) {
   el.textContent = msg;
   el.style.color = isError ? '#ff6b6b' : '';
   if (isError) setTimeout(() => {
-    el.textContent = 'Enter number to call';
+    el.textContent = 'Include the country code';
     el.style.color = '';
   }, 3000);
 }
@@ -9236,8 +9248,17 @@ async function wsSend(obj) {
 // ── keyboard ───────────────────────────────────────────────
 document.addEventListener('keydown', e => {
   if (document.getElementById('screen-dialer').style.display === 'none') return;
-  if ('0123456789*#'.includes(e.key)) pressKey(e.key);
-  if (e.key==='Backspace') doDelete();
+  // Let a focused button/link/field (or an open dialog) handle its own keys:
+  // otherwise Enter on a keypad button would press the key AND start a call.
+  const t = e.target;
+  if (t && t.closest && t.closest('input, textarea, select, button, a, [contenteditable="true"], dialog[open]')) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key.length === 1 && '0123456789*#'.includes(e.key)) { pressKey(e.key); syncDialDisplay(); }
+  else if (e.key === '+') {
+    const inp = document.getElementById('inp-dial');
+    if (inp && !inp.value) { inp.value = '+'; syncDialDisplay(); }
+  }
+  if (e.key==='Backspace') { doDelete(); syncDialDisplay(); }
   if (e.key==='Enter') doCall();
 });
 
@@ -11574,6 +11595,25 @@ loadThreadsStore();
       if (dlg.open && st) { st.textContent = msg; clearTimeout(tm); tm = setTimeout(function () { st.textContent = ''; }, 3200); }
     };
   }
+})();
+</script>
+<script>
+// Dial input (visual/keyboard wiring only): typing or pasting into the real,
+// visually hidden #inp-dial is normalised the same way pressKey() builds the
+// number (leading "+", digits and * # only, max 16), then mirrored to the display.
+(function () {
+  var inp = document.getElementById('inp-dial');
+  if (!inp) return;
+  inp.addEventListener('input', function () {
+    var v = inp.value.replace(/[\s\-().]/g, '').replace(/[^0-9+*#]/g, '').replace(/\+/g, '');
+    v = v ? ('+' + v).slice(0, 16) : '';
+    if (v !== inp.value) inp.value = v;
+    syncDialDisplay();
+    if (!v || v === '+') { var cs = document.getElementById('country-selector'); if (cs) cs.remove(); window._selectedCountry = null; }
+    else if (typeof showCountrySelector === 'function') showCountrySelector(v);
+  });
+  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doCall(); } });
+  window.addEventListener('resize', syncDialDisplay);
 })();
 </script>
 </body>
