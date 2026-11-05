@@ -9,3 +9,5 @@ server/vault.json
 server/vault.json.tmp
 server/sip.json
 server/sip.json.tmp
+server/calllink.json
+server/calllink.json.tmp

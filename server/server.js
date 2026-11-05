@@ -629,11 +629,13 @@ function generateAnswerLink(callId, fromName, fromNumber) {
 //  HTTP server — health check + stats endpoint
 // ─────────────────────────────────────────────────────────────
 const vault = require('./vault').init({ handles, ocpToHandle, saveHandles });
+const calllink = require('./calllink').init({ handles, ocpRegistry, registry, metadata, callLog, send, sendPushNotification, log, pushSubscriptions: (typeof pushSubscriptions !== 'undefined' ? pushSubscriptions : null) });
 
 const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json");
   if (vault.handle(req, res)) return;
+  if (calllink.handleHttp(req, res)) return;
 
   // ── CORS preflight for /relay-log ────────────────────────────
   if (req.method === 'OPTIONS' && req.url === '/relay-log') {
@@ -980,6 +982,8 @@ async function handle(ws, msg) {
   if (msg.type === 'pong') {
     return; // ignore pong
   }
+
+  if (await calllink.handleWs(ws, msg)) return;
 
   log("↓", msg.type, JSON.stringify(msg).slice(0, 120));
   console.log('[MSG IN]', JSON.stringify(msg).slice(0, 200));

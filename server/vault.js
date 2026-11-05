@@ -474,4 +474,4 @@ function init({ handles, ocpToHandle, saveHandles }) {
   return { handle };
 }
 
-module.exports = { init };
+module.exports = { init, ALLOWED_ORIGINS };
