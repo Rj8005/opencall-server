@@ -1,5 +1,5 @@
-const CACHE = 'ocp-v37';
-const ASSETS = ['/lib/jssip.min.js', '/lib/ocp-crypto.js', '/manifest.json', '/ocp-identity.js', '/ocp-account.js', '/ocp-did.js', '/ocp-vault.js', '/ocp-billing.js', '/ocp-kyc.js'];
+const CACHE = 'ocp-v38';
+const ASSETS = ['/lib/jssip.min.js', '/lib/ocp-crypto.js', '/manifest.json', '/ocp-identity.js', '/ocp-account.js', '/ocp-did.js', '/ocp-vault.js', '/ocp-billing.js', '/ocp-kyc.js', '/embed.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));

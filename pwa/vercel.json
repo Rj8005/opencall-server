@@ -8,5 +8,13 @@
     { "source": "/privacy", "destination": "/privacy.html"         },
     { "source": "/refunds", "destination": "/refunds.html"         },
     { "source": "/aup",     "destination": "/aup.html"             }
+  ],
+  "headers": [
+    {
+      "source": "/u/:path*",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "frame-ancestors *" }
+      ]
+    }
   ]
 }
