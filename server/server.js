@@ -31,10 +31,8 @@ if (!vapidPublic || !vapidPrivate) {
   vapidPublic  = kp.publicKey;
   vapidPrivate = kp.privateKey;
   console.log('[PUSH] ⚠️  No VAPID env vars found — ephemeral keys generated (lost on restart!)');
-  console.log('[PUSH] Persist these before deploying:');
-  console.log('[PUSH]   VAPID_PUBLIC=' + vapidPublic);
-  console.log('[PUSH]   VAPID_PRIVATE=' + vapidPrivate);
-  console.log('[PUSH]   VAPID_SUBJECT=' + vapidSubject);
+  console.log('[PUSH] Set VAPID_PUBLIC / VAPID_PRIVATE / VAPID_SUBJECT in the environment before deploying');
+  console.log('[PUSH] (generate once with the one-liner above; the private key is never printed)');
 }
 
 webPush.setVapidDetails(vapidSubject, vapidPublic, vapidPrivate);
@@ -699,8 +697,31 @@ const { ALLOWED_ORIGINS } = require('./vault');
 const vault = require('./vault').init({ handles, ocpToHandle, saveHandles });
 const calllink = require('./calllink').init({ handles, ocpRegistry, registry, metadata, callLog, send, sendPushNotification, log, pushSubscriptions: (typeof pushSubscriptions !== 'undefined' ? pushSubscriptions : null) });
 
+// Small per-IP limiter for the public lookup endpoints.
+const httpHits = new Map();   // key → [timestamps]
+function httpRateOk(key, limit, windowMs) {
+  const now = Date.now();
+  const list = (httpHits.get(key) || []).filter(t => now - t < windowMs);
+  if (list.length >= limit) { httpHits.set(key, list); return false; }
+  list.push(now);
+  httpHits.set(key, list);
+  if (httpHits.size > 20000) httpHits.delete(httpHits.keys().next().value);
+  return true;
+}
+// Peer address; X-Real-IP is only trusted when the peer is the local proxy.
+function httpClientIp(req) {
+  const peer = req.socket.remoteAddress || '';
+  const local = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
+  const real = local ? String(req.headers['x-real-ip'] || '').trim() : '';
+  return real || peer;
+}
+
 const server = http.createServer((req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const reqOrigin = req.headers.origin;
+  if (reqOrigin && ALLOWED_ORIGINS.includes(reqOrigin)) {
+    res.setHeader("Access-Control-Allow-Origin", reqOrigin);
+    res.setHeader("Vary", "Origin");
+  }
   res.setHeader("Content-Type", "application/json");
   if (vault.handle(req, res)) return;
   if (calllink.handleHttp(req, res)) return;
@@ -716,7 +737,6 @@ const server = http.createServer((req, res) => {
 
   // ── Relay WebView remote log ingestion ────────────────────────
   if (req.method === 'POST' && req.url === '/relay-log') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     let body = '';
@@ -752,7 +772,17 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.url.startsWith("/call-info")) {
-    const callId  = new URL('http://x' + req.url).searchParams.get('call');
+    if (!httpRateOk('callinfo|' + httpClientIp(req), 30, 60 * 1000)) {
+      res.writeHead(429);
+      res.end(JSON.stringify({ error: 'rate_limited' }));
+      return;
+    }
+    const callId  = new URL('http://x' + req.url).searchParams.get('call') || '';
+    if (!/^call_\d+_[a-z0-9]{6}$/.test(callId)) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ found: false }));
+      return;
+    }
     const pending = pendingCalls.get(callId);
     if (pending) {
       res.writeHead(200);
@@ -765,6 +795,14 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && req.url === '/internal/bridge') {
+    const peer = req.socket.remoteAddress || '';
+    const loopback = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
+    // Direct local calls only: a request that came through nginx carries x-real-ip / x-forwarded-for.
+    if (!loopback || req.headers['x-real-ip'] || req.headers['x-forwarded-for']) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
     let body = '';
     req.on('data', d => body += d);
     req.on('end', () => {
@@ -876,22 +914,10 @@ const server = http.createServer((req, res) => {
       version:     "1.0.0"
     }));
 
-  } else if (req.url === "/numbers") {
-    // public list of registered numbers — useful for testing
-    res.writeHead(200);
-    res.end(JSON.stringify({
-      numbers: [...registry.keys()]
-    }));
-
   } else if (req.url === '/relays') {
-    const list = [...relayRegistry.values()].map(r => ({
-      country: r.country,
-      relay_mode: r.relay_mode,
-      ocp_address: r.ocp_address?.slice(0, 20) + '...',
-      registeredAt: new Date(r.registeredAt).toISOString()
-    }));
+    // counts only: no countries, addresses or timestamps
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ relays: list, count: list.length }));
+    res.end(JSON.stringify({ count: relayRegistry.size }));
 
   } else {
     res.writeHead(404);
@@ -941,7 +967,7 @@ wss.on("connection", (ws, req) => {
       await handle(ws, msg);
     } catch(e) {
       console.error('[SERVER] ❌ Message handler crash:', e.message);
-      console.error('[SERVER] Data was:', data.toString().slice(0,200));
+      console.error('[SERVER] Message was', data.length, 'bytes');   // size only, never content
       // NEVER rethrow — never kill socket
     }
   });
@@ -1098,8 +1124,7 @@ async function handle(ws, msg) {
     if (STRICT_SIG) return;
   }
 
-  log("↓", msg.type, JSON.stringify(msg).slice(0, 120));
-  console.log('[MSG IN]', JSON.stringify(msg).slice(0, 200));
+  log("↓", msg.type);   // type only: message bodies are never logged
 
   const sigValid = await verifySignature(msg);
   if (!sigValid) {
@@ -1294,6 +1319,12 @@ async function handle(ws, msg) {
   // TODO: swap window.SpeechRecognition on the client for Whisper/Deepgram
   // for better accuracy and non-Chrome browser support.
   if (msg.type === 'ai_notes' || msg.type === 'ai_note_line' || msg.type === 'screen_share' || msg.type === 'video_toggle') {
+    if (msg.type === 'ai_note_line') {
+      // Transcript lines are shown to the other party: strings only, capped.
+      if (typeof msg.text !== 'string' || (msg.speaker !== undefined && typeof msg.speaker !== 'string')) return;
+      msg.text = msg.text.slice(0, 500);
+      if (msg.speaker !== undefined) msg.speaker = msg.speaker.slice(0, 40);
+    }
     const call = msg.callId ? pendingCalls.get(msg.callId) : null;
     if (call) {
       const role   = getCallRole(ws, call);
@@ -2376,7 +2407,6 @@ server.listen(PORT, () => {
   ║                                              ║
   ║  WebSocket : ws://localhost:${PORT}              ║
   ║  Health    : http://localhost:${PORT}/health     ║
-  ║  Numbers   : http://localhost:${PORT}/numbers    ║
   ║                                              ║
   ║  No Twilio. No SIP. No carrier.              ║
   ║  You own this network.                       ║
