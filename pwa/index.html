@@ -5064,15 +5064,15 @@ async function answerMissedCall() {
     setConn('on');
     setConnectionStatus('online');
     if (statusEl) statusEl.textContent = 'Registering…';
-    await wsSend({
-      type:       'register',
-      number:     guestNum,
-      name:       'Guest',
-      public_key: myIdentity ? JSON.stringify(myIdentity.publicKeyJwk) : null
-    });
+    // Registration is sent from the server's 'connected' message (it carries the challenge).
   };
 
-  ws.onmessage = e => { try { onMessage(JSON.parse(e.data)); } catch {} };
+  ws.onmessage = e => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    if (m && m.type === 'connected') _sendRegister(m.challenge, guestNum, 'Guest');
+    try { onMessage(m); } catch {}
+  };
 
   ws.onclose = () => {
     setConn('off');
@@ -5824,15 +5824,13 @@ async function initSignalServer(server, name, number) {
     LOG.srv('Sending registration...', { name, number, ocpAddress: myIdentity?.ocp_address });
     setConn('on');
     setConnectionStatus('online');
-    await wsSend({
-      type:       'register',
-      number,
-      name,
-      public_key: myIdentity ? JSON.stringify(myIdentity.publicKeyJwk) : null
-    });
+    // Registration is sent from the server's 'connected' message (it carries the challenge).
   };
   ws.onmessage = e => {
-    try { onMessage(JSON.parse(e.data)); } catch {}
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    if (m && m.type === 'connected') _sendRegister(m.challenge, number, name);
+    try { onMessage(m); } catch {}
   };
   ws.onclose = (e) => {
     LOG.err('Signal server disconnected ❌', { code: e.code, reason: e.reason });
@@ -9214,6 +9212,30 @@ async function wsSend(obj) {
   const payload = JSON.stringify(message);
   LOG.srv('→ Sending', { type: obj.type, ...obj });
   ws.send(payload);
+}
+
+// Register with proof of identity. Every connection gets a fresh challenge in
+// the server's 'connected' message; the proof is an Ed25519 signature over
+// "register:<ocp>:<challenge>:<normalized number>" (normalisation mirrors the
+// server's normalizeNumber). Registration therefore waits for 'connected'.
+async function _sendRegister(challenge, number, name) {
+  const msg = {
+    type:       'register',
+    number,
+    name,
+    public_key: myIdentity ? JSON.stringify(myIdentity.publicKeyJwk) : null
+  };
+  if (myIdentity && challenge) {
+    try {
+      let n = String(number || '').replace(/[\s\-\(\)]/g, '');
+      if (n && !n.startsWith('+')) n = '+' + n;
+      const { signRaw } = await import('./ocp-identity.js');
+      msg.proof = await signRaw(myIdentity, 'register:' + myIdentity.ocp_address + ':' + challenge + ':' + n);
+    } catch (e) {
+      console.warn('[REG] could not sign the register challenge:', e && e.message);
+    }
+  }
+  await wsSend(msg);
 }
 
 // ── keyboard ───────────────────────────────────────────────

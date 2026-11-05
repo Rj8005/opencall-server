@@ -286,6 +286,33 @@ function makeCallId() {
   return `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// ── Identity hardening ───────────────────────────────────────
+// A socket's identity comes from a signed challenge at register (ws._proven /
+// ws._ocp), never from msg.from / msg.ocp. STRICT_SIG unset or "0" = log-only:
+// problems are logged as [SIGWARN] (type + first 12 chars of the ocp, never
+// message bodies) and the message proceeds. STRICT_SIG=1 enforces.
+const STRICT_SIG = process.env.STRICT_SIG === '1';
+console.log('[SERVER] STRICT_SIG =', STRICT_SIG ? 'ENFORCE' : 'log-only');
+
+function sigWarn(type, ocp, what) {
+  console.warn('[SIGWARN]', type, String(ocp || '').slice(0, 12), what || '');
+}
+
+// Ed25519 verify by OCP address: the address IS the raw 32-byte public key.
+async function verifyRawSig(ocp, text, sigB64) {
+  try {
+    const hexKey = typeof ocp === 'string' && ocp.startsWith('ocp:') ? ocp.slice(4) : '';
+    if (!/^[0-9a-f]{64}$/i.test(hexKey) || typeof sigB64 !== 'string' || sigB64.length > 200) return false;
+    const pubKey = await crypto.subtle.importKey(
+      'raw', Buffer.from(hexKey, 'hex'), { name: 'Ed25519' }, false, ['verify']
+    );
+    return await crypto.subtle.verify('Ed25519', pubKey,
+      Buffer.from(sigB64, 'base64'), new TextEncoder().encode(text));
+  } catch (e) {
+    return false;
+  }
+}
+
 async function verifySignature(msg) {
   if (!msg.signature || !msg.from || msg.type === 'register') {
     return true;
@@ -828,13 +855,15 @@ const wss = new WebSocketServer({ server, maxPayload: 2 * 1024 * 1024 }); // 2 M
 wss.on("connection", (ws, req) => {
   const ip = req.socket.remoteAddress;
   ws._ocpId = Math.random().toString(36).slice(2);
+  ws._challenge = crypto.randomBytes(16).toString('hex');   // fresh per connection; signed by 'register'
   log("→", "new connection from", ip);
 
   // send welcome
   send(ws, {
-    type:    "connected",
-    message: "OpenCall Signal Server v1.0",
-    time:    Date.now()
+    type:      "connected",
+    message:   "OpenCall Signal Server v1.0",
+    time:      Date.now(),
+    challenge: ws._challenge
   });
 
   ws.on('message', async (data) => {
@@ -1206,6 +1235,23 @@ async function handle(ws, msg) {
         return send(ws, { type: "error", reason: "invalid_number" });
       }
 
+      // Identity proof: Ed25519 signature by the key behind msg.from over
+      // "register:<from>:<challenge>:<normalized number>".
+      const proofOk = !!(msg.from && msg.proof && ws._challenge &&
+        await verifyRawSig(msg.from, 'register:' + msg.from + ':' + ws._challenge + ':' + number, msg.proof));
+      if (proofOk) {
+        ws._proven = true;
+        ws._ocp = msg.from;
+      } else if (STRICT_SIG) {
+        send(ws, { type: 'error', reason: 'bad_proof' });
+        ws.close(1008, 'bad_proof');
+        return;
+      } else {
+        sigWarn('register', msg.from, msg.proof ? 'invalid proof' : 'no proof');
+      }
+      // Only a proven socket's address is trusted; log-only mode keeps the old behaviour.
+      const regOcp = ws._proven ? ws._ocp : (msg.from || null);
+
       // boot any existing socket for this number
       if (registry.has(number)) {
         const old = registry.get(number);
@@ -1220,27 +1266,27 @@ async function handle(ws, msg) {
         number,
         name,
         registeredAt:  Date.now(),
-        ocpAddress:    msg.from || null,
+        ocpAddress:    regOcp,
         publicKeyJwk:  msg.public_key || null
       });
 
       // Keep phone-number → OCP mapping fresh for push lookup after disconnect
-      if (msg.from) numberToOcp.set(number, msg.from);
-      if (msg.from) ocpRegistry.set(msg.from, ws);
+      if (regOcp) numberToOcp.set(number, regOcp);
+      if (regOcp) ocpRegistry.set(regOcp, ws);
 
       send(ws, { type: "registered", number, name });
       log("✓", "registered", number, `(${name})`);
 
       // Flush any messages queued while this user was offline
-      if (msg.from) {
-        const queued = offlineChatQueue.get(msg.from);
+      if (regOcp) {
+        const queued = offlineChatQueue.get(regOcp);
         if (queued?.length) {
           queued.sort((a, b) => (a.ts || 0) - (b.ts || 0));
           for (const qmsg of queued) {
             send(ws, { type: 'chat_msg', ...qmsg });
           }
-          offlineChatQueue.delete(msg.from);
-          log('💬', `flushed ${queued.length} queued msg(s) to ${msg.from.slice(0, 20)}`);
+          offlineChatQueue.delete(regOcp);
+          log('💬', `flushed ${queued.length} queued msg(s) to ${regOcp.slice(0, 20)}`);
         }
       }
       break;
