@@ -11,3 +11,7 @@ server/sip.json
 server/sip.json.tmp
 server/calllink.json
 server/calllink.json.tmp
+
+handles.json
+push_subs.json
+registry.json

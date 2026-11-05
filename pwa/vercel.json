@@ -1,19 +1,83 @@
 {
   "rewrites": [
-    { "source": "/answer",  "destination": "/answer.html"          },
-    { "source": "/relay",   "destination": "/relay.html"           },
-    { "source": "/u/:name([a-z0-9_]{3,20})", "destination": "/u.html?u=:name" },
-    { "source": "/u/:id",   "destination": "/connect.html?id=:id"  },
-    { "source": "/terms",   "destination": "/terms.html"           },
-    { "source": "/privacy", "destination": "/privacy.html"         },
-    { "source": "/refunds", "destination": "/refunds.html"         },
-    { "source": "/aup",     "destination": "/aup.html"             }
+    {
+      "source": "/answer",
+      "destination": "/answer.html"
+    },
+    {
+      "source": "/relay",
+      "destination": "/relay.html"
+    },
+    {
+      "source": "/u/:name([a-z0-9_]{3,20})",
+      "destination": "/u.html?u=:name"
+    },
+    {
+      "source": "/u/:id",
+      "destination": "/connect.html?id=:id"
+    },
+    {
+      "source": "/terms",
+      "destination": "/terms.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/privacy.html"
+    },
+    {
+      "source": "/refunds",
+      "destination": "/refunds.html"
+    },
+    {
+      "source": "/aup",
+      "destination": "/aup.html"
+    }
   ],
   "headers": [
     {
+      "source": "/((?!u/).*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "microphone=(self), camera=(self), geolocation=()"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Content-Security-Policy-Report-Only",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://www.paypal.com https://www.paypalobjects.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' https://signal.opencall.space wss://signal.opencall.space https://node.opencall.space wss://sbc.opencall.space:4443 https://api.qrserver.com https://accounts.google.com https://*.paypal.com https://ntfy.sh; frame-src https://accounts.google.com https://www.paypal.com https://*.paypal.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+        }
+      ]
+    },
+    {
       "source": "/u/:path*",
       "headers": [
-        { "key": "Content-Security-Policy", "value": "frame-ancestors *" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "microphone=(self), camera=(self), geolocation=()"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "frame-ancestors *"
+        }
       ]
     }
   ]

@@ -6,7 +6,8 @@
     "start": "node server/server.js"
   },
   "dependencies": {
-    "ws": "^8.17.0"
+    "ws": "^8.17.0",
+    "web-push": "^3.6.7"
   },
   "engines": {
     "node": ">=18.0.0"
