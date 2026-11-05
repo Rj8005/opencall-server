@@ -478,7 +478,7 @@
       return fetch(SERVER + '/link/callback', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: username, name: name, contact: contact, message: message,
-                               nonce: pow.nonce, counter: pow.counter, gid: gid })
+                               nonce: pow.nonce, counter: pow.counter, gid: gid, k: token || undefined })
       });
     }).then(function (r) {
       if (r.status === 429) throw new Error('Too many requests. Please try again later.');

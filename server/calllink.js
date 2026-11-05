@@ -48,6 +48,8 @@ const CB_CAP      = 50;
 const CB_TTL      = 14 * DAY;
 const MISSED_CAP  = 50;
 const BLOCK_CAP   = 200;
+const TOKEN_CAP   = 20;
+const TOKEN_MAX_HOURS = 24 * 30;
 const IP_CALLS_PER_HOUR      = 6;
 const CALLEE_CALLS_PER_HOUR  = 20;
 const IP_CALLBACKS_PER_HOUR  = 3;
@@ -90,7 +92,7 @@ const clean = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u00
 
 function defaults() {
   return { enabled: false, dnd: false, hours: null, greeting: '', requireReason: false,
-           blocklist: [], callbacks: [], missed: [] };
+           blocklist: [], callbacks: [], missed: [], tokens: [] };
 }
 function ownerRec(ocp, create) {
   let r = db.owners[ocp];
@@ -99,7 +101,9 @@ function ownerRec(ocp, create) {
 }
 
 function pruneRec(r) {
-  const cut = Date.now() - CB_TTL;
+  const now = Date.now();
+  r.tokens = (r.tokens || []).filter(t => !t.used && t.exp > now).slice(-TOKEN_CAP);
+  const cut = now - CB_TTL;
   r.callbacks = (r.callbacks || []).filter(c => c.at >= cut).slice(-CB_CAP);
   r.missed    = (r.missed || []).filter(c => c.at >= cut).slice(-MISSED_CAP);
 }
@@ -200,9 +204,20 @@ function reachable(ocp) {
   return !!(subs && subs.length);
 }
 
-function modeFor(ocp) {
+// One-time link tokens are stored hashed. A valid token opens the page even
+// when the public link is off; an invalid, used or expired one is closed.
+function findToken(r, token) {
+  if (!r || typeof token !== 'string' || !token || token.length > 64) return null;
+  const th = sha256hex(token);
+  return (r.tokens || []).find(t => t.th === th && !t.used && t.exp > Date.now()) || null;
+}
+
+function modeFor(ocp, token) {
   const r = ocp && ownerRec(ocp);
-  if (!r || !r.enabled) return 'closed';
+  if (!r) return 'closed';
+  const tok = token ? findToken(r, token) : null;
+  if (token && !tok) return 'closed';
+  if (!r.enabled && !tok) return 'closed';
   if (r.dnd || !inHours(r.hours) || !reachable(ocp)) return 'callback';
   return 'call';
 }
@@ -246,11 +261,11 @@ function readJson(req) {
 }
 
 // ── public routes ───────────────────────────────────────────
-function info(req, res, username) {
+function info(req, res, username, token) {
   const name = String(username || '').toLowerCase();
   const ocp  = ocpForUsername(name);
   const r    = ocp && ownerRec(ocp);
-  const mode = modeFor(ocp);
+  const mode = modeFor(ocp, token);
   // Identical shape for unknown, disabled and closed users.
   return reply(req, res, 200, {
     username: name,
@@ -290,7 +305,7 @@ async function callback(req, res, b) {
 
   const ocp = ocpForUsername(username);
   const r = ocp && ownerRec(ocp);
-  if (!r || !r.enabled) return reply(req, res, 200, { ok: true });          // do not reveal state
+  if (!r || modeFor(ocp, isStr(b.k, 64) ? b.k : '') === 'closed') return reply(req, res, 200, { ok: true });   // do not reveal state
   if (r.blocklist.some(x => x.h === guestHash(ip, b.gid))) return reply(req, res, 200, { ok: true });
 
   pruneRec(r);
@@ -364,7 +379,7 @@ async function inbox(req, res, b) {
   if (!ocp) return;
   const r = ownerRec(ocp) || defaults();
   pruneRec(r);
-  const { callbacks, missed, ...rest } = r;
+  const { callbacks, missed, tokens, ...rest } = r;
   return reply(req, res, 200, {
     username: usernameForOcp(ocp), settings: rest,
     callbacks: callbacks.slice().reverse(), missed: missed.slice().reverse().map(({ h, ...m }) => m)
@@ -403,7 +418,27 @@ async function block(req, res, b) {
   return reply(req, res, 200, { ok: true });
 }
 
+// Creates a one-time / expiring link. The token is returned once; only its
+// hash is stored.
+async function tokenCreate(req, res, b) {
+  const hours = Number(b.hours), oneCall = b.oneCall === true;
+  const ocp = await ownerAuth(req, res, b, (o, n) => 'link-token:' + o + ':' + n + ':' + b.hours + ':' + (b.oneCall === true ? 1 : 0));
+  if (!ocp) return;
+  const username = usernameForOcp(ocp);
+  if (!username) return reply(req, res, 403, { error: 'no_username' });
+  if (!Number.isFinite(hours) || hours < 1 || hours > TOKEN_MAX_HOURS) return reply(req, res, 400, { error: 'invalid_hours' });
+  const r = ownerRec(ocp, true);
+  pruneRec(r);
+  if (r.tokens.length >= TOKEN_CAP) return reply(req, res, 429, { error: 'too_many_links' });
+  const token = crypto.randomBytes(16).toString('hex');
+  const exp = Date.now() + hours * HOUR;
+  r.tokens.push({ th: sha256hex(token), exp, oneCall, used: false, at: Date.now() });
+  try { save(); } catch (e) { return reply(req, res, 500, { error: 'server_error' }); }
+  return reply(req, res, 200, { token, username, exp });
+}
+
 const POST_ROUTES = {
+  '/link/token-create':    tokenCreate,
   '/link/callback':        callback,
   '/link/owner-challenge': ownerChallenge,
   '/link/settings':        settings,
@@ -431,7 +466,9 @@ function handleHttp(req, res) {
     if (pathname.startsWith('/link/info/')) {
       let name = '';
       try { name = decodeURIComponent(pathname.slice('/link/info/'.length)); } catch (e) {}
-      info(req, res, name);
+      let k = '';
+      try { k = new URL(req.url, 'http://x').searchParams.get('k') || ''; } catch (e) {}
+      info(req, res, name, k);
       return true;
     }
     reply(req, res, 404, { error: 'not_found' });
@@ -518,18 +555,21 @@ async function guestCall(ws, msg) {
   if (!hit('callip', ip, IP_CALLS_PER_HOUR, HOUR)) return refuse('rate_limited');
   const ocp = ocpForUsername(username);
   const r = ocp && ownerRec(ocp);
-  if (!r || !r.enabled) return refuse('closed');
+  const k = isStr(msg.k, 64) ? msg.k : '';
+  if (!r || modeFor(ocp, k) === 'closed') return refuse('closed');
+  const tok = k ? findToken(r, k) : null;
   if (!hit('callee', ocp, CALLEE_CALLS_PER_HOUR, HOUR)) return refuse('rate_limited');
 
   const h = guestHash(ip, msg.gid);
   if (r.blocklist.some(x => x.h === h)) return refuse('closed');
-  if (modeFor(ocp) !== 'call') return refuse('callback');
+  if (modeFor(ocp, k) !== 'call') return refuse('callback');
   if (r.requireReason && !reason) return refuse('reason_required');
   if (ringing.has(ocp)) return refuse('busy');
 
   const callId = 'lnk_' + crypto.randomBytes(9).toString('hex');
   const key = 'link:' + callId;
-  const c = { callId, key, ocp, ws, h, name, reason, delivered: false, answered: false };
+  const c = { callId, key, ocp, ws, h, name, reason, delivered: false, answered: false,
+              tokenTh: tok && tok.oneCall ? tok.th : null };
   calls.set(callId, c);
   ringing.set(ocp, callId);
   ws._linkCall = callId;
@@ -574,6 +614,10 @@ function observeCallee(ws, msg) {
   if (!c || deps.ocpRegistry.get(c.ocp) !== ws) return;
   if (msg.type === 'answer') {
     c.answered = true;
+    if (c.tokenTh) {                                           // one-call link: spent once answered
+      const r = ownerRec(c.ocp), t = r && (r.tokens || []).find(x => x.th === c.tokenTh);
+      if (t) { t.used = true; try { save(); } catch (e) {} }
+    }
     clearTimeout(c.ringTimer); clearInterval(c.deliverTimer);
     if (ringing.get(c.ocp) === c.callId) ringing.delete(c.ocp);
   } else {

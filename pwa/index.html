@@ -10060,6 +10060,8 @@ const _linkSaveSettings = (id, settings) => _linkSigned(id, '/link/settings',
   async (o, n) => 'link-settings:' + o + ':' + n + ':' + await _sha256Hex(JSON.stringify(settings)), { settings });
 const _linkAck = (id, ids) => _linkSigned(id, '/link/ack',
   async (o, n) => 'link-ack:' + o + ':' + n + ':' + await _sha256Hex(ids.join(',')), { ids });
+const _linkTokenCreate = (id, hours, oneCall) => _linkSigned(id, '/link/token-create',
+  (o, n) => 'link-token:' + o + ':' + n + ':' + hours + ':' + (oneCall ? 1 : 0), { hours, oneCall });
 const _linkBlock = (id, callId) => _linkSigned(id, '/link/block',
   (o, n) => 'link-block:' + o + ':' + n + ':' + callId, { callId });
 
@@ -10316,6 +10318,32 @@ async function openCallLink() {
     this.disabled = true; err.textContent = '';
     try { await _linkSaveSettings(identity, settings); toast('Saved'); }
     catch (e) { err.textContent = e && e.code === 'invalid_settings' ? 'Those hours are not valid.' : 'Could not save. Try again.'; }
+    this.disabled = false;
+  });
+
+  // One-time / expiring links: /u/<username>?k=<token>
+  const secTok = _lkEl('div', null, _LK.SEC); wrap.appendChild(secTok);
+  secTok.appendChild(_lkEl('div', 'One-time links', _LK.H));
+  secTok.appendChild(_lkEl('div', 'A private link that works even when your public link is off, and expires after a set time or after one answered call.', _LK.M));
+  const tokSel = document.createElement('select');
+  tokSel.style.cssText = _ONB.INP;
+  [[1, '1 hour'], [6, '6 hours'], [24, '24 hours'], [72, '3 days'], [168, '7 days']].forEach(([h, t]) => {
+    const o = document.createElement('option'); o.value = h; o.textContent = 'Expires in ' + t; tokSel.appendChild(o);
+  });
+  secTok.appendChild(tokSel);
+  const tokOne = _lkCheck(secTok, 'Also expire after one call', true);
+  const tokOut = _lkEl('div', null, 'margin-top:10px;'); secTok.appendChild(tokOut);
+  _onbButton(secTok, 'Create link', _LK.SM + 'margin-top:8px;', async function () {
+    this.disabled = true; tokOut.textContent = '';
+    try {
+      const out = await _linkTokenCreate(identity, Number(tokSel.value), tokOne.checked);
+      const link = location.origin + '/u/' + out.username + '?k=' + out.token;
+      tokOut.appendChild(_lkEl('div', link, _LK.T + 'color:#c8f55a;'));
+      tokOut.appendChild(_lkEl('div', 'Shown once — copy it now.', _LK.M));
+      _onbButton(tokOut, 'Copy link', _LK.SM + 'margin-top:6px;', () => _copyText(link, 'Link copied'));
+    } catch (e) {
+      tokOut.appendChild(_lkEl('div', e && e.code === 'too_many_links' ? 'You have too many active one-time links.' : 'Could not create the link.', _ONB.ERR));
+    }
     this.disabled = false;
   });
 
