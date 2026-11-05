@@ -346,3 +346,120 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .62); }
 .btn-call:hover { background: #d6fb74; }
 .btn-call:active { transform: scale(.96); }
 .call-label { font-size: var(--fs-2); font-weight: 600; color: var(--ui-text); cursor: pointer; }
+
+/* ═══════════════════════════════════════════════════════════
+   Banners
+   One component: icon (CSS, so JS-written banners keep working), text,
+   optional action, optional dismiss. Variants set --bn (icon + border).
+   ═══════════════════════════════════════════════════════════ */
+.banner {
+  --bn: var(--ui-info);
+  position: relative; display: block;
+  margin: 0 0 var(--sp-2); padding: var(--sp-3) var(--sp-3) var(--sp-3) 48px;
+  background: var(--ui-surface); color: var(--ui-text);
+  border: 1px solid var(--bn); border-radius: var(--r-1);
+  font-family: var(--font-body); font-size: var(--fs-2); line-height: 1.45;
+}
+.banner::before {
+  content: ""; position: absolute; left: var(--sp-3); top: 14px; width: 24px; height: 24px;
+  background: var(--bn);
+  -webkit-mask: var(--bn-icon) center / contain no-repeat;
+          mask: var(--bn-icon) center / contain no-repeat;
+}
+.banner-info    { --bn: var(--ui-info);
+  --bn-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='M12 11v5M12 8h.01'/></svg>"); }
+.banner-warn    { --bn: var(--ui-warn);
+  --bn-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l10 18H2z'/><path d='M12 10v5M12 18h.01'/></svg>"); }
+.banner-success { --bn: var(--ui-success);
+  --bn-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='M8 12.5l3 3 5-6'/></svg>"); }
+.banner-danger  { --bn: var(--ui-danger); --bn-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l10 18H2z'/><path d='M12 10v5M12 18h.01'/></svg>"); }
+
+.banner-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-right: 44px; }
+.banner-text strong { font-size: var(--fs-3); font-weight: 600; }
+.banner-text span   { color: var(--ui-text-muted); }
+.banner-actions { margin-top: var(--sp-2); display: flex; gap: var(--sp-2); }
+.banner-btn {
+  min-height: 44px; padding: 0 var(--sp-4); cursor: pointer;
+  background: transparent; color: var(--bn); border: 1px solid var(--bn); border-radius: var(--r-1);
+  font-size: var(--fs-2); font-weight: 600;
+}
+.banner-btn-primary { background: var(--ui-accent); color: var(--ui-accent-ink); border-color: var(--ui-accent); }
+.banner-dismiss {
+  position: absolute; top: 2px; right: 2px; width: 44px; height: 44px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+  background: transparent; color: var(--ui-text-muted); border: 0; border-radius: var(--r-1);
+}
+.banner-dismiss:hover { color: var(--ui-text); }
+/* banners that are only text (JS sets textContent on the element itself) */
+#intl-low-balance-banner, #service-capacity-banner { padding-top: 12px; padding-bottom: 12px; min-height: 52px; }
+
+/* ═══════════════════════════════════════════════════════════
+   Get a number
+   ═══════════════════════════════════════════════════════════ */
+.getnum {
+  display: flex; align-items: center; gap: var(--sp-3);
+  width: 100%; min-height: 56px; margin: 0 0 var(--sp-3); padding: var(--sp-2) var(--sp-3);
+  text-align: left; cursor: pointer;
+  background: var(--ui-surface); color: var(--ui-text);
+  border: 1px solid var(--ui-border); border-radius: var(--r-1);
+}
+.getnum > svg:first-child { color: var(--ui-info); flex-shrink: 0; }
+.getnum > svg:last-child  { margin-left: auto; color: var(--ui-text-muted); flex-shrink: 0; }
+.getnum-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.getnum-text > span { display: block; }
+#intl-number-title    { font-size: var(--fs-3); font-weight: 600; font-family: var(--font-body); color: var(--ui-text); }
+#intl-number-subtitle { font-size: var(--fs-2); font-family: var(--font-body); color: var(--ui-text-muted); margin-top: 2px; }
+#intl-number-meta     { font-size: var(--fs-2); font-family: var(--font-mono); color: var(--ui-text-muted); margin-top: 2px; display: block; }
+#intl-number-meta[style*="display: none"], #intl-number-meta[style*="display:none"] { display: none; }
+.getnum:hover { background: var(--ui-surface-2); }
+
+/* ═══════════════════════════════════════════════════════════
+   Recent calls
+   ═══════════════════════════════════════════════════════════ */
+.contacts-section { margin-top: var(--sp-5); }
+.contacts-header { margin: 0 0 var(--sp-2); font-family: var(--font-body); }
+.contact-list { list-style: none; margin: 0; padding: 0; }
+.contact-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) 0; border-bottom: 1px solid var(--ui-divider); min-height: 64px;
+}
+.contact-row:last-child { border-bottom: 0; }
+.contact-avatar {
+  width: 40px; height: 40px; flex-shrink: 0;
+  background: var(--ui-surface-2); color: var(--ui-info);
+  font-size: var(--fs-3);
+}
+.contact-info { flex: 1; min-width: 0; cursor: default; }
+.contact-name { font-size: var(--fs-3); font-weight: 600; color: var(--ui-text); }
+.contact-sub  { font-size: var(--fs-2); color: var(--ui-text-muted); }
+.contact-meta {
+  display: flex; align-items: center; gap: 6px; margin-top: 2px;
+  font-size: var(--fs-1); color: var(--ui-text-muted);
+}
+.contact-meta svg { flex-shrink: 0; }
+.contact-actions { gap: var(--sp-2); }
+.contact-btn {
+  width: 44px; height: 44px; min-width: 44px; min-height: 44px; cursor: pointer; padding: 0;
+  background: var(--ui-surface-2); color: var(--ui-info);
+  border: 1px solid var(--ui-border); border-radius: 50%;
+}
+.contact-btn-msg { color: var(--ui-accent); background: var(--ui-surface-2); border-color: var(--ui-border); }
+.contact-btn-vid { color: var(--ui-success); background: var(--ui-surface-2); border-color: var(--ui-border); }
+.contact-btn:hover { background: rgba(124, 192, 255, .16); }
+.contact-empty {
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-1);
+  padding: var(--sp-5) var(--sp-3); text-align: center;
+  font-family: var(--font-body); font-size: var(--fs-2); color: var(--ui-text-muted);
+}
+.contact-empty svg { color: var(--ui-text-muted); margin-bottom: var(--sp-1); }
+.contact-empty strong { font-size: var(--fs-3); font-weight: 600; color: var(--ui-text); }
+
+/* footer debug controls (real buttons now) */
+.sf-debug {
+  min-height: 44px; min-width: 44px; padding: 0 var(--sp-3); cursor: pointer;
+  background: transparent; color: var(--ui-text-muted);
+  border: 1px solid var(--ui-border); border-radius: var(--r-1);
+  font-size: var(--fs-1); margin-left: var(--sp-2);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.sf-text { font-size: var(--fs-1); }

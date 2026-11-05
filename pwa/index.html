@@ -951,21 +951,15 @@ if (APP_EMBED) {
     </div>
 
     <!-- Install hint (shown by JS if not already installed/dismissed) -->
-    <div id="install-hint-card" style="display:none;margin-top:12px;
-      background:rgba(99,180,255,.07);border:1px solid rgba(99,180,255,.15);
-      border-radius:12px;padding:12px 14px;
-      font-family:'DM Mono',monospace;font-size:12px;
-      color:var(--text-secondary,#6b8fad);line-height:1.6">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <span style="color:var(--blue,#63b4ff);font-weight:700;font-size:12px;letter-spacing:.5px">📲 KEEP YOUR IDENTITY SAFE</span>
-        <span onclick="_dismissInstallHint()" style="cursor:pointer;color:#555;font-size:15px;padding:0 2px;line-height:1">✕</span>
+    <div id="install-hint-card" class="banner banner-info" role="status" style="display:none;margin-top:12px">
+      <div class="banner-text">
+        <strong>Keep your identity safe</strong>
+        <span id="install-hint-text">Install OpenCall as an app so your identity persists across sessions.</span>
       </div>
-      <div id="install-hint-text">Install OpenCall as an app so your identity persists across sessions.</div>
-      <button id="btn-pwa-install" onclick="_triggerPwaInstall()" style="display:none;
-        margin-top:8px;padding:7px 16px;background:var(--blue,#63b4ff);color:#03161b;
-        border:0;border-radius:8px;font-weight:700;font-size:12px;cursor:pointer">
-        Install app
-      </button>
+      <div class="banner-actions">
+        <button type="button" id="btn-pwa-install" class="banner-btn" onclick="_triggerPwaInstall()" style="display:none">Install app</button>
+      </div>
+      <button type="button" class="banner-dismiss" aria-label="Dismiss install hint" onclick="_dismissInstallHint()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
 
     <!-- Back up identity link -->
@@ -1103,31 +1097,27 @@ if (APP_EMBED) {
          app-embed mode; the click handler itself gates on APP_EMBED.
          Two states (no number / has number) are swapped in by
          _setIntlCardOwned() / _resetIntlCard() in the script below. -->
-    <div class="card" id="intl-number-card" style="margin-top:8px;cursor:pointer;" onclick="openInternationalFlow()">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-        <div style="min-width:0;">
-          <div id="intl-number-title" style="font-family:'Syne',sans-serif;font-size:14px;
-               font-weight:700;color:var(--text-primary);">Get a number</div>
-          <div id="intl-number-subtitle" style="font-family:'DM Mono',monospace;font-size:12px;
-               color:var(--text-secondary);margin-top:3px;">Your own international number</div>
-          <div id="intl-number-meta" style="display:none;font-family:'DM Mono',monospace;font-size:12px;
-               color:var(--text-secondary);margin-top:2px;"></div>
-        </div>
-        <span style="font-size:12px;color:var(--blue);opacity:.7;flex-shrink:0;margin-top:2px;">&#8594;</span>
-      </div>
-    </div>
-
-    <!-- Low balance — not dismissible, so it only ever reflects real state -->
-    <div id="intl-low-balance-banner" style="display:none;margin-top:8px;padding:10px 14px;
-         background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.25);
-         border-radius:var(--radius-md);font-family:'DM Mono',monospace;font-size:12px;
-         color:var(--amber);line-height:1.5;"></div>
+    <!-- Banners: the two below are written by JS (text + display toggling), so they
+         carry their icon via CSS and keep the element itself as the text node. -->
+    <div id="intl-low-balance-banner" class="banner banner-warn" role="status" style="display:none"></div>
 
     <!-- Service at capacity (HTTP 503) — not dismissible; cleared by the next successful API call -->
-    <div id="service-capacity-banner" style="display:none;margin-top:8px;padding:10px 14px;
-         background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.25);
-         border-radius:var(--radius-md);font-family:'DM Mono',monospace;font-size:12px;
-         color:var(--amber);line-height:1.5;"></div>
+    <div id="service-capacity-banner" class="banner banner-warn" role="alert" style="display:none"></div>
+
+    <!-- International number — entry point for the buy-a-number flow.
+         Deliberately outside the profile sheet so it stays visible in
+         app-embed mode; the click handler itself gates on APP_EMBED.
+         Two states (no number / has number) are swapped in by
+         _setIntlCardOwned() / _resetIntlCard() in the script below. -->
+    <button type="button" id="intl-number-card" class="getnum" onclick="openInternationalFlow()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+      <span class="getnum-text">
+        <span id="intl-number-title">Get a number</span>
+        <span id="intl-number-subtitle">Your own international number</span>
+        <span id="intl-number-meta" style="display:none"></span>
+      </span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
 
     <div class="dial-display">
       <!-- The number shown here is a read-only mirror of #inp-dial (kept in
@@ -1162,43 +1152,29 @@ if (APP_EMBED) {
 
     <!-- Push opt-in nudge — shown after first registration if permission not yet granted.
          iOS Safari: displayed only when running as an installed PWA (Home Screen). -->
-    <div id="push-hint-card" style="display:none;margin-top:10px;
-         background:rgba(99,180,255,.07);border:1px solid rgba(99,180,255,.15);
-         border-radius:12px;padding:12px 14px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <span style="color:var(--blue);font-weight:700;font-size:12px;letter-spacing:.5px">
-          &#128276; ENABLE CALL ALERTS
-        </span>
-        <span onclick="_dismissPushHint()"
-              style="cursor:pointer;color:#555;font-size:15px;padding:0 2px;line-height:1">&#10005;</span>
+    <div id="push-hint-card" class="banner banner-info" role="status" style="display:none">
+      <div class="banner-text">
+        <strong>Turn on call alerts</strong>
+        <span>Ring even when this tab is closed.</span>
       </div>
-      <div style="font-family:'DM Mono',monospace;font-size:12px;
-                  color:var(--text-secondary);line-height:1.6;margin-bottom:8px">
-        Ring even when this tab is closed.
+      <div class="banner-actions">
+        <button type="button" id="btn-push-enable" class="banner-btn" onclick="enablePushNotifications()">Enable call alerts</button>
       </div>
-      <button id="btn-push-enable" onclick="enablePushNotifications()"
-              style="width:100%;padding:8px;background:var(--blue-dim);
-                     border:1px solid var(--blue-border);border-radius:8px;
-                     color:var(--blue);font-weight:700;font-size:12px;cursor:pointer">
-        Enable call alerts
-      </button>
+      <button type="button" class="banner-dismiss" aria-label="Dismiss call alerts hint" onclick="_dismissPushHint()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
 
     <!-- Recent Calls / Contacts -->
-    <div class="contacts-section">
-      <div class="contacts-header">Recent Calls</div>
-      <div id="contacts-list"><div class="contact-empty">No recent calls yet</div></div>
-    </div>
+    <section class="contacts-section" aria-labelledby="recent-h">
+      <h2 class="contacts-header" id="recent-h">Recent calls</h2>
+      <div id="contacts-list"><div class="contact-empty"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg><strong>No recent calls yet</strong><span>Dial a number above to start.</span></div></div>
+    </section>
 
     <div class="status-footer">
       <div>
         <span id="conn-status" class="sf-indicator sf-off"></span>
         <span class="sf-indicator sf-off" id="sf-dot"></span>
         <span class="sf-text" id="sf-text">Connecting...</span>
-        <span id="debug-toggle" onclick="toggleDebug()"
-              style="font-size:12px;color:rgba(99,180,255,0.3);cursor:pointer;
-                     padding:2px 6px;border:1px solid rgba(99,180,255,0.1);
-                     border-radius:4px;margin-left:8px;">debug</span>
+        <button type="button" id="debug-toggle" onclick="toggleDebug()" class="sf-debug">Debug</button>
       </div>
       <span class="sf-text" id="sf-right">DHT: checking</span>
     </div>
@@ -1214,9 +1190,8 @@ if (APP_EMBED) {
       display:none;
       z-index:50;">
       <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-        <span style="color:rgba(99,180,255,0.4);letter-spacing:0.5px;">DEBUG LOG</span>
-        <span onclick="document.getElementById('debug-panel').style.display='none'"
-              style="cursor:pointer;color:rgba(255,100,100,0.6);">✕</span>
+        <span style="color:var(--ui-text-muted);">Debug log</span>
+        <button type="button" class="sf-debug" aria-label="Close debug log" onclick="document.getElementById('debug-panel').style.display='none'"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div id="debug-log"></div>
     </div>
@@ -9512,31 +9487,48 @@ function _recordPstnCall(number, direction) {
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+const _CI = (d, w) => '<svg width="' + w + '" height="' + w + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + d + '</svg>';
+const _CI_PHONE = _CI('<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>', 20);
+const _CI_VIDEO = _CI('<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>', 20);
+const _CI_MSG   = _CI('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.5-4.6A8 8 0 1 1 21 12z"/>', 20);
+const _CI_DIR = {
+  outgoing: { label: 'Outgoing', svg: _CI('<path d="M7 17L17 7M9 7h8v8"/>', 16) },
+  incoming: { label: 'Incoming', svg: _CI('<path d="M17 7L7 17M15 17H7V9"/>', 16) },
+  missed:   { label: 'Missed',   svg: _CI('<path d="M17 7L7 17M15 17H7V9"/><path d="M16 4l4 4M20 4l-4 4"/>', 16) }
+};
+function _fmtCallTime(ts) {
+  try { return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+  catch (e) { return ''; }
+}
 function renderContacts() {
   const list = document.getElementById('contacts-list');
   if (!list) return;
   _contactsRenderCache = [...contacts].sort((a, b) => (b.lastCall || 0) - (a.lastCall || 0));
   if (!_contactsRenderCache.length) {
-    list.innerHTML = '<div class="contact-empty">No recent calls yet</div>';
+    list.innerHTML = '<div class="contact-empty">' + _CI('<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>', 32) +
+      '<strong>No recent calls yet</strong><span>Dial a number above to start.</span></div>';
     return;
   }
-  list.innerHTML = _contactsRenderCache.map((c, i) => {
+  list.innerHTML = '<ul class="contact-list">' + _contactsRenderCache.map((c, i) => {
     const label = c.name || c.number || (c.ocp ? c.ocp.slice(4, 16) + '…' : '?');
     const sub   = (c.number && c.name !== c.number) ? c.number
                 : c.ocp ? c.ocp.slice(4, 22) + '…' : '';
-    return `<div class="contact-row">
-      <div class="contact-avatar">${escHtml((label[0] || '?').toUpperCase())}</div>
-      <div class="contact-info" onclick="_contactAct(${i},'call')">
+    const dir   = _CI_DIR[c.direction] || null;
+    const callTarget = c.number || label;
+    return `<li class="contact-row">
+      <div class="contact-avatar" aria-hidden="true">${escHtml((label[0] || '?').toUpperCase())}</div>
+      <div class="contact-info">
         <div class="contact-name">${escHtml(label)}</div>
         ${sub ? `<div class="contact-sub">${escHtml(sub)}</div>` : ''}
+        <div class="contact-meta">${dir ? dir.svg + '<span class="sr-only">' + dir.label + ', </span>' : ''}<time datetime="${new Date(c.lastCall || 0).toISOString()}">${escHtml(_fmtCallTime(c.lastCall))}</time></div>
       </div>
       <div class="contact-actions">
-        <button class="contact-btn" onclick="_contactAct(${i},'call')" title="Call">&#9742;</button>
-        ${c.ocp ? `<button class="contact-btn contact-btn-vid" onclick="_contactAct(${i},'video')" title="Video Call">&#128249;</button>` : ''}
-        ${c.ocp ? `<button class="contact-btn contact-btn-msg" onclick="_contactAct(${i},'msg')" title="Message">&#128172;</button>` : ''}
+        <button class="contact-btn" type="button" onclick="_contactAct(${i},'call')" aria-label="Call ${escHtml(callTarget)}">${_CI_PHONE}</button>
+        ${c.ocp ? `<button class="contact-btn contact-btn-vid" type="button" onclick="_contactAct(${i},'video')" aria-label="Video call ${escHtml(label)}">${_CI_VIDEO}</button>` : ''}
+        ${c.ocp ? `<button class="contact-btn contact-btn-msg" type="button" onclick="_contactAct(${i},'msg')" aria-label="Message ${escHtml(label)}">${_CI_MSG}</button>` : ''}
       </div>
-    </div>`;
-  }).join('');
+    </li>`;
+  }).join('') + '</ul>';
 }
 function _contactAct(i, action) {
   const c = _contactsRenderCache[i];
@@ -10013,23 +10005,28 @@ function _maybeShowEnrollCard() {
   if (!main) return;
   const card = document.createElement('div');
   card.id = 'enroll-card';
-  card.style.cssText = 'margin:0 0 10px;background:rgba(200,245,90,.07);border:1px solid rgba(200,245,90,.22);' +
-    'border-radius:12px;padding:12px 14px;';
-  const msg = document.createElement('div');
-  msg.textContent = 'Open this profile from any browser: set a username and password';
-  msg.style.cssText = 'font-family:"DM Mono",monospace;font-size:13px;color:#c8dff5;line-height:1.5;margin-bottom:10px;';
-  card.appendChild(msg);
-  const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:10px;';
+  card.className = 'banner banner-success';
+  card.setAttribute('role', 'status');
+  const text = document.createElement('div');
+  text.className = 'banner-text';
+  const strong = document.createElement('strong');
+  strong.textContent = 'Open this profile from any browser';
+  const span = document.createElement('span');
+  span.textContent = 'Set a username and password';
+  text.appendChild(strong); text.appendChild(span);
+  card.appendChild(text);
+  const acts = document.createElement('div');
+  acts.className = 'banner-actions';
   const set = document.createElement('button');
-  set.type = 'button'; set.textContent = 'Set up';
-  set.style.cssText = 'flex:1;padding:10px;background:#c8f55a;color:#0a1a05;border:0;border-radius:10px;font-weight:700;cursor:pointer;';
+  set.type = 'button'; set.className = 'banner-btn banner-btn-primary'; set.textContent = 'Set up';
   set.onclick = () => _enrollExistingIdentity();
+  acts.appendChild(set);
+  card.appendChild(acts);
   const later = document.createElement('button');
-  later.type = 'button'; later.textContent = 'Not now';
-  later.style.cssText = 'padding:10px 14px;background:transparent;color:#8aabb8;border:1px solid rgba(255,255,255,.12);border-radius:10px;cursor:pointer;';
+  later.type = 'button'; later.className = 'banner-dismiss';
+  later.setAttribute('aria-label', 'Not now');
+  later.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   later.onclick = () => { try { localStorage.setItem('ocp_enroll_dismissed', '1'); } catch (e) {} card.remove(); };
-  row.appendChild(set); row.appendChild(later); card.appendChild(row);
   main.insertBefore(card, main.firstChild);   // directly under the header
 }
 
