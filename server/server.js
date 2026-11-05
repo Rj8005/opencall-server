@@ -524,7 +524,12 @@ function getPlatformOrder(number) {
   return COUNTRY_PLATFORMS[country] || ['whatsapp','telegram','viber','rcs'];
 }
 
+// Legacy outbound notifications (ntfy.sh, textbelt, Telegram, Viber, LINE, WhatsApp) put the
+// callee's number in third-party requests: off unless LEGACY_NOTIFY=1.
+const LEGACY_NOTIFY = process.env.LEGACY_NOTIFY === '1';
+
 async function notifyViaPlatform(platform, toNumber, fromName, link) {
+  if (!LEGACY_NOTIFY) return false;
   const msg = `${fromName} is calling you free on OpenCall.\n` +
               `Tap to answer — no app needed:\n${link}`;
 
@@ -647,6 +652,7 @@ async function notifyViaPlatform(platform, toNumber, fromName, link) {
 }
 
 async function smartNotify(toNumber, fromName, link, countryOverride) {
+  if (!LEGACY_NOTIFY) return [];   // the caller still gets answer_link_ready; nothing is sent to anyone
   const country   = countryOverride || detectCountry(toNumber);
   const platforms = (country && COUNTRY_PLATFORMS[country])
     ? COUNTRY_PLATFORMS[country]
@@ -696,6 +702,7 @@ function generateAnswerLink(callId, fromName, fromNumber) {
 const { ALLOWED_ORIGINS } = require('./vault');
 const vault = require('./vault').init({ handles, ocpToHandle, saveHandles });
 const calllink = require('./calllink').init({ handles, ocpRegistry, registry, metadata, callLog, send, sendPushNotification, log, pushSubscriptions: (typeof pushSubscriptions !== 'undefined' ? pushSubscriptions : null) });
+const freefirst = require('./freefirst').init({ pendingCalls, metadata, callLog, send, log, makeCallId });
 
 // Small per-IP limiter for the public lookup endpoints.
 const httpHits = new Map();   // key → [timestamps]
@@ -1116,6 +1123,7 @@ async function handle(ws, msg) {
   }
 
   if (await calllink.handleWs(ws, msg)) return;
+  if (await freefirst.handleWs(ws, msg)) return;
 
   // Identity gate: a socket that has not proven an identity (and is not a
   // guest/relay/sim-bank socket) may only send the pre-registration types.
