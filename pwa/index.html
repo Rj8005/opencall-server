@@ -671,7 +671,7 @@ input::placeholder { color: var(--text-muted); }
   color: #e05050;
 }
 .rec-indicator {
-  font-size:12px; color: #e05050; min-width: 34px;
+  font-size:12px; color: var(--ui-danger); min-width: 34px;
   display: none; align-items: center; flex-shrink: 0;
 }
 .rec-indicator.active { display: flex; }
@@ -914,21 +914,21 @@ if (APP_EMBED) {
           <circle cx="12" cy="12" r="1.5" fill="#63b4ff"/>
         </svg>
       </div>
-      <div style="font-size:24px;font-weight:700;color:var(--text-primary);">OpenCall</div>
+      <h1 style="font-family:'Syne',sans-serif;font-size:28px;font-weight:700;color:var(--text-primary);margin:0;">OpenCall</h1>
       <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Internet calls · No carrier · No cost</div>
     </div>
 
     <div class="card" id="register-form-card">
       <div class="field-group">
-        <label class="card-label">Your name</label>
-        <input type="text" id="input-name" placeholder="Name" style="margin-top:4px"/>
+        <label class="card-label" for="input-name">Your name</label>
+        <input type="text" id="input-name" placeholder="Name" autocomplete="name" style="margin-top:4px"/>
       </div>
       <div class="field-group" style="margin-top:12px">
-        <label class="card-label">Your number</label>
-        <input type="tel" id="input-number" placeholder="Number" style="margin-top:4px"/>
+        <label class="card-label" for="input-number">Your number</label>
+        <input type="tel" id="input-number" placeholder="Number" inputmode="tel" autocomplete="tel" style="margin-top:4px"/>
       </div>
       <div class="field-group" style="margin-top:12px">
-        <label class="card-label">Signal server</label>
+        <label class="card-label" for="input-server">Signal server</label>
         <input type="text" id="input-server"
                value="wss://signal.opencall.space"
                style="margin-top:4px;font-size:12px"/>
@@ -940,13 +940,13 @@ if (APP_EMBED) {
     </div>
 
     <div style="margin-top:10px" id="register-address-block">
-      <div class="card-label" style="margin-bottom:6px">Your OCP address</div>
+      <div class="card-label" id="reg-addr-l" style="margin-bottom:6px">Your OCP address</div>
       <div class="identity-val">
         <span id="ocp-address-display"
               style="font-size:12px;word-break:break-all">
           generating...
         </span>
-        <span class="copy-btn" onclick="copyOCPAddress()">copy</span>
+        <button type="button" class="copy-btn" onclick="copyOCPAddress()" aria-label="Copy OCP address">Copy</button>
       </div>
     </div>
 
@@ -964,11 +964,7 @@ if (APP_EMBED) {
 
     <!-- Back up identity link -->
     <div id="register-backup-link" style="margin-top:10px;text-align:right">
-      <span onclick="backupIdentity()" style="font-size:12px;color:var(--blue,#63b4ff);
-        cursor:pointer;font-family:'DM Mono',monospace;
-        text-decoration:underline;text-underline-offset:3px">
-        🔐 back up identity
-      </span>
+      <button type="button" class="link-btn" onclick="backupIdentity()">Back up identity</button>
     </div>
 
   </div>
@@ -1186,7 +1182,7 @@ if (APP_EMBED) {
       border-top:1px solid rgba(99,180,255,0.1);
       padding:8px 14px;
       font-family:monospace;font-size:12px;
-      color:rgba(99,180,255,0.6);
+      color:var(--ui-text-muted);
       display:none;
       z-index:50;">
       <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
@@ -1231,20 +1227,20 @@ if (APP_EMBED) {
     <div style="display:flex;justify-content:center;
                 gap:48px;margin-top:48px;">
       <div style="text-align:center;">
-        <div class="cbtn cbtn-end" id="btn-decline-inc"
+        <button type="button" class="cbtn cbtn-end" id="btn-decline-inc" aria-label="Decline call"
              style="width:64px;height:64px;font-size:22px;margin:0 auto 8px;">
           &#9742;
-        </div>
+        </button>
         <div style="font-size:12px;color:var(--text-muted);">Decline</div>
       </div>
       <div style="text-align:center;">
-        <div class="cbtn" id="btn-answer-inc"
+        <button type="button" class="cbtn" id="btn-answer-inc" aria-label="Answer call"
              style="width:64px;height:64px;font-size:22px;
                     background:var(--green-dim);
                     border:1px solid var(--green-border);
                     margin:0 auto 8px;">
           &#9742;
-        </div>
+        </button>
         <div style="font-size:12px;color:var(--green);">Answer</div>
       </div>
     </div>
@@ -1272,12 +1268,12 @@ if (APP_EMBED) {
       <div class="call-route-badge" id="call-route-info">via OCP network</div>
       <div class="call-timer" id="call-timer">0:00</div>
       <div class="call-btns">
-        <div class="cbtn cbtn-mute" id="btn-mute" title="Mute" onclick="toggleMute()">&#127908;</div>
-        <div class="cbtn cbtn-vid" id="btn-video" title="Video" onclick="toggleVideo()">&#127909;</div>
-        <div class="cbtn cbtn-end" id="btn-hangup" title="End call" onclick="doHangup()">&#9742;</div>
-        <div class="cbtn cbtn-spk" id="btn-speaker" title="Speaker" onclick="toggleSpeaker()">&#128266;</div>
-        <div class="cbtn cbtn-ainotes" id="btn-ai-notes" title="AI Notes" onclick="toggleAiNotes()">&#128221;</div>
-        <div class="cbtn cbtn-screen" id="btn-screen" title="Share screen" onclick="toggleScreenShare()">&#128253;</div>
+        <button type="button" class="cbtn cbtn-mute" id="btn-mute" title="Mute" aria-label="Mute" onclick="toggleMute()">&#127908;</button>
+        <button type="button" class="cbtn cbtn-vid" id="btn-video" title="Video" aria-label="Video" onclick="toggleVideo()">&#127909;</button>
+        <button type="button" class="cbtn cbtn-end" id="btn-hangup" title="End call" aria-label="End call" onclick="doHangup()">&#9742;</button>
+        <button type="button" class="cbtn cbtn-spk" id="btn-speaker" title="Speaker" aria-label="Speaker" onclick="toggleSpeaker()">&#128266;</button>
+        <button type="button" class="cbtn cbtn-ainotes" id="btn-ai-notes" title="AI Notes" aria-label="AI Notes" onclick="toggleAiNotes()">&#128221;</button>
+        <button type="button" class="cbtn cbtn-screen" id="btn-screen" title="Share screen" aria-label="Share screen" onclick="toggleScreenShare()">&#128253;</button>
       </div>
     </div>
 
@@ -1290,8 +1286,8 @@ if (APP_EMBED) {
                   padding:6px 12px;border-bottom:1px solid var(--border)">
         <span style="font-size:12px;color:var(--text-muted);letter-spacing:0.8px;
                      text-transform:none">Live transcript</span>
-        <span onclick="toggleAiPanel()" style="cursor:pointer;font-size:12px;
-              color:var(--text-muted)">&#10005;</span>
+        <button type="button" onclick="toggleAiPanel()" aria-label="Close transcript" style="cursor:pointer;font-size:16px;background:none;border:0;
+              color:var(--ui-text-muted);min-width:44px;min-height:44px">&#10005;</button>
       </div>
       <div class="ai-transcript" id="ai-transcript"></div>
       <div class="ai-notes-foot">
@@ -1407,9 +1403,9 @@ if (APP_EMBED) {
     <li class="sysmsg">Today</li>
   </ul>
   <div class="composer">
-    <input type="file" id="ocpFileInput" style="display:none" accept="*/*">
+    <input type="file" id="ocpFileInput" aria-label="Attach a file" style="display:none" accept="*/*">
     <button id="ocpAttach" class="attach-btn" title="Attach file" type="button">📎</button>
-    <textarea id="ocpInput" class="field" placeholder="Message…" rows="1"></textarea>
+    <textarea id="ocpInput" class="field" placeholder="Message…" aria-label="Message" rows="1"></textarea>
     <span id="ocpRecStatus" class="rec-indicator" aria-live="polite"></span>
     <button id="ocpMic" class="mic-btn" title="Hold to record voice note" type="button">🎙</button>
     <button id="ocpSend" class="send" title="Send">&#8593;</button>
@@ -1438,7 +1434,7 @@ if (APP_EMBED) {
   <div class="seglimit" id="seglimit">160 / 1 seg</div>
 
   <div class="composer">
-    <textarea id="smsInput" class="field" placeholder="Message…" rows="1" maxlength="1530"></textarea>
+    <textarea id="smsInput" class="field" placeholder="Message…" aria-label="Message" rows="1" maxlength="1530"></textarea>
     <button id="smsSend" class="send" title="Send">&#8593;</button>
   </div>
 </section>
@@ -1519,7 +1515,7 @@ const LOG = {
   webrtc:(msg, data) => { console.log(`%c[WEBRTC] ${msg}`, 'color:#f5a623;font-weight:bold', data??''); debugLog('webrtc', msg, data); },
   srv:   (msg, data) => { console.log(`%c[SERVER] ${msg}`, 'color:#c8dff5;font-weight:bold', data??''); debugLog('server', msg, data); },
   err:   (msg, data) => { console.error(`[ERROR] ${msg}`,                                    data??''); debugLog('error',  msg, data); },
-  ice:   (msg, data) => { console.log(`%c[ICE] ${msg}`,    'color:#888;font-style:italic',   data??''); debugLog('ice',    msg, data); },
+  ice:   (msg, data) => { console.log(`%c[ICE] ${msg}`,    'color:var(--ui-text-muted);font-style:italic',   data??''); debugLog('ice',    msg, data); },
 };
 
 // ── Wake lock — keep page awake while call is pending ─────
@@ -1726,7 +1722,7 @@ function _runWalletOnboarding(startAt) {
         'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
       const BTN_SEC = 'width:100%;padding:12px;background:rgba(255,255,255,.06);color:#c8dff5;border:0;' +
         'border-radius:14px;font-weight:600;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;margin-top:10px;';
-      const BTN_GHOST = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
+      const BTN_GHOST = 'width:100%;padding:10px;background:transparent;color:var(--ui-text-muted);border:0;' +
         'margin-top:8px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
       const INP = 'width:100%;box-sizing:border-box;padding:12px 14px;' +
         'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);' +
@@ -1760,7 +1756,7 @@ function _runWalletOnboarding(startAt) {
           '<circle cx="20" cy="20" r="3"  fill="#63b4ff"/></svg>' +
           '<div style="font-family:\'Syne\',sans-serif;font-size:22px;font-weight:700;' +
           'color:var(--text-primary,#e8f4ff);margin-top:10px">OpenCall</div>' +
-          '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:#667;margin-top:4px">' +
+          '<div style="font-family:\'DM Mono\',monospace;font-size:12px;color:var(--ui-text-muted);margin-top:4px">' +
           'Set up your identity to call</div>';
         wrap.appendChild(logo);
 
@@ -1808,7 +1804,7 @@ function _runWalletOnboarding(startAt) {
             'border-radius:8px;padding:9px 10px;display:flex;align-items:center;gap:6px;';
           const num = document.createElement('span');
           num.textContent = (i + 1) + '.';
-          num.style.cssText = 'color:#666;font-size:12px;font-family:"DM Mono",monospace;min-width:18px;';
+          num.style.cssText = 'color:var(--ui-text-muted);font-size:12px;font-family:"DM Mono",monospace;min-width:18px;';
           const word = document.createElement('strong');
           word.textContent = w;
           word.style.cssText = 'color:#c8f55a;font-family:"DM Mono",monospace;font-size:14px;';
@@ -1954,7 +1950,7 @@ function _runWalletOnboarding(startAt) {
         picks.forEach((idx) => {
           const label = document.createElement('label');
           label.textContent = 'Word #' + (idx + 1);
-          label.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:#667;' +
+          label.style.cssText = 'font-family:"DM Mono",monospace;font-size:12px;color:var(--ui-text-muted);' +
             'display:block;margin-bottom:4px;';
           const inp = document.createElement('input');
           inp.type = 'text';
@@ -2335,7 +2331,7 @@ async function _runInternationalFlow(direct) {
     'border:0;border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:default;';
   const BTN_SEC = 'width:100%;padding:12px;background:rgba(255,255,255,.06);color:#c8dff5;border:0;' +
     'border-radius:14px;font-weight:600;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;margin-top:10px;';
-  const BTN_GHOST = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
+  const BTN_GHOST = 'width:100%;padding:10px;background:transparent;color:var(--ui-text-muted);border:0;' +
     'margin-top:8px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
   const BTN_DANGER = 'width:100%;padding:15px;background:var(--red,#ff6b6b);color:#1a0505;border:0;' +
     'border-radius:14px;font-weight:700;font-size:16px;font-family:"Syne",sans-serif;cursor:pointer;';
@@ -2379,7 +2375,7 @@ async function _runInternationalFlow(direct) {
     const x = document.createElement('span');
     x.textContent = '✕';
     x.setAttribute('aria-label', 'Close');
-    x.style.cssText = 'cursor:pointer;color:#667;font-size:18px;padding:4px 6px;line-height:1;';
+    x.style.cssText = 'cursor:pointer;color:var(--ui-text-muted);font-size:18px;padding:4px 6px;line-height:1;';
     x.onclick = () => { unmount(ovl); if (onClose) onClose(); };
     bar.appendChild(h);
     bar.appendChild(x);
@@ -4124,7 +4120,7 @@ function _confirmIdentityOverwrite(newOcp) {
 
       const btnNo = document.createElement('button');
       btnNo.textContent = 'Cancel';
-      btnNo.style.cssText = 'width:100%;padding:12px;background:transparent;color:#667;border:0;' +
+      btnNo.style.cssText = 'width:100%;padding:12px;background:transparent;color:var(--ui-text-muted);border:0;' +
         'margin-top:10px;cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
       btnNo.onclick = () => { document.body.removeChild(ovl); resolve(false); };
       wrap.appendChild(btnNo);
@@ -4216,7 +4212,7 @@ async function backupIdentity() {
       a0Body.appendChild(container);
       const cancelBtn = document.createElement('button');
       cancelBtn.textContent = 'Cancel';
-      cancelBtn.style.cssText = 'width:100%;padding:10px;background:transparent;color:#667;border:0;' +
+      cancelBtn.style.cssText = 'width:100%;padding:10px;background:transparent;color:var(--ui-text-muted);border:0;' +
         'cursor:pointer;font-size:13px;font-family:"DM Mono",monospace;';
       a0Body.appendChild(cancelBtn);
       return { container, cancelBtn };
@@ -4348,7 +4344,7 @@ async function backupIdentity() {
       const cell = document.createElement('div');
       cell.style.cssText = 'background:rgba(200,245,90,.06);border:1px solid rgba(200,245,90,.18);' +
         'border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:5px;';
-      cell.innerHTML = `<span style="color:#666;font-size:12px;font-family:'DM Mono',monospace;min-width:18px">${i+1}.</span>` +
+      cell.innerHTML = `<span style="color:var(--ui-text-muted);font-size:12px;font-family:'DM Mono',monospace;min-width:18px">${i+1}.</span>` +
         `<strong style="color:#c8f55a;font-family:'DM Mono',monospace;font-size:13px">${w}</strong>`;
       grid.appendChild(cell);
     });
@@ -4524,7 +4520,7 @@ async function backupIdentity() {
   // ── Close button ───────────────────────────────────────
   const closeBtn = document.createElement('button');
   closeBtn.textContent = 'Close';
-  closeBtn.style.cssText = 'width:100%;padding:12px;background:transparent;color:#667;border:0;' +
+  closeBtn.style.cssText = 'width:100%;padding:12px;background:transparent;color:var(--ui-text-muted);border:0;' +
     'cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
   closeBtn.onclick = () => { if (ovl.parentNode) document.body.removeChild(ovl); };
   wrap.appendChild(closeBtn);
@@ -4595,7 +4591,7 @@ async function _restoreIdentityWithGoogle() {
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = 'Cancel';
-  cancelBtn.style.cssText = 'width:100%;padding:12px;background:transparent;color:#667;border:0;' +
+  cancelBtn.style.cssText = 'width:100%;padding:12px;background:transparent;color:var(--ui-text-muted);border:0;' +
     'cursor:pointer;font-size:14px;font-family:"DM Mono",monospace;';
   wrap.appendChild(cancelBtn);
 
@@ -5551,7 +5547,7 @@ function _offerTranscriptDownload() {
     'border:1px solid rgba(99,180,255,.25);border-radius:8px;color:var(--blue);' +
     'font-size:12px;cursor:pointer;">Download</button>' +
     '<button onclick="document.getElementById(\'ai-transcript-offer\').remove()" ' +
-    'style="padding:6px 8px;background:none;border:0;color:#555;font-size:14px;cursor:pointer;">&#10005;</button>';
+    'style="padding:6px 8px;background:none;border:0;color:var(--ui-text-muted);font-size:14px;cursor:pointer;">&#10005;</button>';
   document.body.appendChild(bar);
   setTimeout(() => bar.remove(), 30000);
 }
@@ -6869,10 +6865,10 @@ function showUSSDWaitingUI(callee, country) {
     || document.createElement('div');
   panel.innerHTML = `
     <div style="background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:16px;margin:12px 0;">
-      <div style="font-size:13px;color:#888;margin-bottom:8px;">USSD alert sent</div>
+      <div style="font-size:13px;color:var(--ui-text-muted);margin-bottom:8px;">USSD alert sent</div>
       <div style="font-size:15px;color:#fff;">${callee}</div>
       <div style="font-size:12px;color:#c8f55a;margin-top:4px;">${country} — their phone screen shows a menu</div>
-      <div style="font-size:12px;color:#666;margin-top:8px;">They press 1 to accept → call connects instantly</div>
+      <div style="font-size:12px;color:var(--ui-text-muted);margin-top:8px;">They press 1 to accept → call connects instantly</div>
     </div>
   `;
 }
@@ -7135,7 +7131,7 @@ function invToggleEmail() {
   el.dataset.mode = 'email';
   el.innerHTML = `
     <div class="inv-email-row">
-      <input type="email" id="inv-email-inp" placeholder="their@email.com" autocomplete="email">
+      <input type="email" id="inv-email-inp" placeholder="their@email.com" aria-label="Recipient email" autocomplete="email">
       <button class="inv-email-send" onclick="invSendEmail()">Send invite</button>
     </div>
     <div id="inv-email-result" class="inv-send-result"></div>
@@ -7551,7 +7547,7 @@ async function sendViaTextBelt(e164, inviteURL) {
     }
   } catch(err) {
     if (btn) { btn.innerHTML = '✗ Failed — use buttons above'; btn.disabled = false; }
-    if (statusEl) { statusEl.innerHTML = '<small style="color:#888">' + err.message + '</small>'; }
+    if (statusEl) { statusEl.innerHTML = '<small style="color:var(--ui-text-muted)">' + err.message + '</small>'; }
   }
 }
 
@@ -7621,7 +7617,7 @@ function _invShowFallback(to, inviteUrl) {
   banner.innerHTML = `
     <div class="invite-banner-msg">Copy this link and send manually:</div>
     <div class="inv-link-row">
-      <input class="inv-link-inp" type="text" readonly value="${safeUrl}">
+      <input class="inv-link-inp" type="text" readonly aria-label="Invite link" value="${safeUrl}">
       <button class="inv-copy-btn" onclick="invCopyLink()">Copy link</button>
     </div>
   `;
@@ -7657,7 +7653,7 @@ async function showInviteBanner(to) {
       </div>
       <div class="invite-sub">Choose how to send them the join link:</div>
       <div class="invite-link-row">
-        <input id="invite-link-input" class="inv-link-inp" type="text" readonly value="${safeUrl}">
+        <input id="invite-link-input" class="inv-link-inp" type="text" readonly aria-label="Invite link" value="${safeUrl}">
         <button class="inv-copy-btn" onclick="copyInviteLink()">Copy</button>
       </div>
       <div class="country-row">
@@ -7766,14 +7762,14 @@ function showCountrySelector(number) {
           <div style="font-size:13px;color:#f0ede8;font-weight:600">
             ${country.name}
           </div>
-          <div style="font-size:12px;color:#666;margin-top:2px">Will notify via:</div>
+          <div style="font-size:12px;color:var(--ui-text-muted);margin-top:2px">Will notify via:</div>
           <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">
             ${platforms}
           </div>
         </div>
       </div>
       <button id="cs-change-btn"
-        style="padding:6px 12px;background:#1a1a1a;color:#666;
+        style="padding:6px 12px;background:#1a1a1a;color:var(--ui-text-muted);
                border:1px solid #2a2a2a;border-radius:8px;
                font-size:12px;cursor:pointer;white-space:nowrap">
         Change ✏️
@@ -7781,7 +7777,7 @@ function showCountrySelector(number) {
     `;
   } else {
     selector.innerHTML = `
-      <div style="font-size:12px;color:#666;flex:1">Country not detected</div>
+      <div style="font-size:12px;color:var(--ui-text-muted);flex:1">Country not detected</div>
       <button id="cs-change-btn"
         style="padding:8px 16px;background:#c8f55a;color:#0a0a0a;
                border:none;border-radius:8px;font-size:12px;
@@ -7826,7 +7822,7 @@ function openCountryPicker() {
           <span style="font-size:24px">${c.flag}</span>
           <div style="flex:1">
             <div style="font-size:14px;color:#f0ede8">${c.name}</div>
-            <div style="font-size:12px;color:#444;margin-top:2px">${c.prefix}</div>
+            <div style="font-size:12px;color:var(--ui-text-muted);margin-top:2px">${c.prefix}</div>
           </div>
           <div style="font-size:16px">${icons}</div>
         </div>`;
@@ -7839,10 +7835,10 @@ function openCountryPicker() {
         Select Country
       </div>
       <button id="cp-close"
-        style="background:none;border:none;color:#666;
+        style="background:none;border:none;color:var(--ui-text-muted);
                font-size:20px;cursor:pointer">✕</button>
     </div>
-    <input id="country-search" placeholder="Search country…"
+    <input id="country-search" aria-label="Search country" placeholder="Search country…"
       style="margin:12px 16px;padding:12px 16px;background:#111;
              border:1px solid #1f1f1f;border-radius:10px;
              color:#f0ede8;font-size:14px;outline:none">
@@ -8657,7 +8653,7 @@ function _showBackupBanner() {
 
   const laterBtn = document.createElement('button');
   laterBtn.textContent = 'Later';
-  laterBtn.style.cssText = 'padding:7px 10px;background:transparent;color:#667;border:0;' +
+  laterBtn.style.cssText = 'padding:7px 10px;background:transparent;color:var(--ui-text-muted);border:0;' +
     'font-size:12px;font-family:"DM Mono",monospace;cursor:pointer;white-space:nowrap;';
   laterBtn.onclick = () => banner.remove();
   banner.appendChild(laterBtn);
@@ -9560,22 +9556,23 @@ function _contactAct(i, action) {
 // Shown on first launch (no stored identity). Nothing is minted until the
 // user picks "Create a profile".
 const _ONB = {
-  BASE: 'position:fixed;inset:0;z-index:15000;background:var(--bg-deep,#060a10);' +
-    'overflow-y:auto;display:flex;flex-direction:column;align-items:center;padding:40px 20px 56px;',
-  H2:   'font-family:"Syne",sans-serif;font-size:24px;color:#c8f55a;text-align:center;margin:0 0 14px;font-weight:700;',
-  P:    'font-family:"DM Mono",monospace;font-size:13px;color:#8aabb8;line-height:1.6;margin:0 0 16px;',
-  BTN:  'width:100%;padding:14px;background:#c8f55a;color:#0a1a05;border:0;border-radius:12px;' +
-        'font-weight:700;font-size:15px;font-family:"Syne",sans-serif;cursor:pointer;margin-top:10px;',
-  BTN2: 'width:100%;padding:13px;background:transparent;color:#c8dff5;border:1px solid rgba(255,255,255,.18);' +
-        'border-radius:12px;font-size:14px;font-family:"DM Mono",monospace;cursor:pointer;margin-top:10px;',
-  LINK: 'background:none;border:0;color:var(--blue,#63b4ff);font-size:13px;font-family:"DM Mono",monospace;' +
-        'cursor:pointer;text-decoration:underline;text-underline-offset:2px;margin-top:14px;',
-  INP:  'width:100%;box-sizing:border-box;padding:12px 14px;background:rgba(255,255,255,.05);' +
-        'border:1px solid rgba(255,255,255,.14);border-radius:10px;color:#e8f4f7;font-size:15px;' +
-        'font-family:"DM Mono",monospace;margin-top:8px;',
-  ERR:  'font-family:"DM Mono",monospace;font-size:12px;color:#f87171;min-height:16px;margin:8px 0 0;line-height:1.5;',
-  WARN: 'font-family:"DM Mono",monospace;font-size:13px;color:#fbbf24;background:rgba(251,191,36,.08);' +
-        'border:1px solid rgba(251,191,36,.3);border-radius:12px;padding:12px 14px;margin:14px 0;line-height:1.6;'
+  BASE: 'position:fixed;inset:0;z-index:15000;background:var(--ui-bg);' +
+    'overflow-y:auto;display:flex;flex-direction:column;align-items:center;' +
+    'padding:max(40px,calc(var(--safe-top) + 24px)) 16px calc(56px + var(--safe-bottom));',
+  H2:   'font-family:var(--font-brand);font-size:var(--fs-5);color:var(--ui-accent);text-align:center;margin:0 0 var(--sp-3);font-weight:700;',
+  P:    'font-family:var(--font-body);font-size:var(--fs-2);color:var(--ui-text-muted);line-height:1.55;margin:0 0 var(--sp-4);',
+  BTN:  'width:100%;min-height:48px;padding:12px;background:var(--ui-accent);color:var(--ui-accent-ink);border:0;border-radius:var(--r-1);' +
+        'font-weight:700;font-size:var(--fs-3);font-family:var(--font-body);cursor:pointer;margin-top:var(--sp-3);',
+  BTN2: 'width:100%;min-height:48px;padding:12px;background:transparent;color:var(--ui-text);border:1px solid var(--ui-border);' +
+        'border-radius:var(--r-1);font-size:var(--fs-3);font-weight:600;font-family:var(--font-body);cursor:pointer;margin-top:var(--sp-3);',
+  LINK: 'min-height:48px;padding:0 var(--sp-3);background:none;border:0;color:var(--ui-info);font-size:var(--fs-2);font-family:var(--font-body);' +
+        'cursor:pointer;text-decoration:underline;text-underline-offset:2px;margin-top:var(--sp-2);',
+  INP:  'width:100%;box-sizing:border-box;min-height:48px;padding:12px 14px;background:var(--bg-field);' +
+        'border:1px solid var(--ui-border);border-radius:var(--r-1);color:var(--ui-text);font-size:var(--fs-3);' +
+        'font-family:var(--font-body);margin-top:var(--sp-2);',
+  ERR:  'font-family:var(--font-body);font-size:var(--fs-1);color:var(--ui-danger);min-height:18px;margin:var(--sp-2) 0 0;line-height:1.5;',
+  WARN: 'font-family:var(--font-body);font-size:var(--fs-2);color:var(--ui-warn);background:rgba(255,190,85,.08);' +
+        'border:1px solid var(--ui-warn);border-radius:var(--r-1);padding:var(--sp-3) var(--sp-4);margin:var(--sp-4) 0;line-height:1.55;'
 };
 
 // Builds a full-screen overlay and returns {ovl, wrap, close}. One onboarding
@@ -9586,8 +9583,11 @@ function _onbShell(title, subtitle) {
   const ovl = document.createElement('div');
   ovl.id = 'onb-gate';
   ovl.style.cssText = _ONB.BASE;
+  ovl.setAttribute('role', 'dialog');
+  ovl.setAttribute('aria-modal', 'true');
   const wrap = document.createElement('div');
   wrap.style.cssText = 'max-width:440px;width:100%;';
+  wrap.tabIndex = -1;
   ovl.appendChild(wrap);
   if (title) {
     const h = document.createElement('h2');
@@ -9600,6 +9600,16 @@ function _onbShell(title, subtitle) {
     wrap.appendChild(p);
   }
   document.body.appendChild(ovl);
+  // Callers add their own heading/fields right after this returns: once they
+  // have, label the dialog by its first heading and move focus inside.
+  setTimeout(() => {
+    if (!ovl.isConnected) return;
+    const h = ovl.querySelector('h1, h2');
+    if (h) { if (!h.id) h.id = 'onb-title'; ovl.setAttribute('aria-labelledby', h.id); }
+    else ovl.setAttribute('aria-label', 'OpenCall');
+    const first = ovl.querySelector('input:not([type="hidden"]), button, select, textarea, a[href]');
+    (first || wrap).focus();
+  }, 0);
   return { ovl, wrap, close: () => ovl.remove() };
 }
 

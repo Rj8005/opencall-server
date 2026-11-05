@@ -463,3 +463,72 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .62); }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .sf-text { font-size: var(--fs-1); }
+
+/* ═══════════════════════════════════════════════════════════
+   Responsive layout, register screen, gate
+   ═══════════════════════════════════════════════════════════ */
+/* One column, 16px gutters from 320px; a centred 440px column from 768px up. */
+.app-container {
+  width: 100%; max-width: 440px; margin-left: auto; margin-right: auto;
+  padding-left: var(--sp-4); padding-right: var(--sp-4);
+  min-height: 100vh; min-height: 100dvh;
+}
+html, body { max-width: 100%; overflow-x: hidden; }
+img, svg, video, canvas { max-width: 100%; }
+
+/* Wrap instead of clipping at 320px, 200% zoom or large system fonts. */
+.app-header      { flex-wrap: wrap; }
+.hdr-actions     { flex-wrap: wrap; justify-content: flex-end; }
+.sheet-split     { flex-wrap: wrap; }
+.sheet-addr      { white-space: normal; overflow-wrap: anywhere; }
+.status-footer   { flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); }
+.identity-val    { flex-wrap: wrap; gap: var(--sp-2); }
+.banner-text, .getnum-text, .contact-info, .sheet-name, .dial-hint { overflow-wrap: anywhere; }
+.dial-number { max-width: 100%; }
+
+/* Register screen */
+#screen-register .card { padding: var(--sp-4); }
+#screen-register .card-label { display: block; margin-bottom: var(--sp-1); }
+#screen-register input[type=text], #screen-register input[type=tel] {
+  min-height: 48px; font-size: var(--fs-3); padding: 0 var(--sp-3);
+  font-family: var(--font-body);
+  background: var(--bg-field); border: 1px solid var(--ui-border); border-radius: var(--r-1);
+}
+#screen-register #input-server { font-family: var(--font-mono); font-size: var(--fs-2); }
+.relay-btn { min-height: 48px; font-size: var(--fs-3); border-radius: var(--r-1); }
+.relay-btn-sms {
+  background: var(--ui-accent); color: var(--ui-accent-ink);
+  border: 1px solid var(--ui-accent); font-weight: 700;
+}
+.relay-btn-call { background: var(--ui-surface-2); color: var(--ui-info); border: 1px solid var(--ui-border); }
+.copy-btn {
+  min-height: 44px; min-width: 44px; padding: 0 var(--sp-3); cursor: pointer;
+  background: transparent; color: var(--ui-info);
+  border: 1px solid var(--ui-border); border-radius: var(--r-1);
+  font-size: var(--fs-2); font-weight: 600; opacity: 1;
+}
+.link-btn {
+  min-height: 44px; padding: 0 var(--sp-3); cursor: pointer;
+  background: none; border: 0; color: var(--ui-info);
+  font-size: var(--fs-2); text-decoration: underline; text-underline-offset: 3px;
+}
+input::placeholder, textarea::placeholder { color: var(--ui-text-muted); opacity: 1; }
+
+/* Onboarding gate (styled from the _ONB constants in index.html) */
+#onb-gate { font-family: var(--font-body); color: var(--ui-text); }
+#onb-gate button:disabled { opacity: .55; cursor: not-allowed; }
+
+@media (max-width: 359px) {
+  .keypad { gap: var(--sp-2); }
+  .action-row { gap: var(--sp-4); }
+  .logo-name { font-size: var(--fs-3); }
+}
+@media (min-width: 768px) {
+  body { padding-top: var(--sp-4); }
+}
+
+/* Call controls and incoming-call buttons are real <button>s now: reset the
+   browser button chrome so the existing .cbtn look is unchanged. */
+button.cbtn { padding: 0; font: inherit; font-size: 20px; line-height: 1; color: inherit; cursor: pointer; min-width: 44px; min-height: 44px; }
+button.cbtn-end { color: #fff; }
+.rec-indicator { color: var(--ui-danger); }
