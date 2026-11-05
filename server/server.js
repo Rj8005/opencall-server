@@ -695,6 +695,7 @@ function generateAnswerLink(callId, fromName, fromNumber) {
 // ─────────────────────────────────────────────────────────────
 //  HTTP server — health check + stats endpoint
 // ─────────────────────────────────────────────────────────────
+const { ALLOWED_ORIGINS } = require('./vault');
 const vault = require('./vault').init({ handles, ocpToHandle, saveHandles });
 const calllink = require('./calllink').init({ handles, ocpRegistry, registry, metadata, callLog, send, sendPushNotification, log, pushSubscriptions: (typeof pushSubscriptions !== 'undefined' ? pushSubscriptions : null) });
 
@@ -719,8 +720,19 @@ const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     let body = '';
-    req.on('data', d => body += d);
+    let tooBig = false;
+    req.on('data', d => {
+      if (tooBig) return;
+      body += d;
+      if (body.length > 8 * 1024) {                       // 8 KB cap
+        tooBig = true;
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('too large');
+        req.destroy();
+      }
+    });
     req.on('end', () => {
+      if (tooBig) return;
       try {
         const entry = JSON.parse(body);
         const prefix = { ok: '✅', err: '❌', warn: '⚠️', info: '📋' }[entry.type] || '📋';
@@ -896,6 +908,14 @@ wss.on("connection", (ws, req) => {
   const ip = req.socket.remoteAddress;
   ws._ocpId = Math.random().toString(36).slice(2);
   ws._challenge = crypto.randomBytes(16).toString('hex');   // fresh per connection; signed by 'register'
+
+  // Origin check: browsers always send Origin; native clients (Android, bridge) send none.
+  // Missing Origin is allowed. A foreign Origin is refused under STRICT_SIG=1, logged otherwise.
+  const wsOrigin = req.headers.origin;
+  if (wsOrigin && !ALLOWED_ORIGINS.includes(wsOrigin)) {
+    console.warn('[SIGWARN] origin', String(wsOrigin).slice(0, 60), STRICT_SIG ? 'refused' : 'allowed (log-only)');
+    if (STRICT_SIG) { ws.close(1008, 'bad_origin'); return; }
+  }
   log("→", "new connection from", ip);
 
   // send welcome
@@ -907,6 +927,14 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on('message', async (data) => {
+    // Per-socket limiter: 200 messages / 10 s (relay sockets: 1000), then close.
+    const now = Date.now();
+    if (!ws._rl || now - ws._rl.t > 10000) ws._rl = { t: now, n: 0 };
+    if (++ws._rl.n > (relayRegistry.has(ws) ? 1000 : 200)) {
+      console.warn('[SIGWARN] rate limit — closing socket', String(ws._ocp || '').slice(0, 12));
+      ws.close(1008, 'rate_limited');
+      return;
+    }
     try {
       const raw = data.toString();
       const msg = JSON.parse(raw);
@@ -995,18 +1023,27 @@ wss.on("connection", (ws, req) => {
     }
 
     // Normal user disconnect
+    // Reconnect race: when the same user re-registered on a new socket, this (old)
+    // socket no longer owns the registry entries, and must not tear down the
+    // calls that now belong to the new one. Cleanup only runs for entries that
+    // still point at this socket.
     if (meta?.number) {
-      for (const [callId, call] of callLog) {
-        if (call.from === meta.number || call.to === meta.number) {
-          const otherNumber = call.from === meta.number ? call.to : call.from;
-          const otherWs = registry.get(otherNumber);
-          if (otherWs) send(otherWs, { type: "hangup", callId, reason: "disconnected" });
-          if (call.relayWs) send(call.relayWs, { type: "relay_hangup", callId });
-          callLog.delete(callId);
+      const ownsNumber = registry.get(meta.number) === ws;
+      const ownsOcp    = !!meta.ocpAddress && ocpRegistry.get(meta.ocpAddress) === ws;
+      const myKeys = [ownsNumber ? meta.number : null, ownsOcp ? meta.ocpAddress : null].filter(Boolean);
+      if (myKeys.length) {
+        for (const [callId, call] of callLog) {
+          if (myKeys.includes(call.from) || myKeys.includes(call.to)) {
+            const otherKey = myKeys.includes(call.from) ? call.to : call.from;
+            const otherWs = registry.get(otherKey) || ocpRegistry.get(otherKey);
+            if (otherWs) send(otherWs, { type: "hangup", callId, reason: "disconnected" });
+            if (call.relayWs) send(call.relayWs, { type: "relay_hangup", callId });
+            callLog.delete(callId);
+          }
         }
       }
-      if (registry.get(meta.number) === ws) registry.delete(meta.number);
-      if (meta.ocpAddress && ocpRegistry.get(meta.ocpAddress) === ws) ocpRegistry.delete(meta.ocpAddress);
+      if (ownsNumber) registry.delete(meta.number);
+      if (ownsOcp) ocpRegistry.delete(meta.ocpAddress);
       log("←", "unregistered", meta.number);
     }
     if (meta) {
