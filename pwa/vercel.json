@@ -2,6 +2,7 @@
   "rewrites": [
     { "source": "/answer",  "destination": "/answer.html"          },
     { "source": "/relay",   "destination": "/relay.html"           },
+    { "source": "/u/:name([a-z0-9_]{3,20})", "destination": "/u.html?u=:name" },
     { "source": "/u/:id",   "destination": "/connect.html?id=:id"  },
     { "source": "/terms",   "destination": "/terms.html"           },
     { "source": "/privacy", "destination": "/privacy.html"         },

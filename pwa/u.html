@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#060a10">
+<meta name="robots" content="noindex">
+<title>Call on OpenCall</title>
+<style>
+  :root{--bg:#060a10;--card:#0d1f35;--line:rgba(99,180,255,.16);--text:#e8f4f7;--muted:#8aabb8;--acc:#c8f55a;--blue:#63b4ff;--bad:#f87171}
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+  body{display:flex;justify-content:center;padding:max(20px,env(safe-area-inset-top)) 16px max(20px,env(safe-area-inset-bottom))}
+  main{width:100%;max-width:420px;display:flex;flex-direction:column;gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px 18px}
+  .center{text-align:center}
+  h1{font-size:22px;margin:0 0 6px;font-weight:700;word-break:break-word}
+  h2{font-size:17px;margin:0 0 8px;font-weight:700}
+  p{margin:0 0 12px;line-height:1.5}
+  .muted{color:var(--muted);font-size:14px}
+  .avatar{width:72px;height:72px;border-radius:50%;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;
+    background:rgba(200,245,90,.12);border:1px solid rgba(200,245,90,.35);color:var(--acc);font-size:30px;font-weight:700}
+  .avatar.ring{animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(200,245,90,.35)}50%{box-shadow:0 0 0 14px rgba(200,245,90,0)}}
+  label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}
+  input,textarea{width:100%;padding:13px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.16);
+    background:rgba(255,255,255,.05);color:var(--text);font:inherit;font-size:16px}
+  textarea{resize:vertical;min-height:84px}
+  input:focus,textarea:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  button{width:100%;padding:15px;border:0;border-radius:14px;font:inherit;font-weight:700;font-size:16px;cursor:pointer;margin-top:12px}
+  .primary{background:var(--acc);color:#0a1a05}
+  .ghost{background:transparent;color:var(--text);border:1px solid rgba(255,255,255,.2)}
+  .danger{background:var(--bad);color:#1a0505}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .chip{width:auto;margin:0;padding:9px 14px;border-radius:999px;background:transparent;color:var(--text);
+    border:1px solid rgba(255,255,255,.2);font-weight:500;font-size:14px}
+  .chip[aria-pressed=true]{background:rgba(200,245,90,.15);border-color:var(--acc);color:var(--acc)}
+  .err{color:var(--bad);font-size:13px;min-height:18px;margin:8px 0 0}
+  .ok{color:var(--acc)}
+  .meter{height:8px;border-radius:6px;background:rgba(255,255,255,.1);overflow:hidden;margin:8px 0 4px}
+  .meter>i{display:block;height:100%;width:0;background:var(--acc);transition:width .08s}
+  .row{display:flex;gap:10px}
+  .row button{margin-top:12px}
+  .big{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums;margin:6px 0}
+  .stars{display:flex;justify-content:center;gap:6px;margin:10px 0}
+  .stars button{width:44px;height:44px;padding:0;margin:0;font-size:24px;background:transparent;border:1px solid rgba(255,255,255,.15);color:var(--muted)}
+  .stars button[aria-pressed=true]{color:var(--acc);border-color:var(--acc)}
+  footer{text-align:center;font-size:13px;color:var(--muted)}
+  footer a,.link{color:var(--blue)}
+  [hidden]{display:none!important}
+  body.embed footer{display:none}
+  @media (prefers-reduced-motion:reduce){.avatar.ring{animation:none}}
+</style>
+</head>
+<body>
+<main>
+  <section id="v-loading" class="card center" aria-live="polite"><p class="muted">Loading…</p></section>
+
+  <section id="v-closed" class="card center" hidden>
+    <div class="avatar" aria-hidden="true">?</div>
+    <h2>Not available</h2>
+    <p class="muted">This call link isn't available right now.</p>
+  </section>
+
+  <section id="v-start" class="card" hidden>
+    <div class="center">
+      <div class="avatar" id="s-avatar" aria-hidden="true"></div>
+      <h1 id="s-user"></h1>
+      <p class="muted" id="s-greeting"></p>
+    </div>
+    <label for="s-name">Your name</label>
+    <input id="s-name" maxlength="40" autocomplete="name" placeholder="Your name" required>
+    <div id="s-reasonbox" hidden>
+      <label id="s-reason-label">What is this about?</label>
+      <div class="chips" role="group" aria-labelledby="s-reason-label" id="s-chips"></div>
+      <label for="s-reason">Or write a few words</label>
+      <input id="s-reason" maxlength="60" placeholder="Reason for calling">
+    </div>
+    <p class="err" id="s-err" role="alert"></p>
+    <button class="primary" id="s-call" disabled>Preparing…</button>
+    <p class="muted center" style="margin-top:10px">Voice call over the internet. Your microphone is used only during the call.</p>
+  </section>
+
+  <section id="v-check" class="card" hidden>
+    <h2>Check your setup</h2>
+    <p class="muted">Allow your microphone, then say something — the bar should move.</p>
+    <div class="meter" aria-hidden="true"><i id="c-level"></i></div>
+    <p id="c-mic" class="muted" role="status">Waiting for microphone…</p>
+    <p id="c-net" class="muted" role="status">Testing your network…</p>
+    <button class="primary" id="c-go" disabled>Call now</button>
+    <button class="ghost" id="c-back">Back</button>
+  </section>
+
+  <section id="v-ring" class="card center" hidden aria-live="polite">
+    <div class="avatar ring" aria-hidden="true">&#9742;</div>
+    <h2 id="r-title">Ringing…</h2>
+    <p class="muted" id="r-sub"></p>
+    <div class="big" id="r-count">45</div>
+    <button class="danger" id="r-cancel">Cancel</button>
+  </section>
+
+  <section id="v-call" class="card center" hidden>
+    <div class="avatar" id="a-avatar" aria-hidden="true"></div>
+    <h2 id="a-user"></h2>
+    <p class="muted" id="a-state" role="status">Connecting…</p>
+    <div class="big" id="a-timer">0:00</div>
+    <div class="row">
+      <button class="ghost" id="a-mute" aria-pressed="false">Mute</button>
+      <button class="danger" id="a-hang">Hang up</button>
+    </div>
+  </section>
+
+  <section id="v-ended" class="card center" hidden>
+    <h2 id="e-title">Call ended</h2>
+    <p class="muted" id="e-sub"></p>
+    <div id="e-rate">
+      <p class="muted">How was the call?</p>
+      <div class="stars" role="group" aria-label="Rate the call" id="e-stars"></div>
+    </div>
+    <p class="ok" id="e-thanks" hidden>Thanks for the feedback.</p>
+    <button class="ghost" id="e-again">Call again</button>
+  </section>
+
+  <section id="v-callback" class="card" hidden>
+    <h2 id="b-title">Leave a callback request</h2>
+    <p class="muted" id="b-sub"></p>
+    <label for="b-name">Your name</label>
+    <input id="b-name" maxlength="40" autocomplete="name">
+    <label for="b-contact">How can they reach you? (phone or email)</label>
+    <input id="b-contact" maxlength="120" autocomplete="email">
+    <label for="b-msg">Message (optional)</label>
+    <textarea id="b-msg" maxlength="500"></textarea>
+    <p class="err" id="b-err" role="alert"></p>
+    <button class="primary" id="b-send">Send request</button>
+    <p class="ok center" id="b-done" hidden>Sent. They'll get back to you.</p>
+  </section>
+
+  <footer id="cta">
+    <a id="cta-link" href="/" target="_top" rel="noopener">Get your own call link</a>
+    &middot; <a id="open-link" href="#" target="_top" rel="noopener">Open in OpenCall</a>
+  </footer>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var SERVER = 'https://signal.opencall.space';
+  var WS_URL = 'wss://signal.opencall.space';
+  var RING_SECONDS = 45;
+  var REASONS = ['Sales', 'Support', 'Personal', 'Other'];
+
+  var qs = new URLSearchParams(location.search);
+  var username = (qs.get('u') || location.pathname.split('/').filter(Boolean).pop() || '').toLowerCase();
+  var token = qs.get('k') || '';
+  if (qs.get('embed') === '1') document.body.classList.add('embed');
+
+  function $(id) { return document.getElementById(id); }
+  var views = ['v-loading','v-closed','v-start','v-check','v-ring','v-call','v-ended','v-callback'];
+  function show(id) {
+    views.forEach(function (v) { $(v).hidden = v !== id; });
+    var h = $(id).querySelector('h1,h2'); if (h) { h.setAttribute('tabindex', '-1'); }
+  }
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) {} return null; }
+
+  var gid = store('ocp_guest_id');
+  if (!gid) { gid = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(function (b) { return b.toString(16).padStart(2, '0'); }).join(''); store('ocp_guest_id', gid); }
+
+  $('open-link').href = '/connect.html?id=' + encodeURIComponent(username);
+
+  var state = { info: null, iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], pow: null,
+                reason: '', stream: null, ws: null, pc: null, callId: null, pingTimer: null,
+                ringTimer: null, ended: false, remoteQueue: [], muted: false, timerSecs: 0, timer: null, connected: false };
+
+  // ── proof of work, in a Web Worker ─────────────────────────
+  var WORKER_SRC = '(' + function () {
+    var K = new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+    var W = new Uint32Array(64);
+    function sha256(bytes) {
+      var h0=0x6a09e667,h1=0xbb67ae85,h2=0x3c6ef372,h3=0xa54ff53a,h4=0x510e527f,h5=0x9b05688c,h6=0x1f83d9ab,h7=0x5be0cd19;
+      var len = bytes.length, total = ((len + 9 + 63) >> 6) << 6, buf = new Uint8Array(total);
+      buf.set(bytes); buf[len] = 0x80;
+      var bits = len * 8, dv = new DataView(buf.buffer);
+      dv.setUint32(total - 4, bits >>> 0); dv.setUint32(total - 8, Math.floor(bits / 4294967296));
+      for (var o = 0; o < total; o += 64) {
+        for (var i = 0; i < 16; i++) W[i] = dv.getUint32(o + i * 4);
+        for (i = 16; i < 64; i++) {
+          var a15 = W[i-15], a2 = W[i-2];
+          var s0 = ((a15>>>7)|(a15<<25)) ^ ((a15>>>18)|(a15<<14)) ^ (a15>>>3);
+          var s1 = ((a2>>>17)|(a2<<15)) ^ ((a2>>>19)|(a2<<13)) ^ (a2>>>10);
+          W[i] = (W[i-16] + s0 + W[i-7] + s1) | 0;
+        }
+        var a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;
+        for (i = 0; i < 64; i++) {
+          var S1 = ((e>>>6)|(e<<26)) ^ ((e>>>11)|(e<<21)) ^ ((e>>>25)|(e<<7));
+          var ch = (e & f) ^ (~e & g);
+          var t1 = (h + S1 + ch + K[i] + W[i]) | 0;
+          var S0 = ((a>>>2)|(a<<30)) ^ ((a>>>13)|(a<<19)) ^ ((a>>>22)|(a<<10));
+          var maj = (a & b) ^ (a & c) ^ (b & c);
+          var t2 = (S0 + maj) | 0;
+          h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+        }
+        h0=(h0+a)|0;h1=(h1+b)|0;h2=(h2+c)|0;h3=(h3+d)|0;h4=(h4+e)|0;h5=(h5+f)|0;h6=(h6+g)|0;h7=(h7+h)|0;
+      }
+      return [h0,h1,h2,h3,h4,h5,h6,h7];
+    }
+    function zeroBits(w) { var n = 0; for (var i = 0; i < w.length; i++) { if (w[i] === 0) { n += 32; continue; } n += Math.clz32(w[i]); break; } return n; }
+    self.onmessage = function (e) {
+      var nonce = e.data.nonce, bits = e.data.bits, enc = new TextEncoder();
+      for (var counter = 0; counter < 1e10; counter++) {
+        if (zeroBits(sha256(enc.encode(nonce + counter))) >= bits) { self.postMessage({ counter: String(counter) }); return; }
+      }
+    };
+  }.toString() + ')()';
+
+  function solvePow() {
+    return fetch(SERVER + '/link/challenge', { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error('challenge');
+      return r.json();
+    }).then(function (ch) {
+      return new Promise(function (resolve, reject) {
+        var url = URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' }));
+        var w = new Worker(url);
+        w.onmessage = function (e) { w.terminate(); URL.revokeObjectURL(url); resolve({ nonce: ch.nonce, counter: e.data.counter, at: Date.now() }); };
+        w.onerror = function () { w.terminate(); URL.revokeObjectURL(url); reject(new Error('worker')); };
+        w.postMessage({ nonce: ch.nonce, bits: ch.bits });
+      });
+    });
+  }
+  // A solved proof is single-use and expires after 5 minutes.
+  function takePow() {
+    var p = state.pow; state.pow = null;
+    if (p && Date.now() - p.at < 4 * 60 * 1000) return Promise.resolve(p);
+    return solvePow();
+  }
+
+  // ── start screen ───────────────────────────────────────────
+  function initials(s) { return (s || '?').charAt(0).toUpperCase(); }
+
+  function renderStart(info) {
+    $('s-avatar').textContent = initials(username);
+    $('s-user').textContent = '@' + username;
+    $('s-greeting').textContent = info.greeting || 'Tap call to ring them.';
+    $('s-name').value = store('ocp_guest_name') || '';
+    if (info.requireReason) {
+      $('s-reasonbox').hidden = false;
+      var box = $('s-chips');
+      REASONS.forEach(function (r) {
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'chip'; b.textContent = r; b.setAttribute('aria-pressed', 'false');
+        b.onclick = function () {
+          state.reason = r; $('s-reason').value = r;
+          Array.prototype.forEach.call(box.children, function (c) { c.setAttribute('aria-pressed', c === b ? 'true' : 'false'); });
+        };
+        box.appendChild(b);
+      });
+    }
+    show('v-start');
+    updateStartButton();
+    solvePow().then(function (p) { state.pow = p; updateStartButton(); })
+      .catch(function () { $('s-err').textContent = 'Could not prepare the call. Check your connection and reload.'; });
+  }
+
+  function currentReason() { return ($('s-reason').value || '').trim().slice(0, 60); }
+  function updateStartButton() {
+    var ready = !!state.pow;
+    var needName = !$('s-name').value.trim();
+    var needReason = state.info && state.info.requireReason && !currentReason();
+    var b = $('s-call');
+    b.disabled = !ready || needName || needReason;
+    b.textContent = !ready ? 'Preparing…' : 'Call @' + username;
+  }
+  ['s-name', 's-reason'].forEach(function (id) { $(id).addEventListener('input', updateStartButton); });
+
+  // ── pre-call check ─────────────────────────────────────────
+  var audioCtx = null, levelRaf = 0, checkPc = null;
+  function stopCheck() {
+    cancelAnimationFrame(levelRaf);
+    if (checkPc) { try { checkPc.close(); } catch (e) {} checkPc = null; }
+    if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
+  }
+  function startCheck() {
+    show('v-check');
+    $('c-go').disabled = true;
+    $('c-mic').textContent = 'Waiting for microphone…'; $('c-mic').className = 'muted';
+    $('c-net').textContent = 'Testing your network…'; $('c-net').className = 'muted';
+
+    var micOk = false, netDone = false;
+    function maybeReady() { $('c-go').disabled = !(micOk && netDone); }
+
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false })
+      .then(function (stream) {
+        state.stream = stream; micOk = true;
+        $('c-mic').textContent = 'Microphone ready'; $('c-mic').className = 'ok';
+        try {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          var an = audioCtx.createAnalyser(); an.fftSize = 256;
+          audioCtx.createMediaStreamSource(stream).connect(an);
+          var data = new Uint8Array(an.frequencyBinCount);
+          (function tick() {
+            an.getByteTimeDomainData(data);
+            var peak = 0; for (var i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i] - 128));
+            $('c-level').style.width = Math.min(100, peak * 2.2) + '%';
+            levelRaf = requestAnimationFrame(tick);
+          })();
+        } catch (e) {}
+        maybeReady();
+      })
+      .catch(function () {
+        $('c-mic').textContent = 'Microphone blocked. Allow it in your browser settings, then go back and try again.';
+        $('c-mic').className = 'err';
+      });
+
+    // ICE gathering test: reports Ready when a server-reflexive/relay candidate appears.
+    var sawSrflx = false, sawRelay = false;
+    function finishNet() {
+      if (netDone) return; netDone = true;
+      if (sawSrflx || sawRelay) { $('c-net').textContent = 'Network ready'; $('c-net').className = 'ok'; }
+      else { $('c-net').textContent = 'Your network may use a relay — the call can still work, but may take a moment longer to connect.'; $('c-net').className = 'muted'; }
+      if (checkPc) { try { checkPc.close(); } catch (e) {} checkPc = null; }
+      maybeReady();
+    }
+    try {
+      checkPc = new RTCPeerConnection({ iceServers: state.iceServers });
+      checkPc.createDataChannel('t');
+      checkPc.onicecandidate = function (e) {
+        if (!e.candidate) return finishNet();
+        var t = e.candidate.type || (/ typ (\w+)/.exec(e.candidate.candidate) || [])[1];
+        if (t === 'srflx') sawSrflx = true;
+        if (t === 'relay') sawRelay = true;
+      };
+      checkPc.createOffer().then(function (o) { return checkPc.setLocalDescription(o); }).catch(finishNet);
+      setTimeout(finishNet, 4000);
+    } catch (e) { finishNet(); }
+  }
+
+  // ── calling ────────────────────────────────────────────────
+  function showEnded(title, sub, rate) {
+    state.ended = true; teardown();
+    $('e-title').textContent = title; $('e-sub').textContent = sub || '';
+    $('e-rate').hidden = !rate; $('e-thanks').hidden = true;
+    show('v-ended');
+  }
+
+  function teardown() {
+    stopCheck();
+    clearInterval(state.ringTimer); clearInterval(state.timer); clearInterval(state.pingTimer);
+    if (state.pc) { try { state.pc.close(); } catch (e) {} state.pc = null; }
+    if (state.stream) { state.stream.getTracks().forEach(function (t) { t.stop(); }); state.stream = null; }
+    if (state.ws) { try { state.ws.onclose = null; state.ws.close(); } catch (e) {} state.ws = null; }
+    state.remoteQueue = []; state.connected = false;
+  }
+
+  function wsSend(o) { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(o)); }
+
+  function placeCall() {
+    state.ended = false;
+    $('s-err').textContent = '';
+    stopCheck();
+    show('v-ring');
+    $('r-title').textContent = 'Connecting…'; $('r-sub').textContent = 'Reaching @' + username;
+    $('r-count').textContent = RING_SECONDS;
+    var name = $('s-name').value.trim().slice(0, 40);
+    var reason = currentReason();
+    store('ocp_guest_name', name);
+
+    takePow().then(function (pow) {
+      var ws = new WebSocket(WS_URL); state.ws = ws;
+      ws.onopen = function () {
+        wsSend({ type: 'guest_call', username: username, name: name, reason: reason,
+                 nonce: pow.nonce, counter: pow.counter, gid: gid, k: token || undefined });
+        state.pingTimer = setInterval(function () { wsSend({ type: 'ping' }); }, 20000);
+      };
+      ws.onmessage = onMessage;
+      ws.onerror = function () { if (!state.ended && !state.connected) failToCallback('We couldn\'t reach the call service.'); };
+      ws.onclose = function () { if (!state.ended) showEnded('Disconnected', 'The connection was lost.', false); };
+    }).catch(function () { failToCallback('Could not prepare the call.'); });
+  }
+
+  function startCountdown() {
+    var left = RING_SECONDS; $('r-count').textContent = left;
+    clearInterval(state.ringTimer);
+    state.ringTimer = setInterval(function () { left = Math.max(0, left - 1); $('r-count').textContent = left; }, 1000);
+  }
+
+  function onMessage(ev) {
+    var msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    switch (msg.type) {
+      case 'guest_ringing':
+        state.callId = msg.callId;
+        $('r-title').textContent = 'Ringing @' + username + '…';
+        $('r-sub').textContent = 'Waiting for them to pick up';
+        startCountdown();
+        break;
+      case 'guest_unavailable':
+        if (msg.reason === 'closed') { teardown(); show('v-closed'); }
+        else if (msg.reason === 'busy') failToCallback('They\'re on another call right now.');
+        else if (msg.reason === 'rate_limited') showEnded('Too many calls', 'Please try again later.', false);
+        else if (msg.reason === 'reason_required') { teardown(); show('v-start'); $('s-err').textContent = 'Please tell them what this is about.'; state.pow = null; solvePow().then(function (p) { state.pow = p; updateStartButton(); }); }
+        else failToCallback('They\'re not available for a live call.');
+        break;
+      case 'guest_timeout': failToCallback('No answer.'); break;
+      case 'answered': onAnswered(); break;
+      case 'rejected': showEnded('Call declined', '', false); break;
+      case 'hangup': showEnded('Call ended', '', true); break;
+      case 'sdp_answer':
+        if (state.pc) {
+          state.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }).then(flushRemote).catch(function () {});
+        }
+        break;
+      case 'ice':
+        if (msg.candidate) {
+          if (state.pc && state.pc.remoteDescription) state.pc.addIceCandidate(msg.candidate).catch(function () {});
+          else state.remoteQueue.push(msg.candidate);
+        }
+        break;
+    }
+  }
+
+  function flushRemote() {
+    var q = state.remoteQueue; state.remoteQueue = [];
+    q.forEach(function (c) { state.pc.addIceCandidate(c).catch(function () {}); });
+  }
+
+  function onAnswered() {
+    clearInterval(state.ringTimer);
+    $('a-avatar').textContent = initials(username); $('a-user').textContent = '@' + username;
+    $('a-state').textContent = 'Connecting…'; $('a-timer').textContent = '0:00';
+    show('v-call');
+    var pc = new RTCPeerConnection({ iceServers: state.iceServers });
+    state.pc = pc;
+    state.stream.getTracks().forEach(function (t) { pc.addTrack(t, state.stream); });
+    pc.onicecandidate = function (e) { if (e.candidate) wsSend({ type: 'ice', candidate: e.candidate.toJSON() }); };
+    pc.ontrack = function (e) {
+      var a = $('remote-audio');
+      a.srcObject = e.streams[0] || new MediaStream([e.track]);
+      a.play().catch(function () { $('a-state').textContent = 'Tap anywhere to hear them'; document.addEventListener('click', function f() { a.play(); document.removeEventListener('click', f); }); });
+    };
+    pc.onconnectionstatechange = function () {
+      if (pc.connectionState === 'connected' && !state.connected) {
+        state.connected = true; $('a-state').textContent = 'Connected';
+        state.timerSecs = 0;
+        state.timer = setInterval(function () {
+          state.timerSecs++;
+          var m = Math.floor(state.timerSecs / 60), s = state.timerSecs % 60;
+          $('a-timer').textContent = m + ':' + (s < 10 ? '0' : '') + s;
+        }, 1000);
+      }
+      if (pc.connectionState === 'failed') showEnded('Connection lost', 'The call could not be kept connected.', false);
+    };
+    pc.createOffer({ offerToReceiveAudio: true }).then(function (o) {
+      return pc.setLocalDescription(o).then(function () { wsSend({ type: 'sdp_offer', sdp: o.sdp }); });
+    }).catch(function () { showEnded('Call failed', 'Could not start the audio connection.', false); });
+  }
+
+  function hangUp() {
+    wsSend({ type: 'hangup', callId: state.callId });
+    showEnded('Call ended', '', true);
+  }
+
+  // ── callback form ──────────────────────────────────────────
+  function failToCallback(reason) {
+    state.ended = true; teardown();
+    openCallback(reason);
+  }
+  function openCallback(reason) {
+    $('b-sub').textContent = reason ? reason + ' Leave your details and they\'ll get back to you.' : 'Leave your details and they\'ll get back to you.';
+    $('b-name').value = $('s-name').value.trim() || store('ocp_guest_name') || '';
+    $('b-err').textContent = ''; $('b-done').hidden = true; $('b-send').disabled = false;
+    show('v-callback');
+  }
+  $('b-send').onclick = function () {
+    var name = $('b-name').value.trim(), contact = $('b-contact').value.trim(), message = $('b-msg').value.trim();
+    if (!name || !contact) { $('b-err').textContent = 'Please add your name and a way to reach you.'; return; }
+    $('b-send').disabled = true; $('b-err').textContent = '';
+    solvePow().then(function (pow) {
+      return fetch(SERVER + '/link/callback', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, name: name, contact: contact, message: message,
+                               nonce: pow.nonce, counter: pow.counter, gid: gid })
+      });
+    }).then(function (r) {
+      if (r.status === 429) throw new Error('Too many requests. Please try again later.');
+      if (!r.ok) throw new Error('Could not send your request. Try again.');
+      $('b-done').hidden = false; $('b-send').hidden = true;
+    }).catch(function (e) { $('b-err').textContent = e.message || 'Could not send your request.'; $('b-send').disabled = false; });
+  };
+
+  // ── wiring ─────────────────────────────────────────────────
+  $('s-call').onclick = function () {
+    var micApi = navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.RTCPeerConnection;
+    if (!micApi) { $('s-err').textContent = 'This browser can\'t make voice calls.'; return; }
+    startCheck();
+  };
+  $('c-go').onclick = placeCall;
+  $('c-back').onclick = function () { stopCheck(); if (state.stream) { state.stream.getTracks().forEach(function (t) { t.stop(); }); state.stream = null; } show('v-start'); };
+  $('r-cancel').onclick = function () { wsSend({ type: 'hangup', callId: state.callId }); showEnded('Call cancelled', '', false); };
+  $('a-hang').onclick = hangUp;
+  $('a-mute').onclick = function () {
+    state.muted = !state.muted;
+    if (state.stream) state.stream.getAudioTracks().forEach(function (t) { t.enabled = !state.muted; });
+    this.setAttribute('aria-pressed', String(state.muted)); this.textContent = state.muted ? 'Unmute' : 'Mute';
+  };
+  $('e-again').onclick = function () {
+    state.pow = null; show('v-start'); updateStartButton();
+    solvePow().then(function (p) { state.pow = p; updateStartButton(); });
+  };
+  (function buildStars() {
+    var box = $('e-stars');
+    for (var i = 1; i <= 5; i++) (function (n) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.textContent = '★'; b.setAttribute('aria-label', n + ' star' + (n > 1 ? 's' : '')); b.setAttribute('aria-pressed', 'false');
+      b.onclick = function () {
+        Array.prototype.forEach.call(box.children, function (c, idx) { c.setAttribute('aria-pressed', idx < n ? 'true' : 'false'); });
+        store('ocp_guest_last_rating', String(n)); $('e-thanks').hidden = false;
+      };
+      box.appendChild(b);
+    })(i);
+  })();
+
+  var audio = document.createElement('audio');
+  audio.id = 'remote-audio'; audio.autoplay = true; audio.setAttribute('playsinline', '');
+  document.body.appendChild(audio);
+
+  // ── boot ───────────────────────────────────────────────────
+  if (!/^[a-z0-9_]{3,20}$/.test(username)) { show('v-closed'); return; }
+  document.title = 'Call @' + username + ' on OpenCall';
+
+  fetch(SERVER + '/link/ice', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { if (d && Array.isArray(d.iceServers)) state.iceServers = d.iceServers; })
+    .catch(function () {});
+
+  fetch(SERVER + '/link/info/' + encodeURIComponent(username) + (token ? '?k=' + encodeURIComponent(token) : ''), { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('info'); return r.json(); })
+    .then(function (info) {
+      state.info = info;
+      if (info.mode === 'call') renderStart(info);
+      else if (info.mode === 'callback') {
+        $('s-greeting').textContent = info.greeting || '';
+        openCallback('@' + username + ' can\'t take a live call right now.');
+        if (info.greeting) $('b-sub').textContent = info.greeting + ' ' + $('b-sub').textContent;
+      } else show('v-closed');
+    })
+    .catch(function () { show('v-closed'); });
+})();
+</script>
+</body>
+</html>
