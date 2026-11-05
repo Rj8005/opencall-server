@@ -703,6 +703,7 @@ const { ALLOWED_ORIGINS } = require('./vault');
 const vault = require('./vault').init({ handles, ocpToHandle, saveHandles });
 const calllink = require('./calllink').init({ handles, ocpRegistry, registry, metadata, callLog, send, sendPushNotification, log, pushSubscriptions: (typeof pushSubscriptions !== 'undefined' ? pushSubscriptions : null) });
 const freefirst = require('./freefirst').init({ pendingCalls, metadata, callLog, send, log, makeCallId });
+const rates = require('./rates').init();
 
 // Small per-IP limiter for the public lookup endpoints.
 const httpHits = new Map();   // key → [timestamps]
@@ -732,6 +733,7 @@ const server = http.createServer((req, res) => {
   res.setHeader("Content-Type", "application/json");
   if (vault.handle(req, res)) return;
   if (calllink.handleHttp(req, res)) return;
+  if (rates.handleHttp(req, res)) return;
 
   // ── CORS preflight for /relay-log ────────────────────────────
   if (req.method === 'OPTIONS' && req.url === '/relay-log') {
