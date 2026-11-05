@@ -486,6 +486,20 @@ input::placeholder { color: var(--text-muted); }
   to   { opacity: 1; transform: translateY(0); }
 }
 .screen-fade { animation: fadein 0.25s ease; }
+
+/* ── Free-first invite page ── */
+button.cbtn { padding: 0; font-family: inherit; line-height: 1; cursor: pointer; color: inherit; }
+.ans-line { margin: 8px auto 0; max-width: 320px; font-size: 16px; line-height: 1.5; color: var(--text-primary); }
+.ans-act { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.ans-act-l { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.ans-note { margin: 16px auto 0; max-width: 320px; font-size: 13px; line-height: 1.5; color: #9bb8d1; }
+.ans-net { margin: 16px auto 0; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: #9bb8d1; }
+.ans-net[hidden], .ans-line[hidden], .ans-note[hidden] { display: none; }
+.ans-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.ans-net.ok   { color: #5fe0a8; }
+.ans-net.warn { color: #ffbe55; }
+.ans-net.bad  { color: #ff8a8a; }
+:focus-visible { outline: 3px solid #c8f55a; outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -512,20 +526,33 @@ input::placeholder { color: var(--text-muted); }
   </header>
 
   <div id="screen-ringing" class="screen-fade" style="text-align:center;padding:32px 0">
-    <div class="caller-avatar ringing" id="ans-avatar">?</div>
-    <div class="caller-name" id="ans-name">Incoming call</div>
+    <div class="caller-avatar ringing" id="ans-avatar" aria-hidden="true">?</div>
+    <h1 class="caller-name" id="ans-name">Incoming call</h1>
+    <p id="ans-invite-line" class="ans-line" hidden></p>
     <div class="call-status-text">Free call · OpenCall Protocol</div>
     <div class="call-route-badge" id="ans-from">from OCP network</div>
-    <div style="display:flex;justify-content:center;gap:32px;margin-top:40px">
-      <div class="cbtn cbtn-end" id="btn-decline" style="width:64px;height:64px;font-size:22px">&#9742;</div>
-      <div class="cbtn" id="btn-answer"
-           style="width:64px;height:64px;font-size:22px;background:var(--green-dim);border:1px solid var(--green-border)">
-        &#9742;
+    <div style="display:flex;justify-content:center;gap:40px;margin-top:32px">
+      <div class="ans-act">
+        <button type="button" class="cbtn cbtn-end" id="btn-decline" aria-label="Decline the call" style="width:64px;height:64px;font-size:22px">&#9742;</button>
+        <span class="ans-act-l">Decline</span>
+      </div>
+      <div class="ans-act">
+        <button type="button" class="cbtn" id="btn-answer" aria-label="Answer the call"
+           style="width:64px;height:64px;font-size:22px;background:var(--green-dim);border:1px solid var(--green-border)">&#9742;</button>
+        <span class="ans-act-l">Answer</span>
       </div>
     </div>
-    <div style="margin-top:16px;font-size:10px;color:var(--text-muted)">
+    <p id="ans-mic-note" class="ans-note" hidden>When you tap Answer, your browser will ask to use your microphone. That is only so they can hear you. Nothing is recorded and nothing is installed.</p>
+    <p id="ans-net" class="ans-net" role="status" hidden><span class="ans-dot" id="ans-dot" aria-hidden="true"></span><span id="ans-net-t">Checking your connection…</span></p>
+    <div class="ans-note" style="margin-top:12px">
       No app needed · No account · End-to-end encrypted
     </div>
+  </div>
+
+  <div id="screen-expired" style="display:none;text-align:center;padding:40px 0">
+    <h1 class="caller-name">This call link has expired</h1>
+    <p class="ans-note" style="margin-top:12px">Ask them to send you a new one, or to call you again.</p>
+    <a href="/" class="relay-btn relay-btn-sms" style="display:block;margin-top:20px;text-decoration:none;text-align:center">Get your own call link</a>
   </div>
 
   <div id="screen-active" class="call-screen screen-fade" style="display:none">
@@ -568,7 +595,7 @@ input::placeholder { color: var(--text-muted); }
     <div style="margin-top:24px;font-size:12px;color:var(--text-muted)">
       Make free calls anytime
     </div>
-    <a href="/" class="relay-btn relay-btn-sms"
+    <a href="/" id="ans-cta" class="relay-btn relay-btn-sms"
        style="display:block;margin-top:12px;text-decoration:none;text-align:center">
       Get OpenCall free
     </a>
@@ -653,6 +680,9 @@ const params     = new URLSearchParams(location.search);
 const callId     = params.get('call');
 let   fromName   = params.get('from')   || 'Unknown Caller';
 let   fromNumber = params.get('number') || '';
+// A free-first invite link carries only the caller's name (no number param).
+const isInvite   = params.has('from') && !params.has('number');
+if (isInvite) fromName = (fromName || '').slice(0, 30);
 
 // ── Runtime state ───────────────────────────────────────────────
 let ws            = null;
@@ -862,7 +892,7 @@ function _offerTranscriptDownload() {
 
 // ── Screen management ───────────────────────────────────────────
 function showScreen(id) {
-  ['screen-ringing', 'screen-active', 'screen-ended'].forEach(sid => {
+  ['screen-ringing', 'screen-active', 'screen-ended', 'screen-expired'].forEach(sid => {
     const el = document.getElementById(sid);
     if (el) el.style.display = sid === id ? '' : 'none';
   });
@@ -874,7 +904,15 @@ function setCallerUI(name, number) {
   document.getElementById('ans-avatar').textContent        = initial;
   document.getElementById('ans-active-avatar').textContent = initial;
   document.getElementById('ans-name').textContent          = name;
-  document.getElementById('ans-from').textContent          = number || 'from OCP network';
+  if (isInvite) {
+    // Invites never show a number or address: only the caller's chosen name.
+    document.getElementById('ans-from').textContent = 'Free call';
+    const line = document.getElementById('ans-invite-line');
+    line.textContent = name + ' is calling you on OpenCall. Free, nothing to install.';
+    line.hidden = false;
+  } else {
+    document.getElementById('ans-from').textContent = number || 'from OCP network';
+  }
   document.getElementById('ans-active-name').textContent   = name;
 }
 
@@ -887,12 +925,21 @@ async function init() {
   }
 
   setCallerUI(fromName, fromNumber);
+  if (isInvite) {
+    document.getElementById('ans-mic-note').hidden = false;
+    const cta = document.getElementById('ans-cta');
+    if (cta) cta.textContent = 'Get your own call link';
+    runNetCheck();
+  }
 
   try {
     const res  = await fetch(SERVER + '/call-info?call=' + encodeURIComponent(callId));
     const data = await res.json();
 
-    if (data.found) {
+    if (data.found && isInvite) {
+      fromName = String(data.fromName || fromName).slice(0, 30);   // data.from is an opaque label: not shown or used as a number
+      setCallerUI(fromName, '');
+    } else if (data.found) {
       fromName     = data.fromName || fromName;
       fromNumber   = data.from     || fromNumber;
       callerNumber = fromNumber;
@@ -907,8 +954,38 @@ async function init() {
 }
 
 function showExpired(msg) {
+  if (isInvite) { showScreen('screen-expired'); return; }     // "This call link has expired"
   document.getElementById('ans-duration').textContent = msg || 'Link expired';
   showScreen('screen-ended');
+}
+
+// Network check before answering: gather ICE candidates and say what we found.
+// A server-reflexive or relay candidate means the browser can reach the world.
+async function runNetCheck() {
+  const box = document.getElementById('ans-net'), txt = document.getElementById('ans-net-t');
+  box.hidden = false;
+  let srflx = false, relay = false, anyCand = false, done = false, pcCheck = null;
+  const finish = () => {
+    if (done) return; done = true;
+    try { pcCheck && pcCheck.close(); } catch (e) {}
+    box.classList.remove('ok', 'warn', 'bad');
+    if (srflx || relay) { box.classList.add('ok');   txt.textContent = 'Connection check: ready'; }
+    else if (anyCand)   { box.classList.add('warn'); txt.textContent = 'Connection check: your network may use a relay. The call can still work.'; }
+    else                { box.classList.add('bad');  txt.textContent = 'Connection check: no network path found. Try Wi-Fi or mobile data.'; }
+  };
+  try {
+    pcCheck = new RTCPeerConnection(RTC_CFG);
+    pcCheck.createDataChannel('t');
+    pcCheck.onicecandidate = e => {
+      if (!e.candidate) return finish();
+      anyCand = true;
+      const t = e.candidate.type || (/ typ (\w+)/.exec(e.candidate.candidate) || [])[1];
+      if (t === 'srflx') srflx = true;
+      if (t === 'relay') relay = true;
+    };
+    await pcCheck.setLocalDescription(await pcCheck.createOffer());
+    setTimeout(finish, 4000);
+  } catch (e) { finish(); }
 }
 
 // ── WebSocket ───────────────────────────────────────────────────
@@ -1289,7 +1366,21 @@ function updateVideoLayout(on) {
 // ── DECLINE button ──────────────────────────────────────────────
 function declineCall() {
   document.getElementById('ans-duration').textContent = 'Call declined';
+  if (isInvite) _tellCallerDeclined();
   showScreen('screen-ended');
+}
+
+// The guest has not joined yet, so a short-lived socket tells the server to hang up
+// this call id; the server routes it to the caller from its own call record.
+function _tellCallerDeclined() {
+  try {
+    const w = new WebSocket(WS_URL);
+    w.onmessage = e => {
+      let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+      if (m.type === 'connected') { w.send(JSON.stringify({ type: 'hangup', callId })); setTimeout(() => { try { w.close(); } catch (err) {} }, 300); }
+    };
+    setTimeout(() => { try { w.close(); } catch (err) {} }, 4000);
+  } catch (e) {}
 }
 
 // ── HANGUP button ───────────────────────────────────────────────

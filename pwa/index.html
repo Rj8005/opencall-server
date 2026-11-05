@@ -6030,6 +6030,7 @@ async function onMessage(msg) {
 
     case 'hangup':
     case 'call.hangup':
+      if (typeof _ffOnHangup === 'function') _ffOnHangup();
       console.log('[CALL] hangup received — tearing down');
       stopRingback();
       stopRingtone();
@@ -11529,7 +11530,7 @@ loadThreadsStore();
   var inp = document.getElementById('inp-dial');
   var noop = function () {};
   if (typeof FREE_FIRST === 'undefined' || !FREE_FIRST || APP_EMBED || !inp) {
-    window._ffOnDial = noop; window._ffOn = noop; window._ffOnJoined = noop; return;
+    window._ffOnDial = noop; window._ffOn = noop; window._ffOnJoined = noop; window._ffOnHangup = noop; return;
   }
   var E164 = /^\+\d{8,15}$/;
   function $(id) { return document.getElementById(id); }
@@ -11705,6 +11706,11 @@ loadThreadsStore();
 
   // They opened the link: hand over to the existing in-call UI (callee_joined
   // handler: callMode 'link', initWebRTC(true) creates the offer).
+  // The guest declined from the link page: stop waiting and offer the paid call.
+  window._ffOnHangup = function () {
+    if (active && active.callId && ovl && !active.joined) showTimeout();
+  };
+
   window._ffOnJoined = function (callId) {
     if (!active || active.callId !== callId) return;
     var n = active.number;

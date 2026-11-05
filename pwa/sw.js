@@ -1,4 +1,4 @@
-const CACHE = 'ocp-v48';
+const CACHE = 'ocp-v49';
 const ASSETS = ['/lib/jssip.min.js', '/lib/ocp-crypto.js', '/manifest.json', '/ocp-identity.js', '/ocp-account.js', '/ocp-did.js', '/ocp-vault.js', '/ocp-billing.js', '/ocp-kyc.js', '/embed.js', '/ui.css'];
 
 self.addEventListener('install', e => {
