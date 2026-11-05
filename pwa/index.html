@@ -2083,6 +2083,13 @@ function _setAutorenewPref(on) {
 // card show a number without a network round trip on every render, and lets
 // clicking the card jump straight past the purchase flow when one exists.
 let _intlKnownLine = null;
+// Does this identity own a number? 'unknown' until the line info has loaded,
+// then 'has' or 'none'. Drives the free-first panel's phone-call button.
+let _didStatus = 'unknown';
+function _setDidStatus(line, known) {
+  _didStatus = known === false ? 'unknown' : (line && line.did ? 'has' : 'none');
+  if (typeof window._ffOnDidChange === 'function') window._ffOnDidChange();
+}
 
 // ── Pending DID order ────────────────────────────────────────
 // /did/purchase can return 202 (carrier is async) — the balance is already
@@ -2268,6 +2275,7 @@ async function _refreshIntlCard(force) {
     const did = await import('./ocp-did.js');
     const line = await did.getLine(myIdentity, myIdentity.ocp_address);
     _intlKnownLine = line;
+    _setDidStatus(line);
     if (line && line.did) {
       _stopPendingOrderPoll();
       _clearPendingOrder();
@@ -2289,6 +2297,8 @@ async function _refreshIntlCard(force) {
     _setHeaderBalanceChip(line ? line.balance_paise : null);
   } catch (e) {
     // Not registered yet (404) or offline — leave the "Get a number" default.
+    // 404 = no account, so no number; anything else (offline, 5xx) stays unknown.
+    if (e && e.status === 404) _setDidStatus(null);
     _setHeaderBalanceChip(null);
   }
 }
@@ -2487,6 +2497,7 @@ async function _runInternationalFlow(direct) {
         _saveSipCreds({ user: credentials.sip_user, password: credentials.sip_password, realm: credentials.realm });
       }
       _intlKnownLine = line;
+      _setDidStatus(line);
       unmount(ovl);
       if (line && line.did) {
         _setIntlCardOwned({
@@ -3893,6 +3904,7 @@ async function _runInternationalFlow(direct) {
         unmount(ovl);
         unmount(parentOvl);
         _intlKnownLine = null;
+        _setDidStatus(null);
         _resetIntlCard();
         toast('Number released');
       } catch (e) {
@@ -11530,7 +11542,7 @@ loadThreadsStore();
   var inp = document.getElementById('inp-dial');
   var noop = function () {};
   if (typeof FREE_FIRST === 'undefined' || !FREE_FIRST || APP_EMBED || !inp) {
-    window._ffOnDial = noop; window._ffOn = noop; window._ffOnJoined = noop; window._ffOnHangup = noop; return;
+    window._ffOnDial = noop; window._ffOn = noop; window._ffOnJoined = noop; window._ffOnHangup = noop; window._ffOnDidChange = noop; return;
   }
   var E164 = /^\+\d{8,15}$/;
   function $(id) { return document.getElementById(id); }
@@ -11541,7 +11553,23 @@ loadThreadsStore();
   function money(v) { return '$' + ((v >= 0.1 || v === 0) ? v.toFixed(2) : v.toFixed(3)); }
   function number() { return inp.value || ''; }
 
+  function didStatus() { return (typeof _didStatus === 'string') ? _didStatus : 'unknown'; }
+
   function render() {
+    // No paid price (or paid action) is offered without a number.
+    var st = didStatus();
+    if (st === 'none') {
+      priceEl.textContent = 'Free if they answer a link. To call phones you need an OpenCall number.';
+      paidBtn.textContent = 'Get a number to call phones';
+      paidBtn.disabled = false;
+      return;
+    }
+    if (st === 'unknown') {
+      priceEl.textContent = 'Free if they answer a link.';
+      paidBtn.textContent = 'Checking your number…';
+      paidBtn.disabled = true;
+      return;
+    }
     if (rate && rate.known) {
       priceEl.textContent = 'Free if they answer a link, or ' + money(rate.per_min_usd) + '/min by phone (10 min is about ' + money(rate.ten_min_usd) + ')';
       paidBtn.textContent = 'Call their phone, ' + money(rate.per_min_usd) + '/min';
@@ -11557,6 +11585,9 @@ loadThreadsStore();
     }
   }
   function disarm() { armed = false; clearTimeout(armTimer); if (rate) render(); }
+
+  // The line info arrived or changed (purchase, release): redraw once.
+  window._ffOnDidChange = function () { if (!panel.hidden) { disarm(); render(); } };
 
   window._ffOnDial = function () {
     var v = number();
@@ -11592,6 +11623,8 @@ loadThreadsStore();
 
   paidBtn.addEventListener('click', function () {
     if (paidBtn.disabled) return;
+    if (didStatus() === 'none') { closeSheet(); openInternationalFlow(); return; }   // existing Get-a-number flow
+    if (didStatus() !== 'has') return;
     var mins = balanceMinutes();
     if (!armed && mins !== null && mins < 10) {                  // one-line rate confirm
       armed = true;
@@ -11670,7 +11703,10 @@ loadThreadsStore();
 
   function showTimeout() {
     var wrap = openSheet("They didn't answer");
-    if (rate && rate.known) {
+    if (didStatus() === 'none') {
+      wrap.appendChild(el('p', 'To call their phone you need an OpenCall number.', 'ff-sub'));
+      wrap.appendChild(btn('Get a number to call phones', 'ff-btn ff-btn-primary', function () { closeSheet(); openInternationalFlow(); }));
+    } else if (didStatus() === 'has' && rate && rate.known) {
       wrap.appendChild(el('p', 'Call their phone for ' + money(rate.per_min_usd) + '/min?', 'ff-sub'));
       wrap.appendChild(btn('Call their phone, ' + money(rate.per_min_usd) + '/min', 'ff-btn ff-btn-primary', function () { paidBtn.click(); }));
     } else {
