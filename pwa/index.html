@@ -993,34 +993,29 @@ if (APP_EMBED) {
     <header class="app-header">
       <div class="logo-lockup">
         <div class="logo-svg-wrap">
-          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-            <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(99,180,255,0.2)" stroke-width="1"/>
-            <circle cx="9" cy="9" r="4.5" fill="none" stroke="rgba(99,180,255,0.35)" stroke-width="1"/>
-            <circle cx="9" cy="9" r="2" fill="none" stroke="rgba(99,180,255,0.6)" stroke-width="1"/>
-            <circle cx="9" cy="9" r="1" fill="#63b4ff"/>
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+            <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(124,192,255,0.35)" stroke-width="1"/>
+            <circle cx="9" cy="9" r="4.5" fill="none" stroke="rgba(124,192,255,0.55)" stroke-width="1"/>
+            <circle cx="9" cy="9" r="2" fill="none" stroke="rgba(124,192,255,0.85)" stroke-width="1"/>
+            <circle cx="9" cy="9" r="1" fill="#7cc0ff"/>
           </svg>
         </div>
-        <div>
-          <div class="logo-name">OpenCall</div>
-          <div class="logo-ver">OCP v1.0</div>
-        </div>
+        <div class="logo-name">OpenCall</div>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <!-- Balance chip — standalone entry to top-up, independent of the
-             buy-a-number flow. Hidden until an OCP billing line exists (see
-             _refreshIntlCard) and entirely under APP_EMBED via .app-header's
-             existing display:none rule. -->
-        <span id="header-balance-chip" onclick="openWalletFromHeader()" title="Wallet"
-              style="display:none;align-items:center;gap:4px;cursor:pointer;padding:3px 9px;
-                     border-radius:20px;background:rgba(61,220,132,.1);border:1px solid rgba(61,220,132,.28);
-                     font-family:'DM Mono',monospace;font-size:12px;color:#3ddc84;line-height:1;white-space:nowrap;">
-          <span aria-hidden="true">🪙</span><span id="header-balance-amt" style="font-family:'Syne',sans-serif;font-weight:700;">$0.00</span>
-        </span>
-        <span id="header-kyc-badge" onclick="openKycStatusFromHeader()" style="display:none;align-items:center;justify-content:center;
-              width:18px;height:18px;border-radius:50%;font-size:12px;font-weight:700;line-height:1;cursor:pointer;"></span>
-        <span id="header-user-info" style="font-size:12px;color:var(--text-secondary);font-family:'DM Mono',monospace;letter-spacing:0.3px"></span>
-        <a id="link-change" href="#" style="font-size:12px;color:var(--blue);opacity:0.7;text-decoration:none">change</a>
-        <div id="status-pill" class="status-pill pill-online">Online</div>
+      <div class="hdr-actions">
+        <!-- Balance: standalone entry to top-up. A real button whose accessible
+             name is built from the visible amount ("Balance $X, add funds"), so
+             it stays correct when _setHeaderBalanceChip() rewrites the amount.
+             Hidden until an OCP billing line exists; hidden under APP_EMBED via
+             .app-header's display:none rule. -->
+        <button type="button" id="header-balance-chip" class="hdr-chip" onclick="openWalletFromHeader()" style="display:none">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1.2-1.7 2.5-1.7s2.5.7 2.5 1.7-1.2 1.6-2.5 1.9-2.5.9-2.5 1.9 1.2 1.7 2.5 1.7 2.5-.7 2.5-1.7"/></svg><span class="sr-only">Balance </span><span id="header-balance-amt">$0.00</span><span class="sr-only">, add funds</span>
+        </button>
+        <button type="button" id="header-kyc-badge" onclick="openKycStatusFromHeader()" aria-label="Verification status" style="display:none"></button>
+        <div id="status-pill" class="status-pill pill-routing" role="status">Connecting</div>
+        <button type="button" id="btn-profile" class="hdr-avatar" aria-label="Profile and settings" aria-haspopup="dialog">
+          <span id="profile-initials" aria-hidden="true">?</span>
+        </button>
       </div>
     </header>
 
@@ -1029,58 +1024,79 @@ if (APP_EMBED) {
     <span style="display:none" id="lbl-mynum"></span>
     <span style="display:none" id="lbl-ocpaddr"></span>
 
-    <div class="card" id="dialer-identity-card">
-      <div class="card-label" style="display:flex;justify-content:space-between;align-items:center">
-        <span>Your identity</span>
-        <span onclick="openCallLink()" style="font-size:12px;color:rgba(99,180,255,.55);
-          cursor:pointer;font-family:'DM Mono',monospace;margin-left:auto;margin-right:10px;
-          text-decoration:underline;text-underline-offset:2px">🔗 call link<span id="link-badge" style="display:none;margin-left:5px;
-          padding:0 6px;border-radius:9px;background:#f87171;color:#1a0505;font-size:12px;font-weight:700;text-decoration:none"></span></span>
-        <span onclick="openProfileSettings()" style="font-size:12px;color:rgba(99,180,255,.55);
-          cursor:pointer;font-family:'DM Mono',monospace;margin-left:auto;margin-right:10px;
-          text-decoration:underline;text-underline-offset:2px">👤 profile</span>
-        <span onclick="backupIdentity()" style="font-size:12px;color:rgba(99,180,255,.55);
-          cursor:pointer;font-family:'DM Mono',monospace;
-          text-decoration:underline;text-underline-offset:2px">🔐 back up</span>
+    <!-- Profile sheet: everything that used to live in the identity card.
+         It stays in the DOM while closed, so every id below keeps working. -->
+    <dialog id="profile-sheet" class="sheet" aria-labelledby="profile-sheet-title">
+      <div class="sheet-head">
+        <h2 id="profile-sheet-title">Profile</h2>
+        <button type="button" id="btn-sheet-close" class="sheet-close" aria-label="Close profile"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
-      <div class="identity-val">
-        <span id="ocp-addr-dialer">ocp:loading...</span>
-        <span class="copy-btn" onclick="copyOCPAddress()">copy</span>
-      </div>
-      <!-- OCP code (numeric id) + QR -->
-      <div class="ocp-code-row">
-        <span style="font-size:12px;color:var(--text-secondary)">Your code:</span>
-        <span id="my-ocp-code" class="ocp-code-val">…</span>
-        <button class="qr-btn" onclick="_showMyCodeQR()" title="Show QR">&#9638; QR</button>
-      </div>
-      <!-- Handle: show if claimed, else show claim form -->
-      <div id="handle-display" style="display:none;margin-top:6px;">
-        <span style="font-size:12px;color:var(--text-secondary)">Handle:</span>
-        <span id="my-handle-text" class="ocp-handle-val" style="margin-left:6px;"></span>
-      </div>
-      <div id="handle-claim-form">
-        <div class="handle-claim-row">
-          <input id="inp-claim-handle" class="handle-inp"
-                 placeholder="@yourchoice  (3-20 chars)"
-                 maxlength="21"
-                 onkeydown="if(event.key==='Enter')claimHandle()">
-          <button id="btn-claim-handle" class="handle-btn" onclick="claimHandle()">Claim</button>
-        </div>
-      </div>
-    </div>
+      <div id="dialer-identity-card" class="sheet-body">
+        <section class="sheet-sec" aria-labelledby="sh-name-l">
+          <div class="sheet-label" id="sh-name-l">Name and number</div>
+          <div class="sheet-split">
+            <div id="header-user-info" class="sheet-name"></div>
+            <button type="button" id="link-change" class="sheet-edit">Edit</button>
+          </div>
+        </section>
 
-    <!-- Find / add by handle or OCP code -->
-    <div class="card" id="find-peer-card" style="margin-top:8px;">
-      <div class="card-label">Find by handle or code</div>
-      <div class="handle-claim-row">
-        <input id="inp-add-handle" class="handle-inp"
-               placeholder="@handle or OCP-XXXX-XXXX"
-               onkeydown="if(event.key==='Enter')addByHandle()">
-        <button class="handle-btn" onclick="addByHandle()">Add</button>
+        <section class="sheet-sec" aria-labelledby="sh-addr-l">
+          <div class="sheet-label" id="sh-addr-l">OCP address</div>
+          <div class="sheet-split">
+            <!-- #ocp-addr-dialer keeps the FULL address (copyOCPAddress reads it);
+                 a mirrored, middle-truncated copy is what sighted users see. -->
+            <span id="ocp-addr-dialer" class="sr-only">ocp:loading...</span>
+            <span id="ocp-addr-short" class="sheet-addr" aria-hidden="true">ocp:loading...</span>
+            <button type="button" class="copy-btn sheet-copy" onclick="copyOCPAddress()" aria-label="Copy OCP address">Copy</button>
+          </div>
+          <div class="sheet-split" style="margin-top:12px;">
+            <div>
+              <div class="sheet-label" id="sh-code-l">Your code</div>
+              <span id="my-ocp-code" class="ocp-code-val" aria-labelledby="sh-code-l">…</span>
+            </div>
+            <button type="button" class="qr-btn sheet-qr" onclick="_showMyCodeQR()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v3M14 20h3M20 20h1"/></svg><span>Show QR</span></button>
+          </div>
+        </section>
+
+        <section class="sheet-sec" aria-labelledby="sh-handle-l">
+          <div class="sheet-label" id="sh-handle-l">Handle</div>
+          <div id="handle-display" style="display:none;">
+            <span id="my-handle-text" class="ocp-handle-val"></span>
+          </div>
+          <div id="handle-claim-form">
+            <label class="sheet-hint" for="inp-claim-handle">Claim a handle (3–20 characters)</label>
+            <div class="handle-claim-row">
+              <input id="inp-claim-handle" class="handle-inp"
+                     placeholder="@yourchoice"
+                     maxlength="21" autocomplete="off" autocapitalize="none" spellcheck="false"
+                     onkeydown="if(event.key==='Enter')claimHandle()">
+              <button type="button" id="btn-claim-handle" class="handle-btn" onclick="claimHandle()">Claim</button>
+            </div>
+          </div>
+        </section>
+
+        <nav class="sheet-sec sheet-list" aria-label="Account">
+          <button type="button" class="sheet-item" onclick="closeProfileSheet();openCallLink()"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1"/></svg><span class="sheet-item-t">Call link</span><span id="link-badge" class="badge" style="display:none"></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 6l6 6-6 6"/></svg></button>
+          <button type="button" class="sheet-item" onclick="closeProfileSheet();openProfileSettings()"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span class="sheet-item-t">Profile</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 6l6 6-6 6"/></svg></button>
+          <button type="button" class="sheet-item" onclick="closeProfileSheet();backupIdentity()"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span class="sheet-item-t">Back up</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 6l6 6-6 6"/></svg></button>
+        </nav>
+
+        <!-- Find / add by handle or OCP code -->
+        <section class="sheet-sec" id="find-peer-card" aria-labelledby="sh-find-l">
+          <div class="sheet-label" id="sh-find-l">Find by handle or code</div>
+          <div class="handle-claim-row">
+            <input id="inp-add-handle" class="handle-inp"
+                   aria-label="Handle or code to look up"
+                   placeholder="@handle or OCP-XXXX-XXXX"
+                   autocomplete="off" autocapitalize="none" spellcheck="false"
+                   onkeydown="if(event.key==='Enter')addByHandle()">
+            <button type="button" class="handle-btn" onclick="addByHandle()">Add</button>
+          </div>
+          <div id="add-handle-status" role="status" aria-live="polite" class="sheet-hint" style="min-height:18px;margin-top:8px;"></div>
+        </section>
       </div>
-      <div id="add-handle-status" style="font-size:12px;color:var(--text-secondary);
-           font-family:'DM Mono',monospace;margin-top:4px;min-height:16px;"></div>
-    </div>
+      <div id="sheet-status" class="sheet-toast" role="status" aria-live="polite"></div>
+    </dialog>
 
     <!-- International number — entry point for the buy-a-number flow.
          Deliberately outside #dialer-identity-card so it stays visible in
@@ -9318,7 +9334,14 @@ function showScreen(name) {
 
 function updateHeaderInfo(name, number) {
   const el = document.getElementById('header-user-info');
-  if (el) el.textContent = name + ' · ' + number;
+  if (el) {
+    el.textContent = '';
+    const l1 = document.createElement('div'); l1.textContent = name || '';
+    const l2 = document.createElement('div'); l2.textContent = number || '';
+    el.appendChild(l1); el.appendChild(l2);
+  }
+  const ini = document.getElementById('profile-initials');
+  if (ini) ini.textContent = (String(name || '').trim().charAt(0) || '?').toUpperCase();
 }
 
 // ── Handle / OCP-code layer ─────────────────────────────────
@@ -9965,8 +9988,8 @@ function _maybeShowEnrollCard() {
     if (localStorage.getItem('ocp_vault_enrolled') || localStorage.getItem('ocp_enroll_dismissed')) return;
   } catch (e) { return; }
   if (document.getElementById('enroll-card')) return;
-  const anchor = document.getElementById('dialer-identity-card');
-  if (!anchor || !anchor.parentNode) return;
+  const main = document.getElementById('dialer-main');
+  if (!main) return;
   const card = document.createElement('div');
   card.id = 'enroll-card';
   card.style.cssText = 'margin:0 0 10px;background:rgba(200,245,90,.07);border:1px solid rgba(200,245,90,.22);' +
@@ -9986,7 +10009,7 @@ function _maybeShowEnrollCard() {
   later.style.cssText = 'padding:10px 14px;background:transparent;color:#8aabb8;border:1px solid rgba(255,255,255,.12);border-radius:10px;cursor:pointer;';
   later.onclick = () => { try { localStorage.setItem('ocp_enroll_dismissed', '1'); } catch (e) {} card.remove(); };
   row.appendChild(set); row.appendChild(later); card.appendChild(row);
-  anchor.parentNode.insertBefore(card, anchor);
+  main.insertBefore(card, main.firstChild);   // directly under the header
 }
 
 // Settings → Profile: enroll if not enrolled, otherwise change password.
@@ -11510,5 +11533,48 @@ loadOcpThreads();
 loadThreadsStore();
 </script>
 
+<script>
+// Profile sheet (visual wiring only). The <dialog> is modal: Esc closes it,
+// focus is trapped inside, and focus returns to the opening button.
+(function () {
+  var dlg = document.getElementById('profile-sheet');
+  var openBtn = document.getElementById('btn-profile');
+  if (!dlg || !openBtn) return;
+
+  function open() {
+    if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+    var first = dlg.querySelector('#btn-sheet-close'); if (first) first.focus();
+  }
+  function close() {
+    if (typeof dlg.close === 'function') dlg.close(); else dlg.removeAttribute('open');
+    openBtn.focus();
+  }
+  window.closeProfileSheet = function () { if (dlg.open || dlg.hasAttribute('open')) close(); };
+
+  openBtn.addEventListener('click', open);
+  document.getElementById('btn-sheet-close').addEventListener('click', close);
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) close(); });          // backdrop tap
+  dlg.addEventListener('close', function () { openBtn.focus(); });
+
+  // Middle-truncated copy of the OCP address for display.
+  var full = document.getElementById('ocp-addr-dialer');
+  var short = document.getElementById('ocp-addr-short');
+  function mid() {
+    var t = (full.textContent || '').trim();
+    short.textContent = t.length > 26 ? t.slice(0, 14) + '…' + t.slice(-8) : t;
+  }
+  if (full && short) { mid(); new MutationObserver(mid).observe(full, { childList: true, characterData: true, subtree: true }); }
+
+  // The toast sits below a modal dialog's top layer, so mirror messages into the sheet while it is open.
+  var baseToast = window.toast;
+  if (typeof baseToast === 'function') {
+    var st = document.getElementById('sheet-status'), tm;
+    window.toast = function (msg) {
+      baseToast.apply(this, arguments);
+      if (dlg.open && st) { st.textContent = msg; clearTimeout(tm); tm = setTimeout(function () { st.textContent = ''; }, 3200); }
+    };
+  }
+})();
+</script>
 </body>
 </html>
