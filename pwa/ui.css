@@ -532,3 +532,32 @@ input::placeholder, textarea::placeholder { color: var(--ui-text-muted); opacity
 button.cbtn { padding: 0; font: inherit; font-size: 20px; line-height: 1; color: inherit; cursor: pointer; min-width: 44px; min-height: 44px; }
 button.cbtn-end { color: #fff; }
 .rec-indicator { color: var(--ui-danger); }
+
+/* ═══════════════════════════════════════════════════════════
+   Free-first dialer panel and "Waiting for answer" sheet
+   ═══════════════════════════════════════════════════════════ */
+.ff-panel {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  margin: 0 0 var(--sp-4); padding: var(--sp-3);
+  background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--r-2);
+}
+.ff-panel[hidden] { display: none; }
+.ff-price { margin: 0; font-size: var(--fs-2); line-height: 1.45; color: var(--ui-text-muted); }
+.ff-btn {
+  width: 100%; min-height: 48px; padding: 0 var(--sp-4); cursor: pointer;
+  background: var(--ui-surface-2); color: var(--ui-text);
+  border: 1px solid var(--ui-border); border-radius: var(--r-1);
+  font-family: var(--font-body); font-size: var(--fs-3); font-weight: 600;
+}
+.ff-btn:disabled { opacity: .55; cursor: not-allowed; }
+.ff-btn-primary { background: var(--ui-accent); color: var(--ui-accent-ink); border-color: var(--ui-accent); }
+.ff-btn-quiet { background: transparent; color: var(--ui-text-muted); }
+.ff-sheet {
+  position: fixed; inset: 0; z-index: 15500; overflow-y: auto;
+  background: var(--ui-bg); display: flex; justify-content: center;
+  padding: max(40px, calc(var(--safe-top) + 24px)) var(--sp-4) calc(40px + var(--safe-bottom));
+}
+.ff-sheet-body { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: var(--sp-2); text-align: center; }
+.ff-sheet-body h2 { font-family: var(--font-brand); font-size: var(--fs-5); color: var(--ui-accent); margin: 0 0 var(--sp-2); }
+.ff-sub { margin: 0; color: var(--ui-text-muted); font-size: var(--fs-2); line-height: 1.5; }
+.ff-count { font-family: var(--font-mono); font-size: 56px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--ui-text); margin: var(--sp-2) 0 0; }

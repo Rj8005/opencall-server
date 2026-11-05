@@ -1146,6 +1146,14 @@ if (APP_EMBED) {
       <button type="button" class="btn-aux" id="btn-sms-invite" aria-label="Send SMS invite"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.5-4.6A8 8 0 1 1 21 12z"/></svg></button>
     </div>
 
+    <!-- Free-first panel: shown by the script at the end of the page when a valid number is dialled -->
+    <section id="ff-panel" class="ff-panel" aria-labelledby="ff-title" hidden>
+      <h2 id="ff-title" class="sr-only">Calling options</h2>
+      <p id="ff-price" class="ff-price" role="status"></p>
+      <button type="button" id="ff-free" class="ff-btn ff-btn-primary">Ask them to answer free</button>
+      <button type="button" id="ff-paid" class="ff-btn">Call their phone</button>
+    </section>
+
     <!-- Push opt-in nudge — shown after first registration if permission not yet granted.
          iOS Safari: displayed only when running as an installed PWA (Home Screen). -->
     <div id="push-hint-card" class="banner banner-info" role="status" style="display:none">
@@ -5349,6 +5357,10 @@ let _contactsRenderCache = []; // last sorted order, used by _contactAct
 
 // IDT-DIALOUT: feature flag — set to false to revert to relay/simbank/share-link
 const USE_IDT_DIALOUT = true;
+// Free-first dialer: for a valid E.164 number, offer "Ask them to answer free"
+// (an answer link they open in any browser) next to the paid phone call.
+// false = exactly the old dialer.
+const FREE_FIRST = true;
 let _sipSession = null;  // active JsSIP RTCSession for phone-number calls
 let _sipUA = null;               // persistent registered UA (inbound + outbound); null if no stored creds
 let _sipRegistered = false;      // true while _sipUA has a live REGISTER binding
@@ -5703,6 +5715,7 @@ function syncDialDisplay() {
   // Shrink to fit: 32px down to 18px as the number gets long (monospace, ~0.62em per glyph).
   const room = Math.max(120, (display.clientWidth || 280) - 8);
   display.style.fontSize = empty ? '' : Math.max(18, Math.min(32, Math.floor(room / (v.length * 0.62)))) + 'px';
+  if (typeof _ffOnDial === 'function') _ffOnDial();
 }
 function appendDigit(d) {
   pressKey(d);
@@ -6051,7 +6064,15 @@ async function onMessage(msg) {
       break;
     }
 
+    case 'free_invite_ready':
+    case 'free_invite_error':
+    case 'free_invite_timeout':
+    case 'free_invite_cancelled':
+      if (typeof _ffOn === 'function') _ffOn(msg);
+      break;
+
     case 'callee_joined': {
+      if (typeof _ffOnJoined === 'function') _ffOnJoined(msg.callId);
       const waitPanel = document.getElementById('relay-waiting-panel');
       if (waitPanel) waitPanel.style.display = 'none';
       const callUi = document.getElementById('call-screen-ui');
@@ -11499,6 +11520,204 @@ loadThreadsStore();
   });
   inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doCall(); } });
   window.addEventListener('resize', syncDialDisplay);
+})();
+</script>
+<script>
+// Free-first dialer (see FREE_FIRST). Everything here is additive: with the
+// flag off, or in app-embed mode, _ffOnDial is a no-op and the old dialer is untouched.
+(function () {
+  var inp = document.getElementById('inp-dial');
+  var noop = function () {};
+  if (typeof FREE_FIRST === 'undefined' || !FREE_FIRST || APP_EMBED || !inp) {
+    window._ffOnDial = noop; window._ffOn = noop; window._ffOnJoined = noop; return;
+  }
+  var E164 = /^\+\d{8,15}$/;
+  function $(id) { return document.getElementById(id); }
+  var panel = $('ff-panel'), priceEl = $('ff-price'), freeBtn = $('ff-free'), paidBtn = $('ff-paid');
+  var rate = null, rateFor = '', debounce = null, armed = false, armTimer = null;
+  var active = null, ovl = null, tick = null, fallback = null;
+
+  function money(v) { return '$' + ((v >= 0.1 || v === 0) ? v.toFixed(2) : v.toFixed(3)); }
+  function number() { return inp.value || ''; }
+
+  function render() {
+    if (rate && rate.known) {
+      priceEl.textContent = 'Free if they answer a link, or ' + money(rate.per_min_usd) + '/min by phone (10 min is about ' + money(rate.ten_min_usd) + ')';
+      paidBtn.textContent = 'Call their phone, ' + money(rate.per_min_usd) + '/min';
+      paidBtn.disabled = false;
+    } else if (rate) {
+      priceEl.textContent = 'Price unavailable for this number';
+      paidBtn.textContent = 'Call their phone';
+      paidBtn.disabled = true;
+    } else {
+      priceEl.textContent = 'Checking price…';
+      paidBtn.textContent = 'Call their phone';
+      paidBtn.disabled = true;
+    }
+  }
+  function disarm() { armed = false; clearTimeout(armTimer); if (rate) render(); }
+
+  window._ffOnDial = function () {
+    var v = number();
+    clearTimeout(debounce);
+    disarm();
+    if (!E164.test(v)) { panel.hidden = true; rate = null; rateFor = ''; return; }
+    panel.hidden = false;
+    if (rateFor === v && rate) { render(); return; }
+    rate = null; render();
+    debounce = setTimeout(function () {
+      fetch(_pushServerBase() + '/rate?to=' + encodeURIComponent(v))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; })
+        .then(function (d) {
+          if (number() !== v) return;                       // dialled on since
+          rate = (d && d.known) ? d : { known: false };
+          rateFor = v; render();
+        });
+    }, 400);
+  };
+
+  // balance in minutes at this rate, or null when unknown
+  function balanceMinutes() {
+    try {
+      if (!rate || !rate.known || !rate.per_min_usd) return null;
+      var line = (typeof _intlKnownLine !== 'undefined') ? _intlKnownLine : null;
+      if (!line || line.balance_paise == null) return null;
+      return (line.balance_paise / 8000) / rate.per_min_usd;
+    } catch (e) { return null; }
+  }
+
+  function runPaid() { closeSheet(); doCall(); }                 // the current paid path, unchanged
+
+  paidBtn.addEventListener('click', function () {
+    if (paidBtn.disabled) return;
+    var mins = balanceMinutes();
+    if (!armed && mins !== null && mins < 10) {                  // one-line rate confirm
+      armed = true;
+      paidBtn.textContent = 'Confirm: ' + money(rate.per_min_usd) + '/min, balance covers about ' + Math.max(0, Math.floor(mins)) + ' min';
+      armTimer = setTimeout(disarm, 6000);
+      return;
+    }
+    disarm(); runPaid();
+  });
+
+  freeBtn.addEventListener('click', function () { startInvite(); });
+
+  function startInvite() {
+    var to = number();
+    if (!E164.test(to)) return;
+    if (!ws || ws.readyState !== 1) { toast('Not connected to OpenCall yet — check your connection'); return; }
+    freeBtn.disabled = true;
+    setTimeout(function () { freeBtn.disabled = false; }, 1500);
+    active = { number: to, callId: null };
+    wsSend({ type: 'free_invite', to: to, name: myName || '' });
+  }
+
+  // ── "Waiting for answer" sheet ─────────────────────────────
+  function el(tag, text, cls) { var e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; }
+  function btn(label, cls, fn) { var b = el('button', label, cls); b.type = 'button'; b.addEventListener('click', fn); return b; }
+
+  function closeSheet() {
+    clearInterval(tick); clearTimeout(fallback);
+    if (ovl) { ovl.remove(); ovl = null; }
+  }
+  function openSheet(titleText) {
+    closeSheet();
+    ovl = el('div', null, 'ff-sheet');
+    ovl.setAttribute('role', 'dialog'); ovl.setAttribute('aria-modal', 'true'); ovl.setAttribute('aria-labelledby', 'ff-sheet-title');
+    var wrap = el('div', null, 'ff-sheet-body');
+    var h = el('h2', titleText); h.id = 'ff-sheet-title';
+    wrap.appendChild(h); ovl.appendChild(wrap);
+    document.body.appendChild(ovl);
+    return wrap;
+  }
+  function focusFirst() { var b = ovl && ovl.querySelector('button'); if (b) b.focus(); }
+
+  function showWaiting() {
+    var wrap = openSheet('Waiting for answer');
+    wrap.appendChild(el('p', 'Send them the link. When they open it in any browser, the call connects. Nothing to install.', 'ff-sub'));
+    var count = el('div', '90', 'ff-count'); count.setAttribute('role', 'timer');
+    wrap.appendChild(count);
+    wrap.appendChild(el('p', 'seconds left', 'ff-sub'));
+    var opts = (active.shareOptions || []).slice().sort(function (a, b) { return (a.name === 'WhatsApp' ? -1 : 0) - (b.name === 'WhatsApp' ? -1 : 0); });
+    opts.forEach(function (o) {
+      if (o.copy) return;                                        // Copy is added below with the link itself
+      wrap.appendChild(btn('Send by ' + o.name, 'ff-btn' + (o.name === 'WhatsApp' ? ' ff-btn-primary' : ''), function () {
+        var u = String(o.url || '');
+        if (/^https:\/\//.test(u)) window.open(u, '_blank', 'noopener');
+        else if (/^sms:/.test(u)) location.href = u;
+      }));
+    });
+    wrap.appendChild(btn('Copy link', 'ff-btn', function () {
+      var text = active.shareText || active.link || '';
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { toast('Link copied'); }, function () { toast('Copy failed'); });
+    }));
+    wrap.appendChild(btn('Cancel', 'ff-btn ff-btn-quiet', function () {
+      if (active && active.callId) wsSend({ type: 'free_invite_cancel', callId: active.callId });
+      closeSheet(); active = null;
+    }));
+    tick = setInterval(function () {
+      var left = Math.max(0, Math.ceil((active.deadline - Date.now()) / 1000));
+      count.textContent = String(left);
+      if (left === 0) {                                          // the server normally says so first
+        clearInterval(tick);
+        fallback = setTimeout(function () { showTimeout(); }, 3000);
+      }
+    }, 250);
+    focusFirst();
+  }
+
+  function showTimeout() {
+    var wrap = openSheet("They didn't answer");
+    if (rate && rate.known) {
+      wrap.appendChild(el('p', 'Call their phone for ' + money(rate.per_min_usd) + '/min?', 'ff-sub'));
+      wrap.appendChild(btn('Call their phone, ' + money(rate.per_min_usd) + '/min', 'ff-btn ff-btn-primary', function () { paidBtn.click(); }));
+    } else {
+      wrap.appendChild(el('p', 'You can still try again.', 'ff-sub'));
+    }
+    wrap.appendChild(btn('Try again', 'ff-btn', function () { closeSheet(); startInvite(); }));
+    wrap.appendChild(btn('Close', 'ff-btn ff-btn-quiet', function () { closeSheet(); active = null; }));
+    focusFirst();
+  }
+
+  var ERR = {
+    not_registered: 'Not connected to OpenCall yet — try again in a moment',
+    invalid_number: 'That number does not look right',
+    rate_limited:   'Too many invites for now — try again later'
+  };
+
+  window._ffOn = function (msg) {
+    if (msg.type === 'free_invite_ready') {
+      active = {
+        number: (active && active.number) || number(), callId: msg.callId, link: msg.link,
+        shareText: msg.shareText, shareOptions: msg.shareOptions,
+        deadline: Date.now() + (Number(msg.expiresIn) || 90) * 1000
+      };
+      showWaiting();
+    } else if (msg.type === 'free_invite_error') {
+      toast(ERR[msg.reason] || 'Could not start a free call');
+    } else if (msg.type === 'free_invite_timeout') {
+      if (active && (!msg.callId || msg.callId === active.callId)) showTimeout();
+    } else if (msg.type === 'free_invite_cancelled') {
+      closeSheet();
+    }
+  };
+
+  // They opened the link: hand over to the existing in-call UI (callee_joined
+  // handler: callMode 'link', initWebRTC(true) creates the offer).
+  window._ffOnJoined = function (callId) {
+    if (!active || active.callId !== callId) return;
+    var n = active.number;
+    closeSheet();
+    setTimeout(function () {
+      var route = $('call-route-info'); if (route) route.textContent = 'Free call';
+      var nm = $('caller-name-display'); if (nm) nm.textContent = n;      // the callee's number shows on the call screen only
+      var ini = $('caller-initial'); if (ini) ini.textContent = '#';
+    }, 0);
+    active = null;
+  };
+
+  window._ffOnDial();
 })();
 </script>
 </body>
