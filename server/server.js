@@ -313,6 +313,46 @@ async function verifyRawSig(ocp, text, sigB64) {
   }
 }
 
+// Warn once per socket and message type (keeps log-only mode readable).
+function sigWarnOnce(ws, type, ocp, what) {
+  const k = type + '|' + what;
+  if (!ws._warned) ws._warned = new Set();
+  if (ws._warned.has(k)) return;
+  ws._warned.add(k);
+  sigWarn(type, ocp, what);
+}
+
+// The sender's OCP address for a message: the proven socket identity when
+// there is one; otherwise (log-only) the old msg value; in STRICT_SIG=1 the
+// message's own from/ocp is ignored completely.
+function ocpOf(ws, claimed, type) {
+  if (ws._proven) {
+    if (claimed && claimed !== ws._ocp) sigWarnOnce(ws, type, ws._ocp, 'claimed ocp differs from proven');
+    return ws._ocp;
+  }
+  if (STRICT_SIG) return null;
+  sigWarnOnce(ws, type, claimed, 'unproven socket, trusting msg value');
+  return claimed || null;
+}
+
+// Guest sockets (key 'link:...'), relay sockets and sim-bank sockets have their own channels.
+function isExemptSocket(ws) {
+  return !!(ws._linkGuest || relayRegistry.has(ws) || [...simBankRegistry.values()].includes(ws));
+}
+// An unregistered (unproven) socket may only send these.
+const UNREGISTERED_OK = new Set([
+  'register', 'register_relay', 'register_simbank', 'join_call', 'guest_call',
+  'ping', 'pong', 'sdp_offer', 'sdp_answer', 'ice', 'hangup'
+]);
+
+// Is this socket one of the two parties of a call? (Unknown call: nothing to protect.)
+function isCallParty(call, ws) {
+  if (!call) return true;
+  const meta = metadata.get(ws);
+  const keys = [ws._ocp, meta && meta.ocpAddress, meta && meta.number].filter(Boolean);
+  return keys.includes(call.from) || keys.includes(call.to);
+}
+
 async function verifySignature(msg) {
   if (!msg.signature || !msg.from || msg.type === 'register') {
     return true;
@@ -321,7 +361,7 @@ async function verifySignature(msg) {
     const senderMeta = [...metadata.values()].find(
       m => m.ocpAddress === msg.from
     );
-    if (!senderMeta?.publicKeyJwk) return true;
+    if (!senderMeta?.publicKeyJwk) return !STRICT_SIG;   // unknown key: fail closed when enforcing
     const publicKey = await crypto.subtle.importKey(
       'jwk',
       JSON.parse(senderMeta.publicKeyJwk),
@@ -335,7 +375,7 @@ async function verifySignature(msg) {
     const sigBytes = Buffer.from(msg.signature, 'base64');
     return await crypto.subtle.verify('Ed25519', publicKey, sigBytes, msgBytes);
   } catch(e) {
-    return true;
+    return !STRICT_SIG;                                   // exception: fail closed when enforcing
   }
 }
 
@@ -1014,6 +1054,13 @@ async function handle(ws, msg) {
 
   if (await calllink.handleWs(ws, msg)) return;
 
+  // Identity gate: a socket that has not proven an identity (and is not a
+  // guest/relay/sim-bank socket) may only send the pre-registration types.
+  if (!ws._proven && !isExemptSocket(ws) && !UNREGISTERED_OK.has(msg.type)) {
+    sigWarnOnce(ws, msg.type, msg.from, 'message from an unproven socket');
+    if (STRICT_SIG) return;
+  }
+
   log("↓", msg.type, JSON.stringify(msg).slice(0, 120));
   console.log('[MSG IN]', JSON.stringify(msg).slice(0, 200));
 
@@ -1348,7 +1395,7 @@ async function handle(ws, msg) {
     // msg: { ocp: string, subscription: PushSubscriptionJSON | string }
     // One ocp address may have many subscriptions (multiple devices/browsers).
     case "push_subscribe": {
-      const ocp = msg.ocp || metadata.get(ws)?.ocpAddress;
+      const ocp = ocpOf(ws, msg.ocp || metadata.get(ws)?.ocpAddress, 'push_subscribe');
       if (!ocp || !msg.subscription) break;
 
       let sub;
@@ -1381,7 +1428,7 @@ async function handle(ws, msg) {
     // msg: { ocp: string, endpoint?: string }
     // Omit endpoint to remove ALL subscriptions for this ocp.
     case "push_unsubscribe": {
-      const ocp = msg.ocp || metadata.get(ws)?.ocpAddress;
+      const ocp = ocpOf(ws, msg.ocp || metadata.get(ws)?.ocpAddress, 'push_unsubscribe');
       if (!ocp) break;
 
       if (msg.endpoint) {
@@ -1662,11 +1709,19 @@ async function handle(ws, msg) {
       //   4. ocpRegistry[msg.from]           — original OCP fallback (msg.from = callerOcp)
       const _pend = pendingCalls.get(msg.callId);
       const _log  = callLog.get(msg.callId);
+      if (_log && !isCallParty(_log, ws)) {
+        sigWarnOnce(ws, 'answer', ws._ocp || msg.from, 'not a party to this call');
+        if (STRICT_SIG) return send(ws, { type: 'error', reason: 'not_party' });
+      }
       const _candidates = [
         _pend?.callerWs,
         _log?.from ? ocpRegistry.get(_log.from) : null,
-        registry.get(msg.from),
-        msg.from?.startsWith('ocp:') ? ocpRegistry.get(msg.from) : null
+        _log?.from ? registry.get(_log.from) : null,
+        // msg.from is client-supplied: only consulted in log-only mode
+        ...(STRICT_SIG ? [] : [
+          registry.get(msg.from),
+          msg.from?.startsWith('ocp:') ? ocpRegistry.get(msg.from) : null
+        ])
       ];
       const callerWs = _candidates.find(s => s?.readyState === 1) ?? null;
 
@@ -1691,8 +1746,16 @@ async function handle(ws, msg) {
 
     // ── REJECT ────────────────────────────────────────────────
     case "reject": {
-      const callerWs = registry.get(msg.from)
-                    || (msg.from?.startsWith('ocp:') ? ocpRegistry.get(msg.from) : null);
+      // msg.from is the caller's key as named by the client; the server's own
+      // call record is authoritative (and the only source when enforcing).
+      const _rl = callLog.get(msg.callId);
+      if (_rl && !isCallParty(_rl, ws)) {
+        sigWarnOnce(ws, 'reject', ws._ocp || msg.from, 'not a party to this call');
+        if (STRICT_SIG) return;
+      }
+      const callerWs = (STRICT_SIG ? null : (registry.get(msg.from)
+                    || (msg.from?.startsWith('ocp:') ? ocpRegistry.get(msg.from) : null)))
+                    || (_rl ? (ocpRegistry.get(_rl.from) || registry.get(_rl.from)) : null);
       if (callerWs) send(callerWs, { type: "rejected", callId: msg.callId });
       callLog.delete(msg.callId);
       log("✗", "rejected:", msg.callId);
@@ -1705,6 +1768,10 @@ async function handle(ws, msg) {
       const call    = callId ? callLog.get(callId) : null;
       const senderMeta = metadata.get(ws);
       const senderKey  = senderMeta?.ocpAddress || senderMeta?.number;
+      if (call && !isExemptSocket(ws) && !isCallParty(call, ws)) {
+        sigWarnOnce(ws, 'hangup', ws._ocp || senderKey, 'not a party to this call');
+        if (STRICT_SIG) break;
+      }
 
       // Find the peer's WebSocket — try explicit msg.with first, then callLog fallback
       let targetWs = null;
@@ -1933,7 +2000,7 @@ async function handle(ws, msg) {
 
       smsThreads.set(threadKey, {
         aWs:        ws,
-        aOcp:       msg.from || null,
+        aOcp:       ocpOf(ws, msg.from, 'relay_sms'),
         cNumber:    to,
         relayId,
         threadId,
@@ -2141,7 +2208,7 @@ async function handle(ws, msg) {
     // Client signs "claim:<handle>:<ocp>" with its Ed25519 private key.
     // msg.from (added by wsSend) is the claimant's OCP address.
     case 'claim_handle': {
-      const claimOcp = msg.from;
+      const claimOcp = ocpOf(ws, msg.from, 'claim_handle');
       if (!claimOcp) { send(ws, { type: 'handle_error', reason: 'not_registered' }); break; }
 
       const rawHandle = (msg.handle || '').replace(/^@/, '');
@@ -2197,7 +2264,7 @@ async function handle(ws, msg) {
     // Auto-assigns an OCP-XXXX-XXXX id for this ocp address.
     // Idempotent: returns the same id on repeated calls.
     case 'claim_numeric_id': {
-      const numOcp = msg.from;
+      const numOcp = ocpOf(ws, msg.from, 'claim_numeric_id');
       if (!numOcp) break;
 
       const alreadyHas = ocpToNumericId.get(numOcp);
